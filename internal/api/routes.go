@@ -48,5 +48,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		apiGroup.PUT("/config", adminHandler.UpdateConfig)
 	}
 
+	// Ping路由，用于服务探活
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status":  "ok",
+			"message": "pong",
+		})
+	})
+
 	return r
 }
