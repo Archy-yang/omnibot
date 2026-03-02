@@ -48,7 +48,7 @@ type ProviderConfig struct {
 
 // LMRoutingConfig LLM路由配置
 type LMRoutingConfig struct {
-	Default        string   `mapstructure:"default"`
+	Default       string   `mapstructure:"default"`
 	FallbackOrder []string `mapstructure:"fallback_order"`
 }
 

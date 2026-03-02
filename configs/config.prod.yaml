@@ -1,0 +1,54 @@
+# 应用配置
+app:
+  name: "wechat-intelligent-bot"
+  env: "production"
+  port: 80
+
+# 微信公众号配置
+wechat:
+  app_id: "your_wechat_app_id"
+  app_secret: "your_wechat_app_secret"
+  token: "wechat_token"
+  encoding_aes_key: "0enrRWXFEIFc7B08zeXkwXkkSHVqhemtOVKre5TPy7M"
+  callback_url: "https://your-domain.com/wechat/callback"
+
+# 大模型配置
+llm:
+  providers:
+    openai:
+      api_key: "your_openai_api_key"
+      model: "gpt-4"
+      timeout: 30s
+    anthropic:
+      api_key: "your_anthropic_api_key"
+      model: "claude-3-sonnet"
+
+  routing:
+    default: "openai"
+    fallback_order: ["openai", "anthropic"]
+
+# 记忆系统配置
+memory:
+  extraction:
+    enabled: true
+    batch_size: 10
+
+  storage:
+    vector_db:
+      url: "your_vector_db_url"
+      api_key: "your_vector_db_key"
+
+    postgres:
+      dsn: "your_postgres_dsn"
+      max_conns: 20
+
+# Redis配置
+redis:
+  url: "redis://localhost:6379/0"
+  pool_size: 10
+
+# 日志配置
+logger:
+  level: "info"
+  format: "json"
+  output: "stdout"

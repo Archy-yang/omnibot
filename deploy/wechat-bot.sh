@@ -30,6 +30,22 @@ build() {
 
 # 启动服务
 start() {
+    # 解析命令行参数
+    local env=""
+    while [ "$2" != "" ]; do
+        case "$2" in
+            -env=*)
+                env="${2#*=}"
+                ;;
+            *)
+                echo "未知参数: $2"
+                help
+                return
+                ;;
+        esac
+        shift
+    done
+    
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
         if ps -p "$PID" > /dev/null 2>&1; then
@@ -43,7 +59,15 @@ start() {
 
     echo "正在启动服务..."
     cd "$PROJECT_DIR"
-    nohup "$EXECUTABLE" > "$LOG_FILE" 2>&1 &
+    
+    # 支持通过命令行参数指定配置文件
+    CONFIG_ARG=""
+    if [ ! -z "$env" ]; then
+        CONFIG_ARG="--config configs/config.$env.yaml"
+        echo "使用环境配置文件: configs/config.$env.yaml"
+    fi
+    
+    nohup "$EXECUTABLE" $CONFIG_ARG > "$LOG_FILE" 2>&1 &
     PID=$!
     echo "$PID" > "$PID_FILE"
     echo "服务启动成功，PID: $PID"
@@ -76,7 +100,7 @@ stop() {
 restart() {
     stop
     sleep 2
-    start
+    start "$@"
 }
 
 # 查看服务状态
@@ -104,10 +128,10 @@ logs() {
 
 # 帮助信息
 help() {
-    echo "使用方法: $0 [命令]"
+    echo "使用方法: $0 [命令] [参数]"
     echo "命令列表:"
     echo "  build     - 编译项目"
-    echo "  start     - 启动服务"
+    echo "  start     - 启动服务，支持参数: -env=环境名称 (如: -env=prod)"
     echo "  stop      - 停止服务"
     echo "  restart   - 重启服务"
     echo "  status    - 查看服务状态"
@@ -122,13 +146,13 @@ main() {
             build
             ;;
         start)
-            start
+            start "$@"
             ;;
         stop)
             stop
             ;;
         restart)
-            restart
+            restart "$@"
             ;;
         status)
             status

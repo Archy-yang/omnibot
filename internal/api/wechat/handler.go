@@ -87,7 +87,7 @@ func (h *Handler) Verify(c *gin.Context) {
 
 	// 验证签名
 	if !h.verifySignature(signature, timestamp, nonce) {
-		logger.Warn("Invalid signature",
+		logger.WarnWithFields("Invalid signature",
 			zap.String("signature", signature),
 			zap.String("timestamp", timestamp),
 			zap.String("nonce", nonce),
@@ -110,16 +110,19 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 		return
 	}
 
+	// 打印原始请求体内容
+	logger.InfoWithFields("Received raw wechat message", zap.String("body", string(body)))
+
 	// 解析XML消息
 	msg, err := parseMessage(string(body))
 	if err != nil {
-		logger.Error("Failed to parse message", zap.Error(err))
+		logger.ErrorWithFields("Failed to parse message", zap.Error(err))
 		c.String(http.StatusBadRequest, "Failed to parse message")
 		return
 	}
 
 	// 记录收到的消息
-	logger.Info("Received wechat message",
+	logger.InfoWithFields("Received wechat message",
 		zap.String("type", msg.MsgType),
 		zap.String("from_user_name", msg.FromUserName),
 		zap.String("to_user_name", msg.ToUserName),
@@ -129,7 +132,7 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 	// 分发消息处理
 	response, err := h.dispatchMessage(msg)
 	if err != nil {
-		logger.Error("Failed to dispatch message", zap.Error(err))
+		logger.ErrorWithFields("Failed to dispatch message", zap.Error(err))
 		c.String(http.StatusInternalServerError, "Failed to dispatch message")
 		return
 	}
@@ -176,7 +179,7 @@ func (h *Handler) dispatchMessage(msg *Message) (string, error) {
 	case "event":
 		return h.handleEventMessage(msg)
 	default:
-		logger.Warn("Unknown message type", zap.String("type", msg.MsgType))
+		logger.WarnWithFields("Unknown message type", zap.String("type", msg.MsgType))
 		return h.defaultResponse(msg), nil
 	}
 }
@@ -285,7 +288,7 @@ func (h *Handler) handleEventMessage(msg *Message) (string, error) {
 	case "VIEW":
 		return h.handleViewEvent(msg)
 	default:
-		logger.Warn("Unknown event type", zap.String("event", msg.Event))
+		logger.WarnWithFields("Unknown event type", zap.String("event", msg.Event))
 		return h.defaultResponse(msg), nil
 	}
 }
@@ -306,7 +309,7 @@ func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
 // handleUnsubscribeEvent 处理取消订阅事件
 func (h *Handler) handleUnsubscribeEvent(msg *Message) (string, error) {
 	// 记录取消订阅事件
-	logger.Info("User unsubscribe", zap.String("user_id", msg.FromUserName))
+	logger.InfoWithFields("User unsubscribe", zap.String("user_id", msg.FromUserName))
 	// 不需要回复消息
 	return "", nil
 }
@@ -327,7 +330,7 @@ func (h *Handler) handleClickEvent(msg *Message) (string, error) {
 // handleViewEvent 处理视图事件
 func (h *Handler) handleViewEvent(msg *Message) (string, error) {
 	// 记录视图事件
-	logger.Info("User view menu",
+	logger.InfoWithFields("User view menu",
 		zap.String("user_id", msg.FromUserName),
 		zap.String("event_key", msg.EventKey),
 	)
