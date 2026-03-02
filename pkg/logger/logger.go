@@ -66,9 +66,19 @@ func Debug(args ...interface{}) {
 	log.Sugar().Debug(args...)
 }
 
+// DebugWithFields 带字段的调试日志
+func DebugWithFields(msg string, fields ...zap.Field) {
+	log.Debug(msg, fields...)
+}
+
 // Info 信息日志
 func Info(args ...interface{}) {
 	log.Sugar().Info(args...)
+}
+
+// InfoWithFields 带字段的信息日志
+func InfoWithFields(msg string, fields ...zap.Field) {
+	log.Info(msg, fields...)
 }
 
 // Warn 警告日志
@@ -76,12 +86,27 @@ func Warn(args ...interface{}) {
 	log.Sugar().Warn(args...)
 }
 
+// WarnWithFields 带字段的警告日志
+func WarnWithFields(msg string, fields ...zap.Field) {
+	log.Warn(msg, fields...)
+}
+
 // Error 错误日志
 func Error(args ...interface{}) {
 	log.Sugar().Error(args...)
 }
 
+// ErrorWithFields 带字段的错误日志
+func ErrorWithFields(msg string, fields ...zap.Field) {
+	log.Error(msg, fields...)
+}
+
 // Fatal 致命错误日志
 func Fatal(args ...interface{}) {
 	log.Sugar().Fatal(args...)
+}
+
+// FatalWithFields 带字段的致命错误日志
+func FatalWithFields(msg string, fields ...zap.Field) {
+	log.Fatal(msg, fields...)
 }
