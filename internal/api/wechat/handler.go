@@ -1,6 +1,7 @@
 package wechat
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/xml"
@@ -9,7 +10,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
+	"wechat-intelligent-bot/internal/client/llm"
 	"wechat-intelligent-bot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +44,33 @@ type Message struct {
 	Ticket       string   `xml:"Ticket,omitempty"`
 }
 
+const systemPrompt = "你是一个友好的智能客服助手，请用简洁的中文回应用户的问题。"
+
+// callLLM 调用大模型生成回复
+func (h *Handler) callLLM(ctx context.Context, userContent string, msgType string) string {
+	start := time.Now()
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userContent},
+	}
+
+	resp, err := h.llmClient.ChatCompletion(ctx, messages)
+	if err != nil {
+		logger.WarnWithFields("LLM call failed",
+			zap.String("msg_type", msgType),
+			zap.String("error", err.Error()),
+			zap.Duration("duration", time.Since(start)),
+		)
+		return "服务暂时不可用，请稍后再试"
+	}
+
+	logger.InfoWithFields("LLM call succeeded",
+		zap.String("msg_type", msgType),
+		zap.Duration("duration", time.Since(start)),
+	)
+	return resp
+}
+
 // parseMessage 解析XML消息
 func parseMessage(xmlContent string) (*Message, error) {
 	var msg Message
@@ -50,9 +80,15 @@ func parseMessage(xmlContent string) (*Message, error) {
 	return &msg, nil
 }
 
+// LLMClient 大模型客户端接口
+type LLMClient interface {
+	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
+}
+
 // Handler 微信公众号处理器
 type Handler struct {
-	config Config
+	config    Config
+	llmClient LLMClient
 }
 
 // Config 微信配置
@@ -65,9 +101,10 @@ type Config struct {
 }
 
 // NewHandler 创建微信处理器
-func NewHandler(config Config) *Handler {
+func NewHandler(config Config, llmClient LLMClient) *Handler {
 	return &Handler{
-		config: config,
+		config:    config,
+		llmClient: llmClient,
 	}
 }
 
@@ -180,99 +217,51 @@ func (h *Handler) dispatchMessage(msg *Message) (string, error) {
 		return h.handleEventMessage(msg)
 	default:
 		logger.WarnWithFields("Unknown message type", zap.String("type", msg.MsgType))
-		return h.defaultResponse(msg), nil
+		content := h.callLLM(context.Background(), "用户发送了未知类型的消息", "unknown")
+		return h.buildResponse(msg, content), nil
 	}
 }
 
 // handleTextMessage 处理文本消息
 func (h *Handler) handleTextMessage(msg *Message) (string, error) {
-	// 简单回复文本消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的消息：%s]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime, msg.Content)
-	return response, nil
+	content := h.callLLM(context.Background(), msg.Content, "text")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleImageMessage 处理图片消息
 func (h *Handler) handleImageMessage(msg *Message) (string, error) {
-	// 简单回复图片消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的图片消息]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了一张图片", "image")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleVoiceMessage 处理语音消息
 func (h *Handler) handleVoiceMessage(msg *Message) (string, error) {
-	// 简单回复语音消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的语音消息]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了一条语音消息", "voice")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleVideoMessage 处理视频消息
 func (h *Handler) handleVideoMessage(msg *Message) (string, error) {
-	// 简单回复视频消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的视频消息]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了一条视频消息", "video")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleShortVideoMessage 处理小视频消息
 func (h *Handler) handleShortVideoMessage(msg *Message) (string, error) {
-	// 简单回复小视频消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的小视频消息]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了一条小视频消息", "shortvideo")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleLocationMessage 处理位置消息
 func (h *Handler) handleLocationMessage(msg *Message) (string, error) {
-	// 简单回复位置消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的位置消息，纬度：%s，经度：%s]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime, msg.LocationX, msg.LocationY)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了位置信息", "location")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleLinkMessage 处理链接消息
 func (h *Handler) handleLinkMessage(msg *Message) (string, error) {
-	// 简单回复链接消息
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[收到您的链接消息，标题：%s]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime, msg.Title)
-	return response, nil
+	content := h.callLLM(context.Background(), "用户发送了一个链接", "link")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleEventMessage 处理事件消息
@@ -289,21 +278,28 @@ func (h *Handler) handleEventMessage(msg *Message) (string, error) {
 		return h.handleViewEvent(msg)
 	default:
 		logger.WarnWithFields("Unknown event type", zap.String("event", msg.Event))
-		return h.defaultResponse(msg), nil
+		content := h.callLLM(context.Background(), "用户触发了未知事件", "event_unknown")
+		return h.buildResponse(msg, content), nil
 	}
 }
 
 // handleSubscribeEvent 处理订阅事件
 func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
-	// 回复欢迎消息
+	content := h.callLLM(context.Background(), "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe")
+	return h.buildResponse(msg, content), nil
+}
+
+// buildResponse 构建响应消息
+func (h *Handler) buildResponse(msg *Message, content string) string {
+	now := time.Now().Unix()
 	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[您好！欢迎关注我们的公众号，很高兴为您服务！]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response, nil
+	<ToUserName><![CDATA[%s]]></ToUserName>
+	<FromUserName><![CDATA[%s]]></FromUserName>
+	<CreateTime>%d</CreateTime>
+	<MsgType><![CDATA[text]]></MsgType>
+	<Content><![CDATA[%s]]></Content>
+	</xml>`, msg.FromUserName, msg.ToUserName, now, content)
+	return response
 }
 
 // handleUnsubscribeEvent 处理取消订阅事件
@@ -316,15 +312,8 @@ func (h *Handler) handleUnsubscribeEvent(msg *Message) (string, error) {
 
 // handleClickEvent 处理点击事件
 func (h *Handler) handleClickEvent(msg *Message) (string, error) {
-	// 简单回复点击事件
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[您点击了菜单：%s]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime, msg.EventKey)
-	return response, nil
+	content := h.callLLM(context.Background(), fmt.Sprintf("用户点击了菜单按钮：%s", msg.EventKey), "click")
+	return h.buildResponse(msg, content), nil
 }
 
 // handleViewEvent 处理视图事件
@@ -336,16 +325,4 @@ func (h *Handler) handleViewEvent(msg *Message) (string, error) {
 	)
 	// 不需要回复消息
 	return "", nil
-}
-
-// defaultResponse 默认回复
-func (h *Handler) defaultResponse(msg *Message) string {
-	response := fmt.Sprintf(`<xml>
-<ToUserName><![CDATA[%s]]></ToUserName>
-<FromUserName><![CDATA[%s]]></FromUserName>
-<CreateTime>%d</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[暂不支持此消息类型，请发送文本消息！]]></Content>
-</xml>`, msg.FromUserName, msg.ToUserName, msg.CreateTime)
-	return response
 }

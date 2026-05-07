@@ -43,6 +43,7 @@ type LLMConfig struct {
 // ProviderConfig 单个LLM提供商配置
 type ProviderConfig struct {
 	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
 	Model   string `mapstructure:"model"`
 	Timeout string `mapstructure:"timeout"`
 }

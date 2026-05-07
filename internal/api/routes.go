@@ -3,10 +3,13 @@ package api
 import (
 	"wechat-intelligent-bot/internal/api/admin"
 	"wechat-intelligent-bot/internal/api/wechat"
+	"wechat-intelligent-bot/internal/client/llm"
 	"wechat-intelligent-bot/internal/middleware"
 	"wechat-intelligent-bot/pkg/config"
+	"wechat-intelligent-bot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // SetupRouter 设置路由
@@ -19,6 +22,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
 
+	// 创建 LLM 客户端
+	llmClient, err := llm.NewClient(cfg.LLM)
+	if err != nil {
+		logger.Fatal("Failed to create LLM client", zap.Error(err))
+	}
+
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
 		AppID:          cfg.Wechat.AppID,
@@ -26,7 +35,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	})
+	}, llmClient)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)
