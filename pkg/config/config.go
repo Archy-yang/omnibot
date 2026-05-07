@@ -9,12 +9,13 @@ import (
 
 // Config 应用配置结构体
 type Config struct {
-	App    AppConfig    `mapstructure:"app"`
-	Wechat WechatConfig `mapstructure:"wechat"`
-	LLM    LLMConfig    `mapstructure:"llm"`
-	Memory MemoryConfig `mapstructure:"memory"`
-	Redis  RedisConfig  `mapstructure:"redis"`
-	Logger LoggerConfig `mapstructure:"logger"`
+	App      AppConfig      `mapstructure:"app"`
+	Wechat   WechatConfig   `mapstructure:"wechat"`
+	LLM      LLMConfig      `mapstructure:"llm"`
+	Memory   MemoryConfig   `mapstructure:"memory"`
+	Redis    RedisConfig    `mapstructure:"redis"`
+	Logger   LoggerConfig   `mapstructure:"logger"`
+	Database DatabaseConfig `mapstructure:"database"`
 }
 
 // AppConfig 应用基本配置
@@ -93,6 +94,13 @@ type LoggerConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
 	Output string `mapstructure:"output"`
+}
+
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+	Driver   string `mapstructure:"driver"`   // sqlite, mysql
+	DSN      string `mapstructure:"dsn"`      // 连接字符串
+	MaxConns int    `mapstructure:"max_conns"`
 }
 
 // Load 加载配置文件
