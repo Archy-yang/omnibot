@@ -12,6 +12,11 @@ import (
 
 var log *zap.Logger
 
+func init() {
+	// 默认初始化一个 nop logger，避免未调用 Init 时 panic
+	log = zap.NewNop()
+}
+
 // Init 初始化日志
 func Init(cfg config.LoggerConfig) {
 	// 设置日志级别
