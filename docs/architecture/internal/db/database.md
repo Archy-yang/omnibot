@@ -13,7 +13,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| ✅ 多驱动支持 | SQLite（纯Go驱动）、预留MySQL |
+| ✅ 多驱动支持 | SQLite（开发）、PostgreSQL（生产）、预留MySQL |
 | ✅ 连接池管理 | MaxOpenConns、MaxIdleConns、ConnMaxLifetime、ConnMaxIdleTime |
 | ✅ 自动迁移 | GORM AutoMigrate 自动建表 |
 | ✅ 健康检查 | 带超时的 Ping 检测 |
@@ -50,11 +50,20 @@
 
 ## 配置参数
 
+### SQLite（开发环境）
 ```yaml
 database:
-  driver: "sqlite"         # 数据库驱动: sqlite/mysql
-  dsn: "data/app.db"       # 连接字符串
-  max_conns: 25            # 最大连接数
+  driver: "sqlite"
+  dsn: "data/app.db"
+  max_conns: 25
+```
+
+### PostgreSQL（生产环境）
+```yaml
+database:
+  driver: "postgres"
+  dsn: "host=localhost user=postgres password=postgres dbname=wechat_bot port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+  max_conns: 25
 ```
 
 ## 依赖链

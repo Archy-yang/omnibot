@@ -12,13 +12,15 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 // 数据库驱动常量
 const (
-	DriverSQLite = "sqlite"
-	DriverMySQL  = "mysql"
+	DriverSQLite     = "sqlite"
+	DriverPostgreSQL = "postgres"
+	DriverMySQL      = "mysql"
 )
 
 // 错误定义
@@ -67,6 +69,8 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 	switch cfg.Driver {
 	case DriverSQLite, "":
 		db, err = gorm.Open(sqlite.Open(cfg.DSN), gormConfig)
+	case DriverPostgreSQL:
+		db, err = gorm.Open(postgres.Open(cfg.DSN), gormConfig)
 	case DriverMySQL:
 		return nil, fmt.Errorf("%w: mysql driver not implemented yet", ErrUnsupportedDriver)
 	default:
