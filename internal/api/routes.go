@@ -38,8 +38,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// 初始化仓储层
-	userRepository := userRepo.NewUserRepository(dbConn)
-	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn)
+	userRepository := userRepo.NewUserRepository(dbConn.GetGormDB())
+	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn.GetGormDB())
 
 	// 初始化用户服务
 	userSvc := userService.NewUserService(userRepository, wechatAccountRepository)
