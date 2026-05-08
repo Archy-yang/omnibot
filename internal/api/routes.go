@@ -4,7 +4,10 @@ import (
 	"wechat-intelligent-bot/internal/api/admin"
 	"wechat-intelligent-bot/internal/api/wechat"
 	"wechat-intelligent-bot/internal/client/llm"
+	"wechat-intelligent-bot/internal/db"
 	"wechat-intelligent-bot/internal/middleware"
+	userRepo "wechat-intelligent-bot/internal/repository/user"
+	userService "wechat-intelligent-bot/internal/service/user"
 	"wechat-intelligent-bot/pkg/config"
 	"wechat-intelligent-bot/pkg/logger"
 
@@ -28,6 +31,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		logger.Fatal("Failed to create LLM client", zap.Error(err))
 	}
 
+	// 初始化数据库连接
+	dbConn, err := db.InitDB(&cfg.Database)
+	if err != nil {
+		logger.Fatal("Failed to initialize database", zap.Error(err))
+	}
+
+	// 初始化仓储层
+	userRepository := userRepo.NewUserRepository(dbConn)
+	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn)
+
+	// 初始化用户服务
+	userSvc := userService.NewUserService(userRepository, wechatAccountRepository)
+
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
 		AppID:          cfg.Wechat.AppID,
@@ -35,7 +51,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient)
+	}, llmClient, userSvc)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)
