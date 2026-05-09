@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wechat-intelligent-bot/internal/client/llm"
+	"wechat-intelligent-bot/internal/domain/user"
 	"wechat-intelligent-bot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -85,10 +86,16 @@ type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
 }
 
+// UserService 用户服务接口
+type UserService interface {
+	GetOrCreateByOpenID(openID string) (*user.User, bool, error)
+}
+
 // Handler 微信公众号处理器
 type Handler struct {
-	config    Config
-	llmClient LLMClient
+	config      Config
+	llmClient   LLMClient
+	userService UserService
 }
 
 // Config 微信配置
@@ -101,10 +108,11 @@ type Config struct {
 }
 
 // NewHandler 创建微信处理器
-func NewHandler(config Config, llmClient LLMClient) *Handler {
+func NewHandler(config Config, llmClient LLMClient, userService UserService) *Handler {
 	return &Handler{
-		config:    config,
-		llmClient: llmClient,
+		config:      config,
+		llmClient:   llmClient,
+		userService: userService,
 	}
 }
 
@@ -165,6 +173,18 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 		zap.String("to_user_name", msg.ToUserName),
 		zap.String("msg_id", msg.MsgID),
 	)
+
+	// 获取或创建用户（兜底机制）
+	if h.userService != nil {
+		_, _, err = h.userService.GetOrCreateByOpenID(msg.FromUserName)
+		if err != nil {
+			// 记录错误，但不影响消息正常处理
+			logger.WarnWithFields("Failed to get or create user",
+				zap.String("open_id", msg.FromUserName),
+				zap.Error(err),
+			)
+		}
+	}
 
 	// 分发消息处理
 	response, err := h.dispatchMessage(msg)
@@ -285,6 +305,22 @@ func (h *Handler) handleEventMessage(msg *Message) (string, error) {
 
 // handleSubscribeEvent 处理订阅事件
 func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
+	// 关注事件 - 创建用户
+	if h.userService != nil {
+		_, isNew, err := h.userService.GetOrCreateByOpenID(msg.FromUserName)
+		if err != nil {
+			logger.WarnWithFields("Failed to create user on subscribe",
+				zap.String("open_id", msg.FromUserName),
+				zap.Error(err),
+			)
+		}
+		if isNew {
+			logger.InfoWithFields("New user created on subscribe",
+				zap.String("open_id", msg.FromUserName),
+			)
+		}
+	}
+
 	content := h.callLLM(context.Background(), "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe")
 	return h.buildResponse(msg, content), nil
 }
