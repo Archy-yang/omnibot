@@ -48,12 +48,42 @@ type Message struct {
 
 const systemPrompt = "你是一个友好的智能客服助手，请用简洁的中文回应用户的问题。"
 
-// callLLM 调用大模型生成回复
-func (h *Handler) callLLM(ctx context.Context, userContent string, msgType string) string {
+// callLLM 调用大模型生成回复（支持用户自定义配置）
+func (h *Handler) callLLM(ctx context.Context, userID int64, userContent string, msgType string) string {
 	start := time.Now()
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userContent},
+	}
+
+	// 检查是否有用户自定义配置
+	if h.llmConfigService != nil && userID > 0 {
+		apiKey, baseURL, model, hasCustom, err := h.llmConfigService.GetConfigForUser(userID)
+		if err == nil && hasCustom {
+			// 使用用户配置创建新的 LLM 客户端进行调用
+			logger.InfoWithFields("Using user custom LLM config",
+				zap.Int64("user_id", userID),
+				zap.String("base_url", baseURL),
+				zap.String("model", model),
+			)
+			// 创建临时客户端使用用户配置
+			customClient := llm.NewOpenAIProvider(apiKey, baseURL, model, 30*time.Second)
+			resp, err := customClient.ChatCompletion(ctx, messages)
+			if err == nil {
+				logger.InfoWithFields("LLM call succeeded with user config",
+					zap.String("msg_type", msgType),
+					zap.Int64("user_id", userID),
+					zap.Duration("duration", time.Since(start)),
+				)
+				return resp
+			}
+			logger.WarnWithFields("User config LLM call failed, falling back to system default",
+				zap.String("msg_type", msgType),
+				zap.Int64("user_id", userID),
+				zap.String("error", err.Error()),
+			)
+			// 失败后继续使用系统默认客户端
+		}
 	}
 
 	resp, err := h.llmClient.ChatCompletion(ctx, messages)
@@ -243,48 +273,70 @@ func (h *Handler) dispatchMessage(msg *Message) (string, error) {
 		return h.handleEventMessage(msg)
 	default:
 		logger.WarnWithFields("Unknown message type", zap.String("type", msg.MsgType))
-		content := h.callLLM(context.Background(), "用户发送了未知类型的消息", "unknown")
+		content := h.callLLM(context.Background(), 0, "用户发送了未知类型的消息", "unknown")
 		return h.buildResponse(msg, content), nil
 	}
 }
 
 // handleTextMessage 处理文本消息
 func (h *Handler) handleTextMessage(msg *Message) (string, error) {
+	// 获取 userID
+	userID := h.getUserIDByOpenID(msg.FromUserName)
+
 	// 处理配置命令
 	if h.llmConfigService != nil {
-		if reply, handled := h.handleConfigCommand(msg.FromUserName, msg.Content); handled {
+		if reply, handled := h.handleConfigCommand(userID, msg.Content); handled {
 			return h.buildResponse(msg, reply), nil
 		}
 	}
 
-	content := h.callLLM(context.Background(), msg.Content, "text")
+	content := h.callLLM(context.Background(), userID, msg.Content, "text")
 	return h.buildResponse(msg, content), nil
 }
 
+// getUserIDByOpenID 通过 OpenID 获取 userID
+func (h *Handler) getUserIDByOpenID(openID string) int64 {
+	if h.userService != nil {
+		user, _, err := h.userService.GetOrCreateByOpenID(openID)
+		if err == nil && user != nil {
+			return user.ID
+		}
+	}
+	return 0
+}
+
 // handleConfigCommand 处理配置命令
-func (h *Handler) handleConfigCommand(fromUserOpenID string, content string) (string, bool) {
+func (h *Handler) handleConfigCommand(userID int64, content string) (string, bool) {
 	trimmed := strings.TrimSpace(content)
 
 	switch {
 	case trimmed == "#模型设置":
-		return h.renderConfigMenu(), true
+		return h.renderConfigMenu(userID), true
 	case strings.HasPrefix(trimmed, "#设置Key "):
 		key := strings.TrimPrefix(trimmed, "#设置Key ")
-		return h.handleSetAPIKey(fromUserOpenID, strings.TrimSpace(key)), true
+		return h.handleSetAPIKey(userID, strings.TrimSpace(key)), true
 	case strings.HasPrefix(trimmed, "#设置地址 "):
 		url := strings.TrimPrefix(trimmed, "#设置地址 ")
-		return h.handleSetBaseURL(fromUserOpenID, strings.TrimSpace(url)), true
+		return h.handleSetBaseURL(userID, strings.TrimSpace(url)), true
 	case trimmed == "#我的配置":
-		return h.handleGetConfig(fromUserOpenID), true
+		return h.handleGetConfig(userID), true
 	case trimmed == "#重置模型":
-		return h.handleClearConfig(fromUserOpenID), true
+		return h.handleClearConfig(userID), true
 	}
 
 	return "", false
 }
 
-func (h *Handler) renderConfigMenu() string {
-	return `🔧 模型设置
+func (h *Handler) renderConfigMenu(userID int64) string {
+	statusText := "使用系统默认模型"
+	if h.llmConfigService != nil && userID > 0 {
+		view, err := h.llmConfigService.GetConfigView(userID)
+		if err == nil && view.HasConfig {
+			statusText = view.StatusText
+		}
+	}
+
+	return fmt.Sprintf(`🔧 模型设置
 
 请回复数字选择操作：
 1️⃣ 设置 API Key
@@ -293,14 +345,10 @@ func (h *Handler) renderConfigMenu() string {
 4️⃣ 重置为系统默认
 
 ━━━━━━━━━━━━━━━━
-当前状态：使用系统默认模型`
+当前状态：%s`, statusText)
 }
 
-func (h *Handler) handleSetAPIKey(openID string, key string) string {
-	// TODO: 需要根据 OpenID 获取 userID，这里暂时使用 0 作为占位
-	// 实际实现时需要集成 UserService 获取或创建用户
-	userID := int64(0)
-
+func (h *Handler) handleSetAPIKey(userID int64, key string) string {
 	err := h.llmConfigService.SetAPIKey(userID, key)
 	if err != nil {
 		return fmt.Sprintf("❌ 设置失败：%s", err.Error())
@@ -316,9 +364,7 @@ func (h *Handler) handleSetAPIKey(openID string, key string) string {
 - 状态：%s`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
 }
 
-func (h *Handler) handleSetBaseURL(openID string, url string) string {
-	userID := int64(0)
-
+func (h *Handler) handleSetBaseURL(userID int64, url string) string {
 	err := h.llmConfigService.SetBaseURL(userID, url)
 	if err != nil {
 		return fmt.Sprintf("❌ 设置失败：%s", err.Error())
@@ -334,9 +380,7 @@ func (h *Handler) handleSetBaseURL(openID string, url string) string {
 - 状态：%s`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
 }
 
-func (h *Handler) handleGetConfig(openID string) string {
-	userID := int64(0)
-
+func (h *Handler) handleGetConfig(userID int64) string {
 	view, err := h.llmConfigService.GetConfigView(userID)
 	if err != nil {
 		return "❌ 获取配置失败"
@@ -360,9 +404,7 @@ func (h *Handler) handleGetConfig(openID string) string {
 发送「#重置模型」可恢复为系统默认`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
 }
 
-func (h *Handler) handleClearConfig(openID string) string {
-	userID := int64(0)
-
+func (h *Handler) handleClearConfig(userID int64) string {
 	err := h.llmConfigService.ClearConfig(userID)
 	if err != nil {
 		return "❌ 重置失败"
@@ -375,37 +417,37 @@ func (h *Handler) handleClearConfig(openID string) string {
 
 // handleImageMessage 处理图片消息
 func (h *Handler) handleImageMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了一张图片", "image")
+	content := h.callLLM(context.Background(), 0, "用户发送了一张图片", "image")
 	return h.buildResponse(msg, content), nil
 }
 
 // handleVoiceMessage 处理语音消息
 func (h *Handler) handleVoiceMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了一条语音消息", "voice")
+	content := h.callLLM(context.Background(), 0, "用户发送了一条语音消息", "voice")
 	return h.buildResponse(msg, content), nil
 }
 
 // handleVideoMessage 处理视频消息
 func (h *Handler) handleVideoMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了一条视频消息", "video")
+	content := h.callLLM(context.Background(), 0, "用户发送了一条视频消息", "video")
 	return h.buildResponse(msg, content), nil
 }
 
 // handleShortVideoMessage 处理小视频消息
 func (h *Handler) handleShortVideoMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了一条小视频消息", "shortvideo")
+	content := h.callLLM(context.Background(), 0, "用户发送了一条小视频消息", "shortvideo")
 	return h.buildResponse(msg, content), nil
 }
 
 // handleLocationMessage 处理位置消息
 func (h *Handler) handleLocationMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了位置信息", "location")
+	content := h.callLLM(context.Background(), 0, "用户发送了位置信息", "location")
 	return h.buildResponse(msg, content), nil
 }
 
 // handleLinkMessage 处理链接消息
 func (h *Handler) handleLinkMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), "用户发送了一个链接", "link")
+	content := h.callLLM(context.Background(), 0, "用户发送了一个链接", "link")
 	return h.buildResponse(msg, content), nil
 }
 
@@ -423,7 +465,7 @@ func (h *Handler) handleEventMessage(msg *Message) (string, error) {
 		return h.handleViewEvent(msg)
 	default:
 		logger.WarnWithFields("Unknown event type", zap.String("event", msg.Event))
-		content := h.callLLM(context.Background(), "用户触发了未知事件", "event_unknown")
+		content := h.callLLM(context.Background(), 0, "用户触发了未知事件", "event_unknown")
 		return h.buildResponse(msg, content), nil
 	}
 }
@@ -446,7 +488,7 @@ func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
 		}
 	}
 
-	content := h.callLLM(context.Background(), "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe")
+	content := h.callLLM(context.Background(), 0, "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe")
 	return h.buildResponse(msg, content), nil
 }
 
@@ -473,7 +515,7 @@ func (h *Handler) handleUnsubscribeEvent(msg *Message) (string, error) {
 
 // handleClickEvent 处理点击事件
 func (h *Handler) handleClickEvent(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), fmt.Sprintf("用户点击了菜单按钮：%s", msg.EventKey), "click")
+	content := h.callLLM(context.Background(), 0, fmt.Sprintf("用户点击了菜单按钮：%s", msg.EventKey), "click")
 	return h.buildResponse(msg, content), nil
 }
 

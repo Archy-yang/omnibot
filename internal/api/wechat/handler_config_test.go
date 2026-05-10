@@ -31,12 +31,12 @@ func TestHandler_ConfigCommands_SetAPIKey(t *testing.T) {
 	}
 
 	// 测试设置 API Key 命令
-	reply, handled := handler.handleConfigCommand("user123", "#设置Key sk-test-api-key-12345678901234567890")
+	reply, handled := handler.handleConfigCommand(1, "#设置Key sk-test-api-key-12345678901234567890")
 	assert.True(t, handled)
 	assert.Contains(t, reply, "API Key 设置成功")
 
 	// 验证配置已保存
-	key, _, _, hasCustom, _ := llmConfigService.GetConfigForUser(0) // userID 使用 0 作为占位
+	key, _, _, hasCustom, _ := llmConfigService.GetConfigForUser(1) // userID 使用 0 作为占位
 	assert.True(t, hasCustom)
 	assert.Equal(t, "sk-test-api-key-12345678901234567890", key)
 }
@@ -50,7 +50,7 @@ func TestHandler_ConfigCommands_ConfigMenu(t *testing.T) {
 		llmConfigService: llmConfigService,
 	}
 
-	reply, handled := handler.handleConfigCommand("user123", "#模型设置")
+	reply, handled := handler.handleConfigCommand(1, "#模型设置")
 	assert.True(t, handled)
 	assert.Contains(t, reply, "模型设置")
 	assert.Contains(t, reply, "设置 API Key")
@@ -67,10 +67,10 @@ func TestHandler_ConfigCommands_GetConfigView(t *testing.T) {
 	}
 
 	// 先设置配置
-	_, _ = handler.handleConfigCommand("user123", "#设置Key sk-test-api-key-12345678901234567890")
+	_, _ = handler.handleConfigCommand(1, "#设置Key sk-test-api-key-12345678901234567890")
 
 	// 查看配置
-	reply, handled := handler.handleConfigCommand("user123", "#我的配置")
+	reply, handled := handler.handleConfigCommand(1, "#我的配置")
 	assert.True(t, handled)
 	assert.Contains(t, reply, "当前配置")
 	assert.Contains(t, reply, "...") // 脱敏标识
@@ -86,14 +86,14 @@ func TestHandler_ConfigCommands_ClearConfig(t *testing.T) {
 	}
 
 	// 先设置配置
-	_, _ = handler.handleConfigCommand("user123", "#设置Key sk-test-api-key-12345678901234567890")
+	_, _ = handler.handleConfigCommand(1, "#设置Key sk-test-api-key-12345678901234567890")
 
 	// 重置配置
-	reply, handled := handler.handleConfigCommand("user123", "#重置模型")
+	reply, handled := handler.handleConfigCommand(1, "#重置模型")
 	assert.True(t, handled)
 	assert.Contains(t, reply, "已重置为系统默认模型")
 
 	// 验证配置已清除
-	_, _, _, hasCustom, _ := llmConfigService.GetConfigForUser(0)
+	_, _, _, hasCustom, _ := llmConfigService.GetConfigForUser(1)
 	assert.False(t, hasCustom)
 }
