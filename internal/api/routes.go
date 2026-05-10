@@ -40,9 +40,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 初始化仓储层
 	userRepository := userRepo.NewUserRepository(dbConn.GetGormDB())
 	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn.GetGormDB())
+	llmConfigRepository := userRepo.NewLLMConfigRepository(dbConn.GetGormDB())
 
 	// 初始化用户服务
 	userSvc := userService.NewUserService(userRepository, wechatAccountRepository)
+	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
 
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
@@ -51,7 +53,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, userSvc)
+	}, llmClient, userSvc, llmConfigSvc)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)

@@ -14,6 +14,7 @@ import (
 
 	"wechat-intelligent-bot/internal/client/llm"
 	"wechat-intelligent-bot/internal/domain/user"
+	userService "wechat-intelligent-bot/internal/service/user"
 	"wechat-intelligent-bot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -93,9 +94,10 @@ type UserService interface {
 
 // Handler 微信公众号处理器
 type Handler struct {
-	config      Config
-	llmClient   LLMClient
-	userService UserService
+	config           Config
+	llmClient        LLMClient
+	userService      UserService
+	llmConfigService userService.LLMConfigService
 }
 
 // Config 微信配置
@@ -108,12 +110,16 @@ type Config struct {
 }
 
 // NewHandler 创建微信处理器
-func NewHandler(config Config, llmClient LLMClient, userService UserService) *Handler {
-	return &Handler{
+func NewHandler(config Config, llmClient LLMClient, userService UserService, llmConfigService ...userService.LLMConfigService) *Handler {
+	handler := &Handler{
 		config:      config,
 		llmClient:   llmClient,
 		userService: userService,
 	}
+	if len(llmConfigService) > 0 {
+		handler.llmConfigService = llmConfigService[0]
+	}
+	return handler
 }
 
 // Verify 微信服务器验证
@@ -244,8 +250,127 @@ func (h *Handler) dispatchMessage(msg *Message) (string, error) {
 
 // handleTextMessage 处理文本消息
 func (h *Handler) handleTextMessage(msg *Message) (string, error) {
+	// 处理配置命令
+	if h.llmConfigService != nil {
+		if reply, handled := h.handleConfigCommand(msg.FromUserName, msg.Content); handled {
+			return h.buildResponse(msg, reply), nil
+		}
+	}
+
 	content := h.callLLM(context.Background(), msg.Content, "text")
 	return h.buildResponse(msg, content), nil
+}
+
+// handleConfigCommand 处理配置命令
+func (h *Handler) handleConfigCommand(fromUserOpenID string, content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+
+	switch {
+	case trimmed == "#模型设置":
+		return h.renderConfigMenu(), true
+	case strings.HasPrefix(trimmed, "#设置Key "):
+		key := strings.TrimPrefix(trimmed, "#设置Key ")
+		return h.handleSetAPIKey(fromUserOpenID, strings.TrimSpace(key)), true
+	case strings.HasPrefix(trimmed, "#设置地址 "):
+		url := strings.TrimPrefix(trimmed, "#设置地址 ")
+		return h.handleSetBaseURL(fromUserOpenID, strings.TrimSpace(url)), true
+	case trimmed == "#我的配置":
+		return h.handleGetConfig(fromUserOpenID), true
+	case trimmed == "#重置模型":
+		return h.handleClearConfig(fromUserOpenID), true
+	}
+
+	return "", false
+}
+
+func (h *Handler) renderConfigMenu() string {
+	return `🔧 模型设置
+
+请回复数字选择操作：
+1️⃣ 设置 API Key
+2️⃣ 设置 API 地址
+3️⃣ 查看当前配置
+4️⃣ 重置为系统默认
+
+━━━━━━━━━━━━━━━━
+当前状态：使用系统默认模型`
+}
+
+func (h *Handler) handleSetAPIKey(openID string, key string) string {
+	// TODO: 需要根据 OpenID 获取 userID，这里暂时使用 0 作为占位
+	// 实际实现时需要集成 UserService 获取或创建用户
+	userID := int64(0)
+
+	err := h.llmConfigService.SetAPIKey(userID, key)
+	if err != nil {
+		return fmt.Sprintf("❌ 设置失败：%s", err.Error())
+	}
+
+	view, _ := h.llmConfigService.GetConfigView(userID)
+	return fmt.Sprintf(`✅ API Key 设置成功！
+
+当前配置：
+- API Key：%s
+- API 地址：%s
+- 模型：%s
+- 状态：%s`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
+}
+
+func (h *Handler) handleSetBaseURL(openID string, url string) string {
+	userID := int64(0)
+
+	err := h.llmConfigService.SetBaseURL(userID, url)
+	if err != nil {
+		return fmt.Sprintf("❌ 设置失败：%s", err.Error())
+	}
+
+	view, _ := h.llmConfigService.GetConfigView(userID)
+	return fmt.Sprintf(`✅ API 地址设置成功！
+
+当前配置：
+- API Key：%s
+- API 地址：%s
+- 模型：%s
+- 状态：%s`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
+}
+
+func (h *Handler) handleGetConfig(openID string) string {
+	userID := int64(0)
+
+	view, err := h.llmConfigService.GetConfigView(userID)
+	if err != nil {
+		return "❌ 获取配置失败"
+	}
+
+	if !view.HasConfig {
+		return fmt.Sprintf(`📋 当前配置
+
+状态：%s
+
+发送「#模型设置」可配置自定义模型`, view.StatusText)
+	}
+
+	return fmt.Sprintf(`📋 当前配置
+
+- API Key：%s
+- API 地址：%s
+- 模型：%s
+- 状态：%s
+
+发送「#重置模型」可恢复为系统默认`, view.APIKeyMasked, view.BaseURL, view.Model, view.StatusText)
+}
+
+func (h *Handler) handleClearConfig(openID string) string {
+	userID := int64(0)
+
+	err := h.llmConfigService.ClearConfig(userID)
+	if err != nil {
+		return "❌ 重置失败"
+	}
+
+	return `✅ 已重置为系统默认模型
+
+你的自定义配置已清除，将使用系统提供的模型服务。`
 }
 
 // handleImageMessage 处理图片消息

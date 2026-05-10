@@ -14,8 +14,8 @@ import (
 func getEncryptKey() []byte {
     key := os.Getenv("LLM_CONFIG_ENCRYPT_KEY")
     if key == "" {
-        // 默认密钥，仅用于测试，生产环境必须配置
-        return []byte("default-llm-config-encrypt-key-32byte")
+        // 默认密钥，仅用于测试，生产环境必须配置（32字节）
+        return []byte("0123456789abcdef0123456789abcdef")
     }
     return []byte(key)
 }
