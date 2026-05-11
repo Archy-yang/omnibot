@@ -6,7 +6,9 @@ import (
 	"wechat-intelligent-bot/internal/client/llm"
 	"wechat-intelligent-bot/internal/db"
 	"wechat-intelligent-bot/internal/middleware"
+	chatRepo "wechat-intelligent-bot/internal/repository/chat"
 	userRepo "wechat-intelligent-bot/internal/repository/user"
+	chatService "wechat-intelligent-bot/internal/service/chat"
 	userService "wechat-intelligent-bot/internal/service/user"
 	"wechat-intelligent-bot/pkg/config"
 	"wechat-intelligent-bot/pkg/logger"
@@ -46,6 +48,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	userSvc := userService.NewUserService(userRepository, wechatAccountRepository)
 	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
 
+	// 初始化消息服务
+	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
+	msgSvc := chatService.NewMessageService(msgRepo)
+
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
 		AppID:          cfg.Wechat.AppID,
@@ -53,7 +59,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, userSvc, llmConfigSvc)
+	}, llmClient, userSvc, llmConfigSvc, msgSvc)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)
