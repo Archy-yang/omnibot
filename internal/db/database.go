@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"wechat-intelligent-bot/internal/domain/conversation"
 	"wechat-intelligent-bot/internal/domain/user"
 	"wechat-intelligent-bot/pkg/config"
 	zaplogger "wechat-intelligent-bot/pkg/logger"
@@ -135,6 +136,7 @@ func autoMigrate(db *gorm.DB) error {
 		&user.User{},
 		&user.WechatAccount{},
 		&user.LLMConfig{},
+		&conversation.Message{},
 	)
 }
 

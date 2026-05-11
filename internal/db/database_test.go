@@ -197,3 +197,26 @@ func TestGetGormDB(t *testing.T) {
 	err := gormDB.AutoMigrate(&TestModel{})
 	assert.NoError(t, err)
 }
+
+func TestAutoMigration_MessagesTable(t *testing.T) {
+	// 使用现有测试数据库创建逻辑
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite",
+		DSN:    ":memory:",
+	}
+
+	db, err := InitDB(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer db.Close()
+
+	// 验证 messages 表是否存在
+	var count int64
+	err = db.GetGormDB().Raw("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='messages'").Scan(&count).Error
+	if err != nil {
+		t.Fatalf("Failed to check messages table: %v", err)
+	}
+	if count == 0 {
+		t.Error("messages table was not created by AutoMigration")
+	}
+}
