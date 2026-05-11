@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"wechat-intelligent-bot/internal/client/llm"
+	"wechat-intelligent-bot/internal/domain/conversation"
 	"wechat-intelligent-bot/internal/domain/user"
+	chat "wechat-intelligent-bot/internal/service/chat"
 	userService "wechat-intelligent-bot/internal/service/user"
 	"wechat-intelligent-bot/pkg/logger"
 
@@ -48,25 +50,43 @@ type Message struct {
 
 const systemPrompt = "你是一个友好的智能客服助手，请用简洁的中文回应用户的问题。"
 
-// callLLM 调用大模型生成回复（支持用户自定义配置）
+// callLLM 调用大模型生成回复（支持用户自定义配置和上下文）
 func (h *Handler) callLLM(ctx context.Context, userID int64, userContent string, msgType string) string {
 	start := time.Now()
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userContent},
+
+	// 构建上下文消息列表
+	var messages []llm.ChatMessage
+
+	// 先加 system prompt（每次都加）
+	messages = append(messages, llm.ChatMessage{
+		Role:    conversation.RoleSystem,
+		Content: systemPrompt,
+	})
+
+	// 如果有消息服务且有 userID，添加上下文历史
+	if h.msgService != nil && userID > 0 {
+		ctxMsgs, err := h.msgService.BuildContextMessages(ctx, userID, userContent)
+		if err == nil {
+			messages = append(messages, ctxMsgs...)
+		}
+		// err != nil 时降级：只有 system prompt + 当前消息
+	} else {
+		// 没有消息服务时，只加当前消息
+		messages = append(messages, llm.ChatMessage{
+			Role:    conversation.RoleUser,
+			Content: userContent,
+		})
 	}
 
 	// 检查是否有用户自定义配置
 	if h.llmConfigService != nil && userID > 0 {
 		apiKey, baseURL, model, hasCustom, err := h.llmConfigService.GetConfigForUser(userID)
 		if err == nil && hasCustom {
-			// 使用用户配置创建新的 LLM 客户端进行调用
 			logger.InfoWithFields("Using user custom LLM config",
 				zap.Int64("user_id", userID),
 				zap.String("base_url", baseURL),
 				zap.String("model", model),
 			)
-			// 创建临时客户端使用用户配置
 			customClient := llm.NewOpenAIProvider(apiKey, baseURL, model, 30*time.Second)
 			resp, err := customClient.ChatCompletion(ctx, messages)
 			if err == nil {
@@ -82,10 +102,10 @@ func (h *Handler) callLLM(ctx context.Context, userID int64, userContent string,
 				zap.Int64("user_id", userID),
 				zap.String("error", err.Error()),
 			)
-			// 失败后继续使用系统默认客户端
 		}
 	}
 
+	// 系统默认 LLM 调用
 	resp, err := h.llmClient.ChatCompletion(ctx, messages)
 	if err != nil {
 		logger.WarnWithFields("LLM call failed",
@@ -128,6 +148,7 @@ type Handler struct {
 	llmClient        LLMClient
 	userService      UserService
 	llmConfigService userService.LLMConfigService
+	msgService       chat.MessageService
 }
 
 // Config 微信配置
@@ -140,17 +161,33 @@ type Config struct {
 }
 
 // NewHandler 创建微信处理器
-func NewHandler(config Config, llmClient LLMClient, userService UserService, llmConfigService ...userService.LLMConfigService) *Handler {
+func NewHandler(
+	config Config,
+	llmClient LLMClient,
+	userService UserService,
+	optionalServices ...interface{},
+) *Handler {
 	handler := &Handler{
 		config:      config,
 		llmClient:   llmClient,
 		userService: userService,
 	}
-	if len(llmConfigService) > 0 {
-		handler.llmConfigService = llmConfigService[0]
+
+	// 解析可选参数（支持 LLMConfigService 和 MessageService）
+	for _, svc := range optionalServices {
+		switch s := svc.(type) {
+		case userLLMConfigService:
+			handler.llmConfigService = s
+		case chat.MessageService:
+			handler.msgService = s
+		}
 	}
+
 	return handler
 }
+
+// userLLMConfigService 是为了避免 type switch 中的包名冲突
+type userLLMConfigService = userService.LLMConfigService
 
 // Verify 微信服务器验证
 func (h *Handler) Verify(c *gin.Context) {
@@ -286,11 +323,38 @@ func (h *Handler) handleTextMessage(msg *Message) (string, error) {
 	// 处理配置命令
 	if h.llmConfigService != nil {
 		if reply, handled := h.handleConfigCommand(userID, msg.Content); handled {
+			// 配置命令的回复也保存到上下文
+			if h.msgService != nil && userID > 0 {
+				// 先保存用户的命令消息
+				h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+				// 再保存机器人的回复
+				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
+			}
 			return h.buildResponse(msg, reply), nil
 		}
 	}
 
+	// 保存用户消息（去重）
+	if h.msgService != nil && userID > 0 {
+		err := h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+		if err == chat.ErrDuplicateMessage {
+			// 重复消息，记录日志但继续执行
+			logger.InfoWithFields("Duplicate message ignored",
+				zap.Int64("user_id", userID),
+				zap.String("msg_id", msg.MsgID),
+			)
+		}
+		// 其他错误忽略，继续执行
+	}
+
+	// 调用 LLM（带上下文）
 	content := h.callLLM(context.Background(), userID, msg.Content, "text")
+
+	// 保存机器人回复
+	if h.msgService != nil && userID > 0 {
+		h.msgService.SaveAssistantMessage(context.Background(), userID, content)
+	}
+
 	return h.buildResponse(msg, content), nil
 }
 
