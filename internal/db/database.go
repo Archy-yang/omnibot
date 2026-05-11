@@ -242,3 +242,30 @@ func (db *Database) GetGormDB() *gorm.DB {
 func (db *Database) Driver() string {
 	return db.config.Driver
 }
+
+// NewTestDB 创建测试用的内存数据库（返回 *gorm.DB）
+// 仅用于测试
+func NewTestDB(t interface {
+	Fatalf(string, ...interface{})
+	Cleanup(func())
+}) *gorm.DB {
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite",
+		DSN:    ":memory:",
+	}
+
+	db, err := InitDB(cfg)
+	if err != nil {
+		t.Fatalf("Failed to init test DB: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("Test DB is nil")
+	}
+
+	// 注册清理函数
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	return db.GetGormDB()
+}

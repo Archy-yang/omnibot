@@ -220,3 +220,22 @@ func TestAutoMigration_MessagesTable(t *testing.T) {
 		t.Error("messages table was not created by AutoMigration")
 	}
 }
+
+func TestNewTestDB(t *testing.T) {
+	testDB := NewTestDB(t)
+	require.NotNil(t, testDB)
+
+	// 验证可以正常使用
+	type TestModel struct {
+		ID int
+	}
+	err := testDB.AutoMigrate(&TestModel{})
+	require.NoError(t, err)
+
+	err = testDB.Create(&TestModel{ID: 1}).Error
+	require.NoError(t, err)
+
+	var count int64
+	testDB.Model(&TestModel{}).Count(&count)
+	assert.Equal(t, int64(1), count)
+}
