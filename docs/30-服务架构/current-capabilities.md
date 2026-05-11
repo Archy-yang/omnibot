@@ -27,11 +27,16 @@
 
 **已实现能力**:
 - 创建 Gin 引擎
-- 注册全局中间件（Logger, Recovery）
+- 注册全局中间件（Logger, Recovery, CORS）
+- 初始化依赖注入链：DB → Repository → Service → Handler
 - 注册路由:
-  - `GET /ping` → `admin.Handler.HealthCheck`
+  - `GET /ping` → 服务探活
   - `GET /wechat/callback` → `wechat.Handler.Verify`
   - `POST /wechat/callback` → `wechat.Handler.HandleMessage`
+  - `GET /api/v1/health` → 健康检查
+  - `GET /api/v1/metrics` → 系统指标
+  - `GET /api/v1/config` → 配置管理
+  - `PUT /api/v1/config` → 更新配置
 
 ---
 
@@ -46,12 +51,21 @@
 - ✅ 微信签名验证（符合微信官方文档）
 - ✅ GET 请求接入验证，成功返回 echostr
 - ✅ 解析微信 XML 格式消息，支持所有消息类型
-- ✅ 所有消息类型（文本/图片/语音/视频/位置/链接/事件）统一返回固定回复
-- ✅ 固定回复内容: **"客服在开发中，敬请期待"**
-- ✅ 回复格式符合微信要求的 XML 格式
-- ✅ ToUserName 和 FromUserName 正确交换
+- ✅ LLM 智能对话集成：文本/图片/语音/视频等消息自动调用大模型回复
+- ✅ **用户自定义 LLM 配置命令**:
+  - `#模型设置` → 显示配置引导菜单
+  - `#设置Key sk-xxx` → 设置用户 API Key（AES-256-GCM 加密存储）
+  - `#设置地址 https://xxx` → 设置自定义 API 端点
+  - `#我的配置` → 查看当前配置（Key 脱敏显示）
+  - `#重置模型` → 清除自定义配置，恢复系统默认
+- ✅ 支持所有 OpenAI API 兼容的大模型服务（Azure、One API、私有部署等）
+- ✅ 用户配置与系统配置隔离，每个用户独立使用自己的配额
+- ✅ 配置调用失败时返回友好错误提示
 
-**配置**: 从 `Config` 获取 `Token` 用于签名验证
+**关注事件处理**:
+- ✅ subscribe（关注） → 自动创建用户账户
+- ✅ unsubscribe（取消关注） → 记录但不删除数据
+- ✅ 其他事件类型
 
 ---
 
@@ -60,9 +74,148 @@
 ### handler.go
 **入口函数**:
 - `HealthCheck(c *gin.Context)`
+- `Metrics(c *gin.Context)`
+- `GetConfig(c *gin.Context)`
+- `UpdateConfig(c *gin.Context)`
 
 **已实现能力**:
-- ✅ `GET /ping` 返回 `pong`，用于服务探活
+- ✅ `GET /api/v1/health` 健康检查
+- ✅ `GET /api/v1/metrics` 系统指标（数据库连接池统计）
+- ✅ `GET /api/v1/config` 获取当前配置
+- ✅ `PUT /api/v1/config` 动态更新配置
+
+---
+
+## internal/client/llm/
+
+### client.go
+**入口函数**: `NewClient(cfg config.LLMConfig) (LLMClient, error)`
+
+**已实现能力**:
+- ✅ 多 LLM 提供商抽象层
+- ✅ 支持多种 OpenAI 兼容的 API 提供商
+- ✅ 统一的 `ChatCompletion()` 接口
+- ✅ 可扩展的 Provider 架构，便于新增支持
+
+**支持的 Provider**:
+- OpenAI 官方 API
+- 兼容 OpenAI 格式的第三方服务
+
+---
+
+## internal/domain/user/
+
+### user.go
+**实体**: `User`, `WechatAccount`
+
+**已实现能力**:
+- ✅ 用户核心实体定义
+- ✅ 微信账号关联（OpenID / UnionID）
+- ✅ 多账号关联同一用户
+- ✅ 用户状态管理（正常/禁用/已删除）
+
+### llm_config.go
+**实体**: `LLMConfig`
+
+**已实现能力**:
+- ✅ 用户自定义 LLM 配置实体
+- ✅ API Key 加密存储（AES-256-GCM）
+- ✅ 自定义 BaseURL、Model 支持
+- ✅ 配置启用/禁用状态管理
+- ✅ user_id 唯一索引，每个用户只能有一份配置
+
+---
+
+## internal/repository/user/
+
+### user_repo.go
+**接口**: `UserRepository`
+
+**已实现能力**:
+- ✅ `Create(user *domain.User) error`
+- ✅ `GetByID(id int64) (*domain.User, error)`
+- ✅ `Update(user *domain.User) error`
+
+### wechat_account_repo.go
+**接口**: `WechatAccountRepository`
+
+**已实现能力**:
+- ✅ `Create(account *domain.WechatAccount) error`
+- ✅ `GetByOpenID(openID string) (*domain.WechatAccount, error)`
+- ✅ `GetByUnionID(unionID string) (*domain.WechatAccount, error)`
+- ✅ `GetByUserID(userID int64) ([]*domain.WechatAccount, error)`
+
+### llm_config_repo.go
+**接口**: `LLMConfigRepository`
+
+**已实现能力**:
+- ✅ `Create(config *domain.LLMConfig) error`
+- ✅ `GetByUserID(userID int64) (*domain.LLMConfig, error)`
+- ✅ `Update(config *domain.LLMConfig) error`
+- ✅ `Delete(userID int64) error`
+
+---
+
+## internal/service/user/
+
+### user_service.go
+**接口**: `UserService`
+
+**已实现能力**:
+- ✅ `GetOrCreateByOpenID(openID string) (*domain.User, bool, error)`
+- ✅ 首次关注自动创建用户账户
+- ✅ 自动关联微信账号与用户
+- ✅ 幂等设计，重复调用安全
+
+### llm_config_service.go
+**接口**: `LLMConfigService`
+
+**已实现能力**:
+- ✅ `SetAPIKey(userID int64, apiKey string) error` - 设置 API Key（自动加密）
+- ✅ `SetBaseURL(userID int64, baseURL string) error` - 设置 API 地址
+- ✅ `SetModel(userID int64, model string) error` - 设置默认模型
+- ✅ `GetConfigForUser(userID int64) (apiKey, baseURL, model string, hasCustom bool, err error)` - 获取解密后的配置（LLM 调用时使用）
+- ✅ `GetConfigView(userID int64) (*LLMConfigView, error)` - 获取配置视图（API Key 脱敏，用于前端展示）
+- ✅ `ClearConfig(userID int64) error` - 清除用户自定义配置
+
+**校验规则**:
+- API Key 必须以 `sk-` 开头
+- 长度校验（30-200 字符）
+- URL 必须以 `http://` 或 `https://` 开头
+
+---
+
+## internal/pkg/crypto/
+
+### aes.go
+**入口函数**:
+- `Encrypt(plaintext string, key ...[]byte) (string, error)`
+- `Decrypt(ciphertext string, key ...[]byte) (string, error)`
+
+**已实现能力**:
+- ✅ AES-256-GCM 认证加密
+- ✅ 随机 nonce（每次加密结果不同）
+- ✅ base64 编码输出
+- ✅ 支持环境变量 `LLM_CONFIG_ENCRYPT_KEY` 指定加密密钥
+- ✅ 开发环境内置默认密钥（便于测试）
+
+---
+
+## internal/db/
+
+### database.go
+**入口函数**: `InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error)`
+
+**已实现能力**:
+- ✅ 多驱动支持（SQLite / PostgreSQL / MySQL 预留）
+- ✅ 连接池配置（最大连接、最大空闲、生命周期）
+- ✅ 健康检查
+- ✅ 事务支持
+- ✅ 优雅关闭
+- ✅ **自动迁移表结构**:
+  - `users` - 用户表
+  - `wechat_accounts` - 微信账号关联表
+  - `user_llm_configs` - 用户 LLM 配置表
 
 ---
 
@@ -88,10 +241,11 @@
 - ✅ 如果未指定配置文件，自动尝试 `configs/config.yaml`，不存在则使用 `configs/config.example.yaml`
 - ✅ 配置结构体定义完整：
   - `AppConfig` - 应用基本配置
-  - `WechatConfig` - 微信公众号配置（AppID/AppSecret/Token/EncodingAESKey/CallbackURL）
+  - `WechatConfig` - 微信公众号配置
   - `LLMConfig` - 大模型配置（多提供商支持）
-  - `MemoryConfig` - 记忆系统配置
-  - `RedisConfig` - Redis 配置
+  - `DatabaseConfig` - 数据库配置
+  - `MemoryConfig` - 记忆系统配置（预留）
+  - `RedisConfig` - Redis 配置（预留）
   - `LoggerConfig` - 日志配置
 
 ---
@@ -131,9 +285,35 @@
 ```
 用户微信公众号 → 微信服务器 → 我们的服务
     ↓
-签名验证通过 → 解析消息 → 返回固定回复 "客服在开发中，敬请期待"
+签名验证通过 → 解析消息 → 查找/创建用户
     ↓
-用户看到回复
+    ├───────────────────────────────────────────┐
+    │ 是配置命令？（#模型设置/#设置Key/...）        │
+    │      ↓                                     │
+    │  处理配置命令 → 返回操作结果                 │
+    └───────────────────────────────────────────┘
+    ↓ 否，是普通对话
+检查用户是否有自定义 LLM 配置
+    ↓
+    ├─ 有自定义配置 → 使用用户的 API Key/地址 调用 LLM
+    │
+    └─ 无自定义配置 → 使用系统默认 LLM 配置
+    ↓
+LLM 生成回复 → 转换为微信 XML 格式 → 返回给用户
 ```
 
-当前项目可交付状态：**微信接入完成，可正常接收消息并回复占位文本**。等待核心业务功能（大模型对话、记忆系统）开发。
+**当前项目可交付状态**：
+- ✅ 微信公众号完整接入（消息接收/回复/事件处理）
+- ✅ 用户体系（关注自动创建账号，微信账号关联）
+- ✅ 大模型对话能力（支持 OpenAI 兼容的所有提供商）
+- ✅ **用户自定义 LLM 配置**（v1.1 新功能）
+  - 每个用户可独立设置自己的 API Key、API 地址
+  - 配置加密存储，安全可靠
+  - 对话时优先使用用户自己的配置，配额独立
+  - 可随时重置回系统默认
+- ✅ 完整的管理 API（健康检查、配置管理）
+
+**下一步可迭代方向**：
+- v1.2: 对话上下文记忆
+- v1.3: 多轮对话支持
+- v2.0: H5 配置页面、多模型切换
