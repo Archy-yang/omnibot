@@ -2,7 +2,7 @@ package user
 
 import (
 	"gorm.io/gorm"
-	"wechat-intelligent-bot/internal/domain/user"
+	"omnibot/internal/domain/user"
 )
 
 // WechatAccountRepository 微信账号仓储接口

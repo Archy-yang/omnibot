@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"wechat-intelligent-bot/internal/domain/conversation"
-	"wechat-intelligent-bot/internal/domain/user"
-	"wechat-intelligent-bot/pkg/config"
-	zaplogger "wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/domain/conversation"
+	"omnibot/internal/domain/user"
+	"omnibot/pkg/config"
+	zaplogger "omnibot/pkg/logger"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"

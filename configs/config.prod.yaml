@@ -1,6 +1,6 @@
 # 应用配置
 app:
-  name: "wechat-intelligent-bot"
+  name: "omnibot"
   env: "production"
   port: 80
 

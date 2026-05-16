@@ -5,9 +5,9 @@ import (
 	"gorm.io/gorm"
 	"strings"
 	"time"
-	"wechat-intelligent-bot/internal/domain/user"
-	"wechat-intelligent-bot/internal/pkg/crypto"
-	repo "wechat-intelligent-bot/internal/repository/user"
+	"omnibot/internal/domain/user"
+	"omnibot/internal/pkg/crypto"
+	repo "omnibot/internal/repository/user"
 )
 
 // LLMConfigService LLM 配置服务接口

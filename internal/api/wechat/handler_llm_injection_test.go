@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	domain "wechat-intelligent-bot/internal/domain/user"
-	repo "wechat-intelligent-bot/internal/repository/user"
-	userService "wechat-intelligent-bot/internal/service/user"
-	"wechat-intelligent-bot/internal/client/llm"
+	domain "omnibot/internal/domain/user"
+	repo "omnibot/internal/repository/user"
+	userService "omnibot/internal/service/user"
+	"omnibot/internal/client/llm"
 )
 
 // MockLLMClientWithConfigCapture 捕获调用配置的 mock

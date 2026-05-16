@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"wechat-intelligent-bot/pkg/config"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/pkg/config"
+	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
 )

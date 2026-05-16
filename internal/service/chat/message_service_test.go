@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"wechat-intelligent-bot/internal/domain/conversation"
-	"wechat-intelligent-bot/internal/repository/chat"
-	"wechat-intelligent-bot/internal/db"
+	"omnibot/internal/domain/conversation"
+	"omnibot/internal/repository/chat"
+	"omnibot/internal/db"
 )
 
 func TestMessageService_BuildContextMessages(t *testing.T) {

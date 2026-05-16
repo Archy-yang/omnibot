@@ -3,7 +3,7 @@ package admin
 import (
 	"net/http"
 
-	"wechat-intelligent-bot/pkg/config"
+	"omnibot/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )

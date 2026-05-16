@@ -3,7 +3,7 @@ package logger
 import (
 	"os"
 
-	"wechat-intelligent-bot/pkg/config"
+	"omnibot/pkg/config"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"wechat-intelligent-bot/internal/client/llm"
-	"wechat-intelligent-bot/internal/domain/user"
-	"wechat-intelligent-bot/pkg/config"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/user"
+	"omnibot/pkg/config"
+	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

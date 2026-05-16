@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
 )

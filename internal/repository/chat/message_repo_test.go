@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"wechat-intelligent-bot/internal/domain/conversation"
-	"wechat-intelligent-bot/internal/db"
+	"omnibot/internal/domain/conversation"
+	"omnibot/internal/db"
 )
 
 func TestMessageRepository_Create(t *testing.T) {

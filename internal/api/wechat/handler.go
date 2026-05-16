@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"wechat-intelligent-bot/internal/client/llm"
-	"wechat-intelligent-bot/internal/domain/conversation"
-	"wechat-intelligent-bot/internal/domain/user"
-	chat "wechat-intelligent-bot/internal/service/chat"
-	userService "wechat-intelligent-bot/internal/service/user"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/conversation"
+	"omnibot/internal/domain/user"
+	chat "omnibot/internal/service/chat"
+	userService "omnibot/internal/service/user"
+	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"

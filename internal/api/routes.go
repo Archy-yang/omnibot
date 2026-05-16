@@ -1,17 +1,17 @@
 package api
 
 import (
-	"wechat-intelligent-bot/internal/api/admin"
-	"wechat-intelligent-bot/internal/api/wechat"
-	"wechat-intelligent-bot/internal/client/llm"
-	"wechat-intelligent-bot/internal/db"
-	"wechat-intelligent-bot/internal/middleware"
-	chatRepo "wechat-intelligent-bot/internal/repository/chat"
-	userRepo "wechat-intelligent-bot/internal/repository/user"
-	chatService "wechat-intelligent-bot/internal/service/chat"
-	userService "wechat-intelligent-bot/internal/service/user"
-	"wechat-intelligent-bot/pkg/config"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/api/admin"
+	"omnibot/internal/api/wechat"
+	"omnibot/internal/client/llm"
+	"omnibot/internal/db"
+	"omnibot/internal/middleware"
+	chatRepo "omnibot/internal/repository/chat"
+	userRepo "omnibot/internal/repository/user"
+	chatService "omnibot/internal/service/chat"
+	userService "omnibot/internal/service/user"
+	"omnibot/pkg/config"
+	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"

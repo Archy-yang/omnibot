@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"wechat-intelligent-bot/internal/client/llm"
-	"wechat-intelligent-bot/internal/domain/conversation"
-	chatrepo "wechat-intelligent-bot/internal/repository/chat"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/conversation"
+	chatrepo "omnibot/internal/repository/chat"
+	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
 )

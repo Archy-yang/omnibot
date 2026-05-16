@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"wechat-intelligent-bot/internal/api"
-	"wechat-intelligent-bot/pkg/config"
-	"wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/api"
+	"omnibot/pkg/config"
+	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 )

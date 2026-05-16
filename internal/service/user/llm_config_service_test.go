@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	domain "wechat-intelligent-bot/internal/domain/user"
-	repo "wechat-intelligent-bot/internal/repository/user"
+	domain "omnibot/internal/domain/user"
+	repo "omnibot/internal/repository/user"
 )
 
 func setupServiceDB(t *testing.T) *gorm.DB {

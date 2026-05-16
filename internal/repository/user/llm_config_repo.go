@@ -2,7 +2,7 @@ package user
 
 import (
 	"gorm.io/gorm"
-	"wechat-intelligent-bot/internal/domain/user"
+	"omnibot/internal/domain/user"
 )
 
 // LLMConfigRepository LLM 配置仓储接口

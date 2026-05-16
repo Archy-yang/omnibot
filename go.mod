@@ -1,4 +1,4 @@
-module wechat-intelligent-bot
+module omnibot
 
 go 1.24.2
 

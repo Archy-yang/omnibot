@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"wechat-intelligent-bot/internal/domain/user"
-	"wechat-intelligent-bot/pkg/config"
-	zaplogger "wechat-intelligent-bot/pkg/logger"
+	"omnibot/internal/domain/user"
+	"omnibot/pkg/config"
+	zaplogger "omnibot/pkg/logger"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -8,7 +8,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	domain "wechat-intelligent-bot/internal/domain/user"
+	domain "omnibot/internal/domain/user"
 )
 
 func setupLLMTestDB(t *testing.T) *gorm.DB {

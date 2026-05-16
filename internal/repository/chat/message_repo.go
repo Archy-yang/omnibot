@@ -1,7 +1,7 @@
 package chat
 
 import (
-	"wechat-intelligent-bot/internal/domain/conversation"
+	"omnibot/internal/domain/conversation"
 
 	"gorm.io/gorm"
 )
