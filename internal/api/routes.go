@@ -1,8 +1,13 @@
 package api
 
 import (
+	"net/http"
+
+	"omnibot/frontend"
 	"omnibot/internal/api/admin"
 	"omnibot/internal/api/wechat"
+	channelfactory "omnibot/internal/channel"
+	"omnibot/internal/channel/web"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
@@ -16,6 +21,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+func init() {
+	channelfactory.Register(web.NewChannel())
+}
 
 // SetupRouter 设置路由
 func SetupRouter(cfg *config.Config) *gin.Engine {
@@ -43,9 +52,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	userRepository := userRepo.NewUserRepository(dbConn.GetGormDB())
 	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn.GetGormDB())
 	llmConfigRepository := userRepo.NewLLMConfigRepository(dbConn.GetGormDB())
+	userChannelRepository := userRepo.NewUserChannelRepository(dbConn.GetGormDB())
 
 	// 初始化用户服务
-	userSvc := userService.NewUserService(userRepository, wechatAccountRepository)
+	userSvc := userService.NewUserService(userRepository, wechatAccountRepository, userChannelRepository)
 	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
 
 	// 初始化消息服务
@@ -80,6 +90,16 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		apiGroup.GET("/config", adminHandler.GetConfig)
 		apiGroup.PUT("/config", adminHandler.UpdateConfig)
 	}
+
+	// 前端静态资源路由 - 嵌入到二进制中
+	webFS := http.FS(frontend.FS)
+	webHandler := http.StripPrefix("/chat/", http.FileServer(webFS))
+	r.GET("/chat/*filepath", gin.WrapH(webHandler))
+
+	// 根路径重定向到 /chat
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/chat/")
+	})
 
 	// Ping路由，用于服务探活
 	r.GET("/ping", func(c *gin.Context) {
