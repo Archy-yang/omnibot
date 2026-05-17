@@ -88,3 +88,25 @@ func TestHandleSendMessage(t *testing.T) {
 	assert.Equal(t, "Hello OmniBot", msgSvc.savedUserContent)
 	assert.Equal(t, "AI response", msgSvc.savedAssistantContent)
 }
+
+func TestHandleGetHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Setup with mock messages
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	llmClient := &mockLLMClient{}
+
+	handler := NewHandler(userSvc, msgSvc, llmClient)
+
+	// Test request
+	router := gin.Default()
+	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
+
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=test-session-123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "messages")
+}

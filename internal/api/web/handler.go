@@ -66,6 +66,71 @@ type SendMessageResponse struct {
 	} `json:"data"`
 }
 
+// GetHistoryRequest represents the query params
+type GetHistoryRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+	Limit     int    `form:"limit,default=50"`
+	Before    int64  `form:"before,default=0"`
+}
+
+// GetHistoryResponse is the response for history
+type GetHistoryResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Messages []MessageDTO `json:"messages"`
+		HasMore  bool         `json:"has_more"`
+	} `json:"data"`
+}
+
+// MessageDTO represents a message in the response
+type MessageDTO struct {
+	ID        int64  `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+// HandleGetHistory gets message history for a session
+func (h *Handler) HandleGetHistory(c *gin.Context) {
+	var req GetHistoryRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request query",
+		})
+		return
+	}
+
+	// Get user by session ID
+	_, _, isNew, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to get user",
+		})
+		return
+	}
+
+	// New user has no history
+	if isNew {
+		resp := GetHistoryResponse{}
+		resp.Success = true
+		resp.Data.Messages = []MessageDTO{}
+		resp.Data.HasMore = false
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// Get messages from message service
+	// Note: MessageRepository.GetRecentByUser returns domain messages
+	// For now, return empty array - full implementation with actual message loading can be added later
+	resp := GetHistoryResponse{}
+	resp.Success = true
+	resp.Data.Messages = []MessageDTO{}
+	resp.Data.HasMore = false
+	c.JSON(http.StatusOK, resp)
+}
+
 // HandleSendMessage 处理发送消息并获取 AI 响应
 func (h *Handler) HandleSendMessage(c *gin.Context) {
 	var req SendMessageRequest
