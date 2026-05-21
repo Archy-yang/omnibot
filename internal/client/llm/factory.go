@@ -20,6 +20,14 @@ type Client struct {
 	fallbackProviders []LLMProvider
 }
 
+// UserConfig 用户级 LLM 配置
+type UserConfig struct {
+	Provider string // 服务商：openai/anthropic/azure/qwen/doubao
+	APIKey   string
+	BaseURL  string
+	Model    string
+}
+
 // NewClient 根据配置创建 LLM 客户端
 func NewClient(cfg config.LLMConfig) (*Client, error) {
 	// 创建所有 providers
@@ -55,6 +63,29 @@ func NewClient(cfg config.LLMConfig) (*Client, error) {
 	return &Client{
 		defaultProvider:    defaultProvider,
 		fallbackProviders: fallbackProviders,
+	}, nil
+}
+
+// NewClientFromUserConfig 从用户级配置创建简化版 LLM 客户端
+// 不包含 fallback 机制，只使用用户指定的单一配置
+func NewClientFromUserConfig(cfg UserConfig) (*Client, error) {
+	var provider LLMProvider
+	timeout := 30 * time.Second
+
+	switch strings.ToLower(cfg.Provider) {
+	case "qwen", "tongyi", "alibabacloud":
+		provider = NewQwenProvider(cfg.APIKey, cfg.Model, timeout)
+	case "doubao", "bytedance", "volcengine":
+		provider = NewDoubaoProvider(cfg.APIKey, cfg.Model, timeout)
+	case "openai", "azure", "anthropic":
+		provider = NewOpenAIProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, timeout)
+	default:
+		return nil, fmt.Errorf("unsupported provider type: %s", cfg.Provider)
+	}
+
+	return &Client{
+		defaultProvider:    provider,
+		fallbackProviders: nil, // 用户级配置不支持 fallback
 	}, nil
 }
 

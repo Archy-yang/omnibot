@@ -134,8 +134,8 @@ func validateConfig(cfg *config.DatabaseConfig) error {
 func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&user.User{},
-		&user.WechatAccount{}, // 保留旧表，用于数据迁移
-		&user.UserChannel{},   // v1.3 新表：多通道用户关联
+		&user.WechatAccount{},
+		&user.UserChannel{},
 		&user.LLMConfig{},
 		&conversation.Message{},
 	)

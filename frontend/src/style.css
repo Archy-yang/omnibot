@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/* Tailwind v4: 显式声明扫描源，确保所有 Tailwind 类被识别 */
+@source "../index.html";
+@source "./**/*.{vue,ts,tsx,js,jsx}";
+
+/* ========================================
+   OmniBot - ChatGPT Inspired Design
+   ======================================== */
+
+:root {
+  --sidebar-bg: #171717;
+  --sidebar-hover: #2a2b32;
+  --sidebar-active: #343541;
+  --sidebar-text: #ececf1;
+  --sidebar-text-dim: #8e8ea0;
+  --sidebar-border: #2d2d35;
+
+  --main-bg: #ffffff;
+  --msg-user-bg: #f7f7f8;
+  --text-primary: #1a1a2e;
+  --text-secondary: #6e6e80;
+  --text-tertiary: #8e8ea0;
+
+  --accent: #10a37f;
+  --accent-hover: #0d8c6d;
+  --accent-light: rgba(16, 163, 127, 0.08);
+
+  --border: #e5e5e5;
+  --input-bg: #ffffff;
+  --input-border: #d9d9e3;
+  --input-shadow: 0 0 0 1px transparent;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+
+  font: 15px/1.7 var(--font-sans);
+  color: var(--text-primary);
+  background: var(--main-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+::selection {
+  background: rgba(16, 163, 127, 0.15);
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c5c5d2; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #a0a0b0; }
+
+.sidebar-scroll::-webkit-scrollbar-thumb { background: #444654; }
+.sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #565869; }
+
+/* ---- Transitions ---- */
+.fade-enter-active, .fade-leave-active { transition: opacity .2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.slide-enter-active, .slide-leave-active { transition: transform .25s ease, opacity .25s ease; }
+.slide-enter-from, .slide-leave-to { transform: translateX(-100%); opacity: 0; }

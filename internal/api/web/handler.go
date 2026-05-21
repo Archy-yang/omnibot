@@ -8,6 +8,7 @@ import (
 
 	"omnibot/internal/client/llm"
 	domainuser "omnibot/internal/domain/user"
+	userLLM "omnibot/internal/service/user"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,11 +30,20 @@ type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
 }
 
+// LLMConfigService LLM 配置服务接口
+type LLMConfigService interface {
+	GetConfigView(userID int64) (*userLLM.LLMConfigView, error)
+	UpdateFullConfig(userID int64, req userLLM.UpdateConfigRequest) error
+	ClearConfig(userID int64) error
+	GetFullConfigForUser(userID int64) (*userLLM.FullLLMConfig, bool, error)
+}
+
 // Handler Web 聊天 API 处理器
 type Handler struct {
-	userService    UserService
-	messageService MessageService
-	llmClient      LLMClient
+	userService      UserService
+	messageService   MessageService
+	llmClient        LLMClient
+	llmConfigService LLMConfigService
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -41,11 +51,13 @@ func NewHandler(
 	userService UserService,
 	messageService MessageService,
 	llmClient LLMClient,
+	llmConfigService LLMConfigService,
 ) *Handler {
 	return &Handler{
-		userService:    userService,
-		messageService: messageService,
-		llmClient:      llmClient,
+		userService:      userService,
+		messageService:   messageService,
+		llmClient:        llmClient,
+		llmConfigService: llmConfigService,
 	}
 }
 
@@ -169,8 +181,26 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 		}
 	}
 
+	// 选择 LLM 客户端：优先使用用户自定义配置
+	activeClient := h.llmClient
+	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
+	if err == nil && hasCustomConfig {
+		// 使用用户自定义配置创建 LLM 客户端
+		customConfig := llm.UserConfig{
+			Provider: userConfig.Provider,
+			APIKey:   userConfig.APIKey,
+			BaseURL:  userConfig.BaseURL,
+			Model:    userConfig.Model,
+		}
+		customClient, err := llm.NewClientFromUserConfig(customConfig)
+		if err == nil {
+			activeClient = customClient
+		}
+		// 失败则静默降级使用系统默认客户端
+	}
+
 	// 调用 LLM 获取响应
-	response, err := h.llmClient.ChatCompletion(c.Request.Context(), ctxMessages)
+	response, err := activeClient.ChatCompletion(c.Request.Context(), ctxMessages)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -194,4 +224,162 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	resp.Data.CreatedAt = time.Now().Format(time.RFC3339)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// ========== LLM 配置接口 ==========
+
+// GetLLMConfigRequest 获取配置请求
+type GetLLMConfigRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+}
+
+// GetLLMConfigResponse 获取配置响应
+type GetLLMConfigResponse struct {
+	HasConfig   bool    `json:"has_config"`
+	APIKeyMask string `json:"api_key_masked"`
+	BaseURL     string `json:"base_url"`
+	Model       string `json:"model"`
+	Provider    string `json:"provider"`
+	StatusText  string `json:"status_text"`
+	Temperature float64 `json:"temperature"`
+	MaxTokens   int     `json:"max_tokens"`
+}
+
+// HandleGetLLMConfig 获取用户 LLM 配置
+func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
+	var req GetLLMConfigRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "缺少 session_id 参数",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取用户信息失败",
+		})
+		return
+	}
+
+	configView, err := h.llmConfigService.GetConfigView(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取配置失败",
+		})
+		return
+	}
+
+	resp := GetLLMConfigResponse{
+		HasConfig:   configView.HasConfig,
+		APIKeyMask: configView.APIKeyMasked,
+		BaseURL:     configView.BaseURL,
+		Model:       configView.Model,
+		Provider:    configView.Provider,
+		StatusText:  configView.StatusText,
+		Temperature: configView.Temperature,
+		MaxTokens:   configView.MaxTokens,
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    resp,
+	})
+}
+
+// UpdateLLMConfigRequest 更新配置请求
+type UpdateLLMConfigRequest struct {
+	SessionID   string  `json:"session_id" binding:"required"`
+	Provider    string `json:"provider" binding:"required"`
+	APIKey      string `json:"api_key"`
+	BaseURL     string `json:"base_url"`
+	Model       string `json:"model" binding:"required"`
+	Temperature float64 `json:"temperature"`
+	MaxTokens   int     `json:"max_tokens"`
+}
+
+// HandleUpdateLLMConfig 更新用户 LLM 配置
+func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
+	var req UpdateLLMConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取用户信息失败",
+		})
+		return
+	}
+
+	updateReq := userLLM.UpdateConfigRequest{
+		Provider:    req.Provider,
+		APIKey:      req.APIKey,
+		BaseURL:     req.BaseURL,
+		Model:       req.Model,
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+	}
+
+	if err := h.llmConfigService.UpdateFullConfig(user.ID, updateReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "配置保存成功",
+	})
+}
+
+// DeleteLLMConfigRequest 删除配置请求
+type DeleteLLMConfigRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+}
+
+// HandleDeleteLLMConfig 删除用户 LLM 配置
+func (h *Handler) HandleDeleteLLMConfig(c *gin.Context) {
+	var req DeleteLLMConfigRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "缺少 session_id 参数",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取用户信息失败",
+		})
+		return
+	}
+
+	if err := h.llmConfigService.ClearConfig(user.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "清除配置失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "配置已清除",
+	})
 }
