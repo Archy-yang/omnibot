@@ -1,0 +1,58 @@
+# 应用配置
+app:
+  name: "omnibot"
+  env: "development"
+  port: 8080
+
+# 微信公众号配置
+wechat:
+  app_id: "your_wechat_app_id"
+  app_secret: "your_wechat_app_secret"
+  token: "your_wechat_token"
+  encoding_aes_key: "your_wechat_encoding_aes_key"
+  callback_url: "https://your-domain.com/wechat/callback"
+
+# 大模型配置 - 使用 OpenAI 兼容格式
+llm:
+  providers:
+    openai:
+      api_key: "dummy_key_for_testing"
+      base_url: "http://localhost:9999/v1"  # 不存在的地址，会失败但不影响基础测试
+      model: "gpt-4"
+      timeout: "10s"
+
+  routing:
+    default: "openai"
+    fallback_order: ["openai"]
+
+# 记忆系统配置
+memory:
+  extraction:
+    enabled: true
+    batch_size: 10
+
+  storage:
+    vector_db:
+      url: "your_vector_db_url"
+      api_key: "your_vector_db_key"
+
+    postgres:
+      dsn: "your_postgres_dsn"
+      max_conns: 20
+
+# Redis配置
+redis:
+  url: "redis://localhost:6379/0"
+  pool_size: 10
+
+# 数据库配置
+database:
+  driver: "sqlite"
+  dsn: "file::memory:?cache=shared"
+  max_conns: 10
+
+# 日志配置
+logger:
+  level: "debug"
+  format: "text"
+  output: "stdout"

@@ -1,0 +1,92 @@
+/**
+ * 通用 API 响应接口 - 与后端响应格式一致
+ */
+export interface ApiResponse<T = void> {
+  success: boolean;
+  data: T;
+  error?: string;
+}
+
+/**
+ * 发送消息请求类型
+ */
+export interface SendMessageRequest {
+  content: string;
+  session_id: string;
+}
+
+/**
+ * 获取历史记录响应数据结构
+ */
+export interface HistoryData<T> {
+  messages: T[];
+  has_more: boolean;
+}
+
+/**
+ * 分页参数类型
+ */
+export interface PaginationParams {
+  limit?: number;
+  before?: number;
+  after?: number;
+}
+
+/**
+ * 获取历史记录响应类型
+ */
+export type GetHistoryResponse = HistoryData<import('./chat').Message>;
+
+/**
+ * LLM 配置接口
+ */
+export interface LLMConfig {
+  provider: string;
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/**
+ * 应用配置接口
+ */
+export interface Config {
+  llm: LLMConfig;
+  systemPrompt: string;
+  contextWindow: number;
+  enableMemory: boolean;
+}
+
+/**
+ * 更新配置请求类型
+ */
+export type UpdateConfigRequest = Partial<Config>;
+
+/**
+ * 用户 LLM 配置响应类型
+ */
+export interface UserLLMConfigResponse {
+  has_config: boolean;
+  api_key_masked: string;
+  base_url: string;
+  model: string;
+  provider: string;
+  status_text: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+/**
+ * 更新用户 LLM 配置请求类型
+ */
+export interface UpdateUserLLMConfigRequest {
+  session_id: string;
+  provider: string;
+  api_key?: string;
+  base_url?: string;
+  model: string;
+  temperature?: number;
+  max_tokens?: number;
+}

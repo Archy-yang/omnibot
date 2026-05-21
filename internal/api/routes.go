@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 
 	"omnibot/frontend"
@@ -93,15 +94,28 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// Web 聊天 API 路由
-	webHandler := web.NewHandler(userSvc, msgSvc, llmClient)
+	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc)
 	chatAPIGroup := r.Group("/api/v1/chat")
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
 	}
 
+	// 用户 LLM 配置路由
+	userAPIGroup := r.Group("/api/v1/user")
+	{
+		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)
+		userAPIGroup.PUT("/llm-config", webHandler.HandleUpdateLLMConfig)
+		userAPIGroup.DELETE("/llm-config", webHandler.HandleDeleteLLMConfig)
+	}
+
 	// 前端静态资源路由 - 嵌入到二进制中
-	webFS := http.FS(frontend.FS)
+	// 使用 SubFS 获取 dist 子目录作为根
+	distFS, err := fs.Sub(frontend.FS, "dist")
+	if err != nil {
+		logger.Fatal("Failed to create dist sub filesystem", zap.Error(err))
+	}
+	webFS := http.FS(distFS)
 	staticHandler := http.StripPrefix("/chat/", http.FileServer(webFS))
 	r.GET("/chat/*filepath", gin.WrapH(staticHandler))
 

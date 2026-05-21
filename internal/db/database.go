@@ -135,6 +135,7 @@ func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&user.User{},
 		&user.WechatAccount{},
+		&user.UserChannel{},
 		&user.LLMConfig{},
 		&conversation.Message{},
 	)

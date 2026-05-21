@@ -58,3 +58,30 @@ func (u *User) SoftDelete() {
 	u.Status = StatusDeleted
 	u.UpdatedAt = time.Now()
 }
+
+// GetID 获取用户ID
+func (u *User) GetID() int64 {
+	return u.ID
+}
+
+// UserChannel 用户渠道关联实体
+type UserChannel struct {
+	ID            int64     `gorm:"primaryKey;autoIncrement"`
+	UserID        int64     `gorm:"not null;index"`
+	ChannelType   string    `gorm:"size:50;not null;index"` // web, wechat, feishu
+	ChannelUserID string    `gorm:"size:255;not null"`     // session_id, open_id 等
+	CreatedAt     time.Time `gorm:"not null"`
+	UpdatedAt     time.Time `gorm:"not null"`
+}
+
+// NewUserChannel 创建用户渠道关联
+func NewUserChannel(userID int64, channelType, channelUserID string) *UserChannel {
+	now := time.Now()
+	return &UserChannel{
+		UserID:        userID,
+		ChannelType:   channelType,
+		ChannelUserID: channelUserID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+}
