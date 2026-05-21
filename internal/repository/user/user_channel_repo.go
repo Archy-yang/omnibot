@@ -8,9 +8,11 @@ import (
 // UserChannelRepository 用户渠道仓储接口
 type UserChannelRepository interface {
 	Create(uc *user.UserChannel) error
+	GetByID(id int64) (*user.UserChannel, error)
 	GetByChannel(channelType, channelUserID string) (*user.UserChannel, error)
 	GetByUserID(userID int64) ([]*user.UserChannel, error)
 	Update(uc *user.UserChannel) error
+	Delete(id int64) error
 }
 
 // GormUserChannelRepository GORM 实现
@@ -47,4 +49,17 @@ func (r *GormUserChannelRepository) GetByUserID(userID int64) ([]*user.UserChann
 
 func (r *GormUserChannelRepository) Update(uc *user.UserChannel) error {
 	return r.db.Save(uc).Error
+}
+
+func (r *GormUserChannelRepository) GetByID(id int64) (*user.UserChannel, error) {
+	var uc user.UserChannel
+	err := r.db.Where("id = ?", id).First(&uc).Error
+	if err != nil {
+		return nil, err
+	}
+	return &uc, nil
+}
+
+func (r *GormUserChannelRepository) Delete(id int64) error {
+	return r.db.Delete(&user.UserChannel{}, id).Error
 }

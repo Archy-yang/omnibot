@@ -14,3 +14,12 @@ func Get(channelType string) (domainchannel.MessageChannel, bool) {
 	ch, ok := channels[channelType]
 	return ch, ok
 }
+
+// List 获取所有已注册的渠道类型
+func List() []string {
+	result := make([]string, 0, len(channels))
+	for typ := range channels {
+		result = append(result, typ)
+	}
+	return result
+}
