@@ -22,7 +22,10 @@ all: build
 
 ##@ Build
 
-build: build-backend build-frontend  ## Build both backend and frontend (default)
+# Build target: all, backend, frontend. Example: make build TARGET=backend
+TARGET ?= all
+
+build: build-$(TARGET)  ## Build both backend and frontend by default, or specify TARGET=backend/frontend
 	@echo "✅ Build completed!"
 
 build-backend:  ## Build Go backend binary
@@ -35,6 +38,8 @@ build-frontend:  ## Build Vue frontend
 	@echo "🔨 Building frontend..."
 	@cd $(FRONTEND_DIR) && $(NPM_CMD) run build
 	@echo "✅ Frontend built: $(FRONTEND_DIR)/dist"
+
+build-all: build-backend build-frontend  ## Build both backend and frontend
 
 ##@ Development
 
@@ -120,7 +125,7 @@ clean:  ## Clean build artifacts and temporary files
 ##@ Help
 
 help:  ## Display this help message
-	@awk 'BEGIN {FS = ":.*##"; printf "\n\033[1mOmniBot - 全平台智能助手\033[0m\n\n\033[36mUsage:\033[0m\n  make \033[32m<target>\033[0m\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[32m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\n\033[1mOmniBot - 全平台智能助手\033[0m\n\n\033[36mUsage:\033[0m\n  make \033[32m<target>\033[0m\n\n  \033[36mExamples:\033[0m\n    make build                  # Build both\n    make build TARGET=backend   # Build backend only\n    make build TARGET=frontend  # Build frontend only\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[32m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 # Display help by default
 .DEFAULT_GOAL := help
