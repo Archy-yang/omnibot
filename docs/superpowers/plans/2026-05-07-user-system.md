@@ -336,7 +336,7 @@ import (
     "github.com/stretchr/testify/assert"
     "gorm.io/driver/sqlite"
     "gorm.io/gorm"
-    "wechat-intelligent-bot/internal/domain/user"
+    "omnibot/internal/domain/user"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -419,7 +419,7 @@ package user
 
 import (
     "gorm.io/gorm"
-    "wechat-intelligent-bot/internal/domain/user"
+    "omnibot/internal/domain/user"
 )
 
 // UserRepository 用户仓储接口
@@ -499,7 +499,7 @@ import (
     "github.com/stretchr/testify/assert"
     "gorm.io/driver/sqlite"
     "gorm.io/gorm"
-    domain "wechat-intelligent-bot/internal/domain/user"
+    domain "omnibot/internal/domain/user"
 )
 
 func setupWechatTestDB(t *testing.T) *gorm.DB {
@@ -577,7 +577,7 @@ package user
 
 import (
     "gorm.io/gorm"
-    "wechat-intelligent-bot/internal/domain/user"
+    "omnibot/internal/domain/user"
 )
 
 // WechatAccountRepository 微信账号仓储接口
@@ -655,8 +655,8 @@ import (
     "github.com/stretchr/testify/assert"
     "gorm.io/driver/sqlite"
     "gorm.io/gorm"
-    domain "wechat-intelligent-bot/internal/domain/user"
-    repo "wechat-intelligent-bot/internal/repository/user"
+    domain "omnibot/internal/domain/user"
+    repo "omnibot/internal/repository/user"
 )
 
 func setupServiceTestDB(t *testing.T) *gorm.DB {
@@ -714,7 +714,7 @@ package user
 
 import (
     "gorm.io/gorm"
-    "wechat-intelligent-bot/internal/domain/user"
+    "omnibot/internal/domain/user"
 )
 
 // 用户仓储接口

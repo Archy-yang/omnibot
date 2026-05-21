@@ -82,7 +82,7 @@ docker-compose up -d
 ## 项目结构
 
 ```
-wechat-intelligent-bot/
+omnibot/
 ├── cmd/                    # 可执行程序入口
 ├── internal/              # 私有应用代码
 ├── pkg/                   # 公共库代码
@@ -111,7 +111,7 @@ kubectl apply -f deployments/kubernetes/
 make build
 
 # 启动
-./bin/wechat-intelligent-bot
+./bin/omnibot
 ```
 
 ## API文档

@@ -58,3 +58,8 @@ func (u *User) SoftDelete() {
 	u.Status = StatusDeleted
 	u.UpdatedAt = time.Now()
 }
+
+// GetID 获取用户ID
+func (u *User) GetID() int64 {
+	return u.ID
+}

@@ -4,6 +4,53 @@
 
 ---
 
+## [v1.2.0] - 2026-05-12
+
+### ✨ 新增功能
+
+- **对话上下文记忆**
+  - 机器人自动记住每个用户最近 10 轮对话内容
+  - 用户可以使用「这个」「刚才的」「改成」等指代性词语进行连贯交流
+  - 所有对话消息永久落库保存（用户消息 + AI 回复）
+  - 调用 LLM 时自动拼接最近 10 轮历史消息作为上下文
+  - 每次调用前重新插入 system prompt，保证人设一致性
+
+- **消息去重机制**
+  - 通过微信 MsgID 唯一索引去重
+  - 防止微信服务器重试导致的重复消息落库
+  - 重复消息记录日志但不影响业务流程
+
+- **MessageService 对话服务层**
+  - `BuildContextMessages(ctx, userID, currentContent)` - 构建上下文消息列表
+  - `SaveUserMessage(ctx, userID, content, msgID)` - 保存用户消息（带去重）
+  - `SaveAssistantMessage(ctx, userID, content)` - 保存 AI 回复
+
+- **MessageRepository 对话仓储层**
+  - `Create(msg)` - 创建消息
+  - `GetRecentByUserID(userID, limit)` - 查询用户最近 N 条消息
+  - `ExistsByMsgID(msgID)` - 检查 MsgID 是否已存在
+
+### 🔧 架构改进
+
+- **滑动窗口上下文**：永久存储所有消息，调用 LLM 时只取最近 10 轮（20 条）
+- **降级策略**：数据库查询失败时自动降级为单轮对话模式，对用户无感知
+- **消息过滤**：只有文本消息进入上下文，图片/语音/视频等非文本消息正常回复但不入库
+- **失败兜底回复入上下文**：LLM 调用失败的提示也保存，避免上下文断裂
+
+### 📦 数据变更
+
+- 新增 `messages` 表存储所有对话消息
+- 包含字段：`id`、`user_id`、`role`、`content`、`msg_id`、`created_at`
+- `msg_id` 唯一索引（去重）
+- `user_id` 普通索引（按用户查询）
+- `role` 普通索引（user/assistant/system/tool）
+
+### 🔐 安全增强
+
+- 日志中不输出完整对话内容，只输出消息 ID、长度、角色等元数据
+
+---
+
 ## [v1.1.0] - 2026-05-10
 
 ### ✨ 新增功能
