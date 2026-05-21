@@ -1,0 +1,47 @@
+services:
+  # PostgreSQL + pgvector 向量数据库
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: omnibot-postgres
+    environment:
+      POSTGRES_USER: omnibot
+      POSTGRES_PASSWORD: omnibot123
+      POSTGRES_DB: omnibot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-vector.sql:/docker-entrypoint-initdb.d/init-vector.sql:ro
+    networks:
+      - omnibot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnibot -d omnibot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存（可选）
+  redis:
+    image: redis:7-alpine
+    container_name: omnibot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - omnibot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  omnibot-network:
+    driver: bridge

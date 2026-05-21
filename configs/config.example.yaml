@@ -4,6 +4,12 @@ app:
   env: "development"
   port: 8080
 
+# 数据库配置
+database:
+  driver: "postgres"  # sqlite / postgres
+  dsn: "host=localhost user=omnibot password=omnibot123 dbname=omnibot port=5432 sslmode=disable"
+  max_conns: 25
+
 # 微信公众号配置
 wechat:
   app_id: "your_wechat_app_id"

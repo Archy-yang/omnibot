@@ -107,10 +107,36 @@ install-tools:  ## Install development tools (golangci-lint, air, etc.)
 
 ##@ Database
 
-db-reset:  ## Reset database (delete and reinitialize)
-	@echo "🗑️ Resetting database..."
+db-up:  ## Start PostgreSQL + pgvector via Docker
+	@echo "🐘 Starting PostgreSQL with pgvector..."
+	@docker compose up -d postgres
+	@echo "⏳ Waiting for PostgreSQL to be ready..."
+	@sleep 5
+	@echo "✅ PostgreSQL ready at localhost:5432"
+
+db-up-all:  ## Start all services (PostgreSQL + Redis)
+	@echo "🐘 Starting all services..."
+	@docker compose up -d
+	@sleep 5
+	@echo "✅ All services ready"
+
+db-down:  ## Stop Docker services
+	@echo "🛑 Stopping Docker services..."
+	@docker compose down
+	@echo "✅ Services stopped"
+
+db-logs:  ## Show PostgreSQL logs
+	@docker compose logs -f postgres
+
+db-reset:  ## Reset database (delete and reinitialize - SQLite only)
+	@echo "🗑️ Resetting SQLite database..."
 	@rm -f $(DB_FILE)
-	@echo "✅ Database reset"
+	@echo "✅ SQLite database reset"
+
+db-purge:  ## Purge Docker volumes (WARNING: all data lost!)
+	@echo "⚠️  Purging Docker volumes - ALL DATA WILL BE LOST!"
+	@docker compose down -v
+	@echo "✅ Docker volumes purged"
 
 ##@ Cleanup
 
