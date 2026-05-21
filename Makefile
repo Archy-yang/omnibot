@@ -31,7 +31,7 @@ build: build-$(TARGET)  ## Build both backend and frontend by default, or specif
 build-backend:  ## Build Go backend binary
 	@echo "🔨 Building backend..."
 	@mkdir -p $(BIN_DIR)
-	$(GO_BUILD) -o $(SERVER_BIN) ./cmd/server/
+	CGO_ENABLED=0 $(GO_BUILD) -o $(SERVER_BIN) ./cmd/server/
 	@echo "✅ Backend built: $(SERVER_BIN)"
 
 build-frontend:  ## Build Vue frontend
