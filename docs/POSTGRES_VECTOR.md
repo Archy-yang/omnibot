@@ -88,6 +88,10 @@ func TestSomethingWithPostgres(t *testing.T) {
 
 测试容器会在测试结束后自动销毁。默认快速测试 `make test` 不会启动 Docker。
 
+### 迁移顺序约束
+
+`InitDB` 在 PostgreSQL 模式下会先执行 `CREATE EXTENSION IF NOT EXISTS vector`，再执行 GORM AutoMigrate。这样后续新增 `gorm:"type:vector(...)"` 字段时，迁移阶段可以直接使用 `vector` 类型。
+
 ## pgvector 使用示例
 
 ### 1. 创建向量字段

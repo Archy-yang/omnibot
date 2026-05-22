@@ -36,3 +36,45 @@ func TestPostgresIntegration_AutoMigratesAndSupportsPgvector(t *testing.T) {
 	require.NoError(t, db.Create(channel).Error)
 	assert.Positive(t, channel.ID)
 }
+
+func TestPostgresIntegration_PgvectorExtensionAvailableBeforeVectorMigrations(t *testing.T) {
+	db := NewPostgresTestDB(t)
+
+	type vectorMigrationProbe struct {
+		ID        int64  `gorm:"primaryKey;autoIncrement"`
+		Embedding string `gorm:"type:vector(3);not null"`
+	}
+
+	err := db.AutoMigrate(&vectorMigrationProbe{})
+	require.NoError(t, err)
+
+	record := vectorMigrationProbe{Embedding: "[1,2,3]"}
+	require.NoError(t, db.Create(&record).Error)
+	assert.Positive(t, record.ID)
+}
+
+func TestPostgresIntegration_EnsurePostgresExtensionsRunsBeforeMigration(t *testing.T) {
+	type vectorMigrationProbe struct {
+		ID        int64  `gorm:"primaryKey;autoIncrement"`
+		Embedding string `gorm:"type:vector(3);not null"`
+	}
+
+	testDB := NewPostgresRawTestDB(t)
+	err := ensurePostgresExtensions(testDB)
+	require.NoError(t, err)
+
+	require.NoError(t, testDB.AutoMigrate(&vectorMigrationProbe{}))
+}
+
+func TestPostgresIntegration_EnsurePostgresExtensionsFailsWithoutPgvector(t *testing.T) {
+	type vectorMigrationProbeWithoutExtension struct {
+		ID        int64  `gorm:"primaryKey;autoIncrement"`
+		Embedding string `gorm:"type:vector(3);not null"`
+	}
+
+	testDB := NewPostgresRawTestDB(t)
+	require.NoError(t, testDB.Exec("DROP EXTENSION IF EXISTS vector").Error)
+
+	err := testDB.AutoMigrate(&vectorMigrationProbeWithoutExtension{})
+	require.Error(t, err)
+}

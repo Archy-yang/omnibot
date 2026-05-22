@@ -103,6 +103,12 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 		return nil, fmt.Errorf("%w: failed to ping database: %v", ErrInitFailed, err)
 	}
 
+	if cfg.Driver == DriverPostgreSQL {
+		if err := ensurePostgresExtensions(db); err != nil {
+			return nil, fmt.Errorf("%w: postgres extension initialization failed: %v", ErrInitFailed, err)
+		}
+	}
+
 	// 自动迁移表结构
 	if err := autoMigrate(db); err != nil {
 		return nil, fmt.Errorf("%w: migration failed: %v", ErrInitFailed, err)
@@ -141,6 +147,10 @@ func autoMigrate(db *gorm.DB) error {
 	)
 }
 
+func ensurePostgresExtensions(db *gorm.DB) error {
+	return db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error
+}
+
 // HealthCheck 健康检查
 func (db *Database) HealthCheck(ctx context.Context) error {
 	sqlDB, err := db.DB.DB()
@@ -168,13 +178,13 @@ func (db *Database) Stats() map[string]interface{} {
 
 	stats := sqlDB.Stats()
 	return map[string]interface{}{
-		"max_open_conns":     stats.MaxOpenConnections,
-		"open_conns":         stats.OpenConnections,
-		"in_use":             stats.InUse,
-		"idle":               stats.Idle,
-		"wait_count":         stats.WaitCount,
-		"wait_duration":      stats.WaitDuration.String(),
-		"max_idle_closed":    stats.MaxIdleClosed,
+		"max_open_conns":      stats.MaxOpenConnections,
+		"open_conns":          stats.OpenConnections,
+		"in_use":              stats.InUse,
+		"idle":                stats.Idle,
+		"wait_count":          stats.WaitCount,
+		"wait_duration":       stats.WaitDuration.String(),
+		"max_idle_closed":     stats.MaxIdleClosed,
 		"max_lifetime_closed": stats.MaxLifetimeClosed,
 	}
 }
