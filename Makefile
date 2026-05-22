@@ -138,6 +138,13 @@ db-purge:  ## Purge Docker volumes (WARNING: all data lost!)
 	@docker compose down -v
 	@echo "✅ Docker volumes purged"
 
+##@ Testing Database
+
+test-postgres:  ## Run PostgreSQL + pgvector integration tests with Testcontainers
+	@echo "🧪 Running PostgreSQL integration tests with Testcontainers..."
+	@CGO_ENABLED=0 $(GO_TEST) -tags=postgres_integration -v $(GO_DIRS)
+	@echo "✅ PostgreSQL integration tests completed"
+
 ##@ Cleanup
 
 clean:  ## Clean build artifacts and temporary files

@@ -53,6 +53,41 @@ dsn := "host=localhost user=omnibot password=omnibot123 dbname=omnibot port=5432
 db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 ```
 
+## 集成测试
+
+PostgreSQL 集成测试使用 Testcontainers 启动临时 `pgvector/pgvector:0.8.0-pg16` 容器，不依赖常驻数据库。
+
+### 运行 PostgreSQL 集成测试
+
+```bash
+make test-postgres
+```
+
+等价于：
+
+```bash
+CGO_ENABLED=0 go test -tags=postgres_integration -v ./internal/... ./cmd/...
+```
+
+### 编写 PostgreSQL 集成测试
+
+测试文件需要添加 build tag：
+
+```go
+//go:build postgres_integration
+```
+
+使用测试辅助函数创建真实 PostgreSQL 连接：
+
+```go
+func TestSomethingWithPostgres(t *testing.T) {
+    db := NewPostgresTestDB(t)
+    // 使用 db 执行 GORM 测试
+}
+```
+
+测试容器会在测试结束后自动销毁。默认快速测试 `make test` 不会启动 Docker。
+
 ## pgvector 使用示例
 
 ### 1. 创建向量字段

@@ -3,8 +3,8 @@ package user
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 
 	domainuser "omnibot/internal/domain/user"
@@ -21,7 +21,7 @@ func setupChannelTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func Skip_TestUserChannelRepository_Create(t *testing.T) {
+func TestUserChannelRepository_Create(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
@@ -43,7 +43,7 @@ func Skip_TestUserChannelRepository_Create(t *testing.T) {
 	assert.Positive(t, uc.ID)
 }
 
-func Skip_TestUserChannelRepository_GetByID(t *testing.T) {
+func TestUserChannelRepository_GetByID(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
@@ -63,7 +63,7 @@ func Skip_TestUserChannelRepository_GetByID(t *testing.T) {
 	assert.Equal(t, "openid_123", found.ChannelUserID)
 }
 
-func Skip_TestUserChannelRepository_GetByUserID(t *testing.T) {
+func TestUserChannelRepository_GetByUserID(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
@@ -83,7 +83,7 @@ func Skip_TestUserChannelRepository_GetByUserID(t *testing.T) {
 	assert.Len(t, ucs, 2)
 }
 
-func Skip_TestUserChannelRepository_GetByChannel(t *testing.T) {
+func TestUserChannelRepository_GetByChannel(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
@@ -103,11 +103,11 @@ func Skip_TestUserChannelRepository_GetByChannel(t *testing.T) {
 
 	// 查询不存在的
 	notFound, err := repo.GetByChannel("wechat", "nonexistent")
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	assert.Nil(t, notFound)
 }
 
-func Skip_TestUserChannelRepository_Update(t *testing.T) {
+func TestUserChannelRepository_Update(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
@@ -129,7 +129,7 @@ func Skip_TestUserChannelRepository_Update(t *testing.T) {
 	assert.Equal(t, "new_appid", updated.ChannelRawData.AppID)
 }
 
-func Skip_TestUserChannelRepository_Delete(t *testing.T) {
+func TestUserChannelRepository_Delete(t *testing.T) {
 	db := setupChannelTestDB(t)
 	repo := NewUserChannelRepository(db)
 
