@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestMain(m *testing.M) {
@@ -54,7 +55,9 @@ func TestInitDB_PostgreSQL_DriverLoads(t *testing.T) {
 		MaxConns: 5,
 	}
 
-	_, err := InitDB(cfg)
+	_, err := InitDB(cfg, func(cfg *gorm.Config) {
+		cfg.Logger = logger.Default.LogMode(logger.Silent)
+	})
 
 	// 应该返回连接错误，而不是驱动不支持或 panic
 	assert.Error(t, err)

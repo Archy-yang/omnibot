@@ -16,12 +16,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
 // MockLLMClient 用于单元测试的 Mock 客户端
 type MockLLMClient struct {
-	returnString  string
-	returnError   error
-	called        bool
-	lastMessages  []llm.ChatMessage
+	returnString string
+	returnError  error
+	called       bool
+	lastMessages []llm.ChatMessage
 }
 
 func (m *MockLLMClient) ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error) {
@@ -58,7 +62,7 @@ func TestHandler_Verify_ValidSignature(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.GET("/wechat/callback", handler.Verify)
 
 	req := httptest.NewRequest("GET", "/wechat/callback?signature=fdf1cc36630e1abee12ce1f80ce8070e723f0fa6&timestamp=123456&nonce=abc&echostr=test_echostr", nil)
@@ -86,7 +90,7 @@ func TestHandler_Verify_InvalidSignature(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.GET("/wechat/callback", handler.Verify)
 
 	req := httptest.NewRequest("GET", "/wechat/callback?signature=wrong&timestamp=123456&nonce=abc&echostr=test_echostr", nil)
@@ -118,7 +122,7 @@ func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>
@@ -164,7 +168,7 @@ func TestHandler_HandleMessage_TextMessage_LLMFails(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>
@@ -206,7 +210,7 @@ func TestHandler_HandleMessage_ImageMessage(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>
@@ -253,7 +257,7 @@ func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>
@@ -297,7 +301,7 @@ func TestHandler_HandleMessage_SubscribeEvent_UserServiceError(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>
@@ -335,7 +339,7 @@ func TestHandler_HandleMessage_Unsubscribe_NoResponse(t *testing.T) {
 		Token: "testtoken",
 	}, mockLLM, mockUser)
 
-	r := gin.Default()
+	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
 
 	xmlBody := `<xml>

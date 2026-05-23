@@ -3,15 +3,17 @@ package user
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
 	domain "omnibot/internal/domain/user"
 	repo "omnibot/internal/repository/user"
 )
 
 func setupServiceTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	assert.NoError(t, err)
 
 	err = db.AutoMigrate(&domain.User{}, &domain.WechatAccount{}, &domain.UserChannel{})

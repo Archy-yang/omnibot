@@ -115,7 +115,7 @@ func TestHandleSendMessage(t *testing.T) {
 
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-	router := gin.Default()
+	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
 
 	// Test request
@@ -150,7 +150,7 @@ func TestHandleGetHistory(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
 	// Test request
-	router := gin.Default()
+	router := gin.New()
 	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
 
 	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=test-session-123", nil)
@@ -186,7 +186,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
 
 		req, _ := http.NewRequest("GET", "/api/v1/user/llm-config?session_id=test-session-123", nil)
@@ -207,7 +207,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
 
 		req, _ := http.NewRequest("GET", "/api/v1/user/llm-config", nil)
@@ -229,7 +229,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
@@ -265,7 +265,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
@@ -292,7 +292,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
@@ -321,7 +321,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
 
 		req, _ := http.NewRequest("DELETE", "/api/v1/user/llm-config?session_id=test-session-123", nil)
@@ -340,7 +340,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-		router := gin.Default()
+		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
 
 		req, _ := http.NewRequest("DELETE", "/api/v1/user/llm-config", nil)
@@ -365,7 +365,7 @@ func TestHandleSendMessage_WithoutCustomLLMConfig(t *testing.T) {
 
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
 
-	router := gin.Default()
+	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
 
 	reqBody := map[string]string{

@@ -4,14 +4,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
+	"omnibot/internal/client/llm"
 	domain "omnibot/internal/domain/user"
 	repo "omnibot/internal/repository/user"
 	userService "omnibot/internal/service/user"
-	"omnibot/internal/client/llm"
 )
 
 // MockLLMClientWithConfigCapture 捕获调用配置的 mock
@@ -27,7 +29,7 @@ func (m *MockLLMClientWithConfigCapture) ChatCompletion(ctx context.Context, mes
 }
 
 func TestHandler_LLMCall_WithUserConfig(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	err = db.AutoMigrate(&domain.LLMConfig{})
 	require.NoError(t, err)
@@ -54,7 +56,7 @@ func TestHandler_LLMCall_WithUserConfig(t *testing.T) {
 }
 
 func TestHandler_LLMCall_WithoutUserConfig_UsesSystemDefault(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	err = db.AutoMigrate(&domain.LLMConfig{})
 	require.NoError(t, err)

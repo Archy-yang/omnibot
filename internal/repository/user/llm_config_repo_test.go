@@ -3,16 +3,17 @@ package user
 import (
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	domain "omnibot/internal/domain/user"
 )
 
 func setupLLMTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	err = db.AutoMigrate(&domain.LLMConfig{})
 	require.NoError(t, err)
@@ -26,8 +27,8 @@ func TestLLMConfigRepository_CreateAndGet(t *testing.T) {
 	baseURL := "https://custom.api.com/v1"
 	model := "gpt-4"
 	cfg := &domain.LLMConfig{
-		UserID: 1,
-		APIKey: "encrypted-sk-123",
+		UserID:  1,
+		APIKey:  "encrypted-sk-123",
 		BaseURL: &baseURL,
 		Model:   &model,
 		Status:  0,
