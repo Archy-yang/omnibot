@@ -224,6 +224,20 @@ func TestAutoMigration_MessagesTable(t *testing.T) {
 	}
 }
 
+func TestAutoMigration_MemoriesTable(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite", DSN: ":memory:"}
+
+	db, err := InitDB(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer db.Close()
+
+	var count int64
+	err = db.GetGormDB().Raw("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='memories'").Scan(&count).Error
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
 func TestNewTestDB(t *testing.T) {
 	testDB := NewTestDB(t)
 	require.NotNil(t, testDB)

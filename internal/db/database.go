@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"omnibot/internal/domain/conversation"
+	"omnibot/internal/domain/memory"
 	"omnibot/internal/domain/user"
 	"omnibot/pkg/config"
 	zaplogger "omnibot/pkg/logger"
@@ -144,6 +145,7 @@ func autoMigrate(db *gorm.DB) error {
 		&user.UserChannel{},
 		&user.LLMConfig{},
 		&conversation.Message{},
+		&memory.Memory{},
 	)
 }
 
