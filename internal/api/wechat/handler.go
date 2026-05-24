@@ -16,6 +16,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/user"
 	chat "omnibot/internal/service/chat"
+	memoryService "omnibot/internal/service/memory"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/logger"
 
@@ -149,6 +150,7 @@ type Handler struct {
 	userService      UserService
 	llmConfigService userService.LLMConfigService
 	msgService       chat.MessageService
+	memoryService    memoryService.MemoryService
 }
 
 // Config 微信配置
@@ -180,6 +182,8 @@ func NewHandler(
 			handler.llmConfigService = s
 		case chat.MessageService:
 			handler.msgService = s
+		case memoryService.MemoryService:
+			handler.memoryService = s
 		}
 	}
 
@@ -334,6 +338,17 @@ func (h *Handler) handleTextMessage(msg *Message) (string, error) {
 		}
 	}
 
+	// 处理记忆命令
+	if h.memoryService != nil {
+		if reply, handled := h.handleMemoryCommand(userID, msg.Content); handled {
+			if h.msgService != nil && userID > 0 {
+				h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
+			}
+			return h.buildResponse(msg, reply), nil
+		}
+	}
+
 	// 保存用户消息（去重）
 	if h.msgService != nil && userID > 0 {
 		err := h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
@@ -389,6 +404,75 @@ func (h *Handler) handleConfigCommand(userID int64, content string) (string, boo
 	}
 
 	return "", false
+}
+
+func (h *Handler) handleMemoryCommand(userID int64, content string) (string, bool) {
+	if h.memoryService == nil {
+		return "", false
+	}
+
+	trimmed := strings.TrimSpace(content)
+	switch {
+	case trimmed == "#记住":
+		return h.renderEmptyMemoryContentHint(), true
+	case strings.HasPrefix(trimmed, "#记住"):
+		memoryContent := strings.TrimSpace(strings.TrimPrefix(trimmed, "#记住"))
+		memory, err := h.memoryService.Remember(context.Background(), userID, memoryContent)
+		if err != nil {
+			switch err {
+			case memoryService.ErrEmptyContent:
+				return h.renderEmptyMemoryContentHint(), true
+			case memoryService.ErrContentTooLong:
+				return "这条记忆太长了，请控制在 200 字以内。", true
+			default:
+				logger.ErrorWithFields("Failed to handle memory remember command",
+					zap.Int64("user_id", userID),
+					zap.String("operation", "memory_command_remember"),
+					zap.Error(err),
+				)
+				return "服务暂时不可用，请稍后再试", true
+			}
+		}
+		return fmt.Sprintf("已记住：%s\n\n提醒：请不要保存密码、API Key、身份证号等敏感信息。", memory.Content), true
+	case trimmed == "#我的记忆":
+		memories, err := h.memoryService.List(context.Background(), userID)
+		if err != nil {
+			logger.ErrorWithFields("Failed to handle memory list command",
+				zap.Int64("user_id", userID),
+				zap.String("operation", "memory_command_list"),
+				zap.Error(err),
+			)
+			return "服务暂时不可用，请稍后再试", true
+		}
+		if len(memories) == 0 {
+			return "我还没有长期记住任何信息。\n\n你可以这样告诉我：\n#记住 我偏好简洁直接的回答", true
+		}
+		var builder strings.Builder
+		builder.WriteString("我目前记住了这些信息：\n\n")
+		for i, memory := range memories {
+			builder.WriteString(fmt.Sprintf("%d. %s", i+1, memory.Content))
+			if i < len(memories)-1 {
+				builder.WriteString("\n")
+			}
+		}
+		return builder.String(), true
+	case trimmed == "#清空记忆":
+		if err := h.memoryService.Clear(context.Background(), userID); err != nil {
+			logger.ErrorWithFields("Failed to handle memory clear command",
+				zap.Int64("user_id", userID),
+				zap.String("operation", "memory_command_clear"),
+				zap.Error(err),
+			)
+			return "服务暂时不可用，请稍后再试", true
+		}
+		return "已清空你的全部长期记忆。", true
+	}
+
+	return "", false
+}
+
+func (h *Handler) renderEmptyMemoryContentHint() string {
+	return "请在 #记住 后面输入要长期记住的内容，例如：\n#记住 我偏好简洁直接的回答"
 }
 
 func (h *Handler) renderConfigMenu(userID int64) string {
