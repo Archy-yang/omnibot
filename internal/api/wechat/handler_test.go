@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"omnibot/internal/client/llm"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -139,6 +141,16 @@ func TestHandler_HandleMessage_DoesNotRequireRawBodyLogging(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, mockLLM.called, "应该调用 LLM")
+}
+
+func TestHandler_HandleMessage_DoesNotLogRawRequestBodySource(t *testing.T) {
+	source, err := os.ReadFile("handler.go")
+	require.NoError(t, err)
+	content := string(source)
+
+	assert.NotContains(t, content, `zap.String("body"`)
+	assert.NotContains(t, content, "Received raw wechat message")
+	assert.Contains(t, content, "body_length")
 }
 
 func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
