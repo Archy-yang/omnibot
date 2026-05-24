@@ -14,8 +14,10 @@ import (
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
 	chatRepo "omnibot/internal/repository/chat"
+	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
 	chatService "omnibot/internal/service/chat"
+	memoryService "omnibot/internal/service/memory"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -55,14 +57,16 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn.GetGormDB())
 	llmConfigRepository := userRepo.NewLLMConfigRepository(dbConn.GetGormDB())
 	userChannelRepository := userRepo.NewUserChannelRepository(dbConn.GetGormDB())
+	memoryRepository := memoryRepo.NewMemoryRepository(dbConn.GetGormDB())
 
 	// 初始化用户服务
 	userSvc := userService.NewUserService(userRepository, wechatAccountRepository, userChannelRepository)
 	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
 
 	// 初始化消息服务
+	memorySvc := memoryService.NewMemoryService(memoryRepository)
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
-	msgSvc := chatService.NewMessageService(msgRepo)
+	msgSvc := chatService.NewMessageService(msgRepo, memorySvc)
 
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
@@ -71,7 +75,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, userSvc, llmConfigSvc, msgSvc)
+	}, llmClient, userSvc, llmConfigSvc, msgSvc, memorySvc)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)

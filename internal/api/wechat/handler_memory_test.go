@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	memorydomain "omnibot/internal/domain/memory"
+	"omnibot/internal/domain/user"
 	memorysvc "omnibot/internal/service/memory"
 
 	"github.com/stretchr/testify/assert"
@@ -168,4 +169,32 @@ func TestHandler_HandleMemoryCommand_WithoutMemoryServiceDoesNotHandle(t *testin
 
 	assert.False(t, handled)
 	assert.Empty(t, reply)
+}
+
+func TestNewHandler_AcceptsMemoryService(t *testing.T) {
+	memoryService := &mockMemoryService{}
+	handler := NewHandler(Config{Token: "testtoken"}, &MockLLMClient{}, &MockUserService{}, memoryService)
+
+	assert.Same(t, memoryService, handler.memoryService)
+}
+
+func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
+	memoryService := &mockMemoryService{}
+	llmClient := &MockLLMClient{returnString: "LLM reply"}
+	mockUser := &MockUserService{returnUser: &user.User{ID: 42}, returnIsNew: false}
+	handler := NewHandler(Config{Token: "testtoken"}, llmClient, mockUser, memoryService)
+
+	msg := &Message{
+		ToUserName:   "gh_test",
+		FromUserName: "openid_test",
+		MsgType:      "text",
+		Content:      "#记住 我偏好简洁回答",
+		MsgID:        "wx_memory_1",
+	}
+
+	response, err := handler.handleTextMessage(msg)
+
+	require.NoError(t, err)
+	assert.False(t, llmClient.called)
+	assert.Contains(t, response, "已记住：我偏好简洁回答")
 }
