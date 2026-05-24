@@ -148,7 +148,7 @@ func TestHandler_HandleMessage_DoesNotLogRawRequestBodySource(t *testing.T) {
 	require.NoError(t, err)
 	content := string(source)
 
-	assert.NotContains(t, content, `zap.String("body"`)
+	assert.NotContains(t, content, "zap.String(\"body\"")
 	assert.NotContains(t, content, "Received raw wechat message")
 	assert.Contains(t, content, "body_length")
 }
