@@ -47,6 +47,28 @@ func (m *mockMemoryService) GetRecentForContext(ctx context.Context, userID int6
 	return nil, nil
 }
 
+func TestHandler_HandleMemoryCommand_UserIDRequired(t *testing.T) {
+	memoryService := &mockMemoryService{}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(0, "#记住 我偏好简洁回答")
+
+	require.True(t, handled)
+	assert.Equal(t, "服务暂时不可用，请稍后再试", reply)
+	assert.Empty(t, memoryService.rememberedContent)
+}
+
+func TestHandler_HandleMemoryCommand_DoesNotHandleSimilarRememberPrefix(t *testing.T) {
+	memoryService := &mockMemoryService{}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(42, "#记住一下这个")
+
+	assert.False(t, handled)
+	assert.Empty(t, reply)
+	assert.Empty(t, memoryService.rememberedContent)
+}
+
 func TestHandler_HandleMemoryCommand_RememberSuccess(t *testing.T) {
 	memoryService := &mockMemoryService{}
 	handler := &Handler{memoryService: memoryService}

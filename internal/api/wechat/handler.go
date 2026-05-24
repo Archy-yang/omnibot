@@ -232,8 +232,7 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 		return
 	}
 
-	// 打印原始请求体内容
-	logger.InfoWithFields("Received raw wechat message", zap.String("body", string(body)))
+	logger.InfoWithFields("Received wechat callback", zap.Int("body_length", len(body)))
 
 	// 解析XML消息
 	msg, err := parseMessage(string(body))
@@ -412,10 +411,16 @@ func (h *Handler) handleMemoryCommand(userID int64, content string) (string, boo
 	}
 
 	trimmed := strings.TrimSpace(content)
+	isRememberCommand := trimmed == "#记住" || strings.HasPrefix(trimmed, "#记住 ") || strings.HasPrefix(trimmed, "#记住\t")
+	isMemoryCommand := isRememberCommand || trimmed == "#我的记忆" || trimmed == "#清空记忆"
+	if isMemoryCommand && userID <= 0 {
+		return "服务暂时不可用，请稍后再试", true
+	}
+
 	switch {
 	case trimmed == "#记住":
 		return h.renderEmptyMemoryContentHint(), true
-	case strings.HasPrefix(trimmed, "#记住"):
+	case strings.HasPrefix(trimmed, "#记住 ") || strings.HasPrefix(trimmed, "#记住\t"):
 		memoryContent := strings.TrimSpace(strings.TrimPrefix(trimmed, "#记住"))
 		memory, err := h.memoryService.Remember(context.Background(), userID, memoryContent)
 		if err != nil {

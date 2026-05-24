@@ -104,6 +104,43 @@ func TestHandler_Verify_InvalidSignature(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "Invalid signature")
 }
 
+func TestHandler_HandleMessage_DoesNotRequireRawBodyLogging(t *testing.T) {
+	logger.Init(config.LoggerConfig{
+		Level: "info",
+	})
+
+	mockLLM := &MockLLMClient{
+		returnString: "这是 LLM 生成的智能回复",
+	}
+	mockUser := &MockUserService{
+		returnUser:  user.NewUser(),
+		returnIsNew: false,
+	}
+	handler := NewHandler(Config{
+		Token: "testtoken",
+	}, mockLLM, mockUser)
+
+	r := gin.New()
+	r.POST("/wechat/callback", handler.HandleMessage)
+
+	xmlBody := `<xml>
+  <ToUserName><![CDATA[gh_test]]></ToUserName>
+  <FromUserName><![CDATA[openid_test]]></FromUserName>
+  <CreateTime>1234567890</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[#记住 secret-memory-content]]></Content>
+</xml>`
+
+	req := httptest.NewRequest("POST", "/wechat/callback", bytes.NewBufferString(xmlBody))
+	req.Header.Set("Content-Type", "application/xml")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, mockLLM.called, "应该调用 LLM")
+}
+
 func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 	// 初始化日志
 	logger.Init(config.LoggerConfig{
