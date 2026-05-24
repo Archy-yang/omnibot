@@ -3,10 +3,13 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
 	chatrepo "omnibot/internal/repository/chat"
+	memorysvc "omnibot/internal/service/memory"
 	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
@@ -14,9 +17,10 @@ import (
 
 // 上下文轮数配置
 const (
-	ContextRounds          = 10 // 保留最近 10 轮对话
+	ContextRounds           = 10 // 保留最近 10 轮对话
 	ContextMessagesPerRound = 2  // 每轮 2 条消息（user + assistant）
 	MaxContextMessages      = ContextRounds * ContextMessagesPerRound
+	MaxContextMemories      = 10
 )
 
 // 错误定义
@@ -37,20 +41,28 @@ type MessageService interface {
 }
 
 type messageService struct {
-	msgRepo chatrepo.MessageRepository
+	msgRepo   chatrepo.MessageRepository
+	memorySvc memorysvc.MemoryService
 }
 
 // NewMessageService 创建消息服务
-func NewMessageService(msgRepo chatrepo.MessageRepository) MessageService {
-	return &messageService{msgRepo: msgRepo}
+func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...interface{}) MessageService {
+	service := &messageService{msgRepo: msgRepo}
+	for _, svc := range optionalServices {
+		switch s := svc.(type) {
+		case memorysvc.MemoryService:
+			service.memorySvc = s
+		}
+	}
+	return service
 }
 
 // BuildContextMessages 构建上下文消息列表
 func (s *messageService) BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error) {
-	// 查询最近 N 条历史消息
+	memoryMessages := s.buildLongTermMemoryMessages(ctx, userID)
+
 	messages, err := s.msgRepo.GetRecentByUserID(userID, MaxContextMessages)
 	if err != nil {
-		// 降级策略：查询失败时记录日志，返回空上下文，不影响使用
 		logger.ErrorWithFields("Failed to get recent messages, degraded to no context",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
@@ -58,10 +70,9 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 		messages = nil
 	}
 
-	// 转换为 LLM 消息格式
-	result := make([]llm.ChatMessage, 0, len(messages)+1)
+	result := make([]llm.ChatMessage, 0, len(memoryMessages)+len(messages)+1)
+	result = append(result, memoryMessages...)
 
-	// 添加历史消息
 	for _, msg := range messages {
 		result = append(result, llm.ChatMessage{
 			Role:    msg.Role,
@@ -69,13 +80,41 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 		})
 	}
 
-	// 添加当前消息
 	result = append(result, llm.ChatMessage{
 		Role:    conversation.RoleUser,
 		Content: currentContent,
 	})
 
 	return result, nil
+}
+
+func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID int64) []llm.ChatMessage {
+	if s.memorySvc == nil || userID <= 0 {
+		return nil
+	}
+
+	memories, err := s.memorySvc.GetRecentForContext(ctx, userID, MaxContextMemories)
+	if err != nil {
+		logger.ErrorWithFields("Failed to get long-term memories, degraded to short-term context only",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+		return nil
+	}
+	if len(memories) == 0 {
+		return nil
+	}
+
+	var builder strings.Builder
+	builder.WriteString("以下是用户长期记忆，请在回答时自然参考，不要主动提及“我参考了记忆”：\n\n")
+	for i, memory := range memories {
+		builder.WriteString(fmt.Sprintf("%d. %s", i+1, memory))
+		if i < len(memories)-1 {
+			builder.WriteString("\n")
+		}
+	}
+
+	return []llm.ChatMessage{{Role: conversation.RoleSystem, Content: builder.String()}}
 }
 
 // SaveUserMessage 保存用户消息
