@@ -98,11 +98,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// Web 聊天 API 路由
-	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc)
+	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc)
 	chatAPIGroup := r.Group("/api/v1/chat")
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
+	}
+
+	// 长期记忆路由
+	memoryAPIGroup := r.Group("/api/v1/memories")
+	{
+		memoryAPIGroup.GET("", webHandler.HandleGetMemories)
+		memoryAPIGroup.POST("", webHandler.HandleCreateMemory)
+		memoryAPIGroup.DELETE("", webHandler.HandleClearMemories)
 	}
 
 	// 用户 LLM 配置路由

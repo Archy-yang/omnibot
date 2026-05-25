@@ -113,7 +113,7 @@ func TestHandleSendMessage(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
@@ -147,7 +147,7 @@ func TestHandleGetHistory(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 	// Test request
 	router := gin.New()
@@ -184,7 +184,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 			},
 		}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
@@ -205,7 +205,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
@@ -227,7 +227,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false, updateErr: nil}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -263,7 +263,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 			updateErr: &ValidationError{Message: "API Key 长度不正确"},
 		}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -290,7 +290,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -319,7 +319,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: true, clearErr: nil}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
@@ -338,7 +338,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: true}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
@@ -363,7 +363,7 @@ func TestHandleSendMessage_WithoutCustomLLMConfig(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc)
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)

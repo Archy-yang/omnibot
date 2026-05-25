@@ -5,3 +5,4 @@ export { useChat } from './useChat';
 export { useSession } from './useSession';
 export { useToast } from './useToast';
 export { useSettings } from './useSettings';
+export { useMemory } from './useMemory';

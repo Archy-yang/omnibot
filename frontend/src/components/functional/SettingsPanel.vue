@@ -4,6 +4,7 @@ import { useToast } from '@/composables/useToast';
 import type { SettingsPanelProps, SettingsPanelEmits } from '@/types/components';
 import type { LLMConfig } from '@/types/api';
 import { useSettingsStore } from '@/stores/settings';
+import MemorySection from '@/components/functional/MemorySection.vue';
 
 const props = defineProps<SettingsPanelProps>();
 const emit = defineEmits<SettingsPanelEmits>();
@@ -201,6 +202,9 @@ const handleCancel = () => {
         />
       </NFormItem>
     </NForm>
+
+    <NDivider title-placement="left">长期记忆</NDivider>
+    <MemorySection />
 
     <template #footer>
       <NSpace justify="end">

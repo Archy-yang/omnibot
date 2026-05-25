@@ -3,11 +3,14 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"omnibot/internal/client/llm"
+	memorydomain "omnibot/internal/domain/memory"
 	domainuser "omnibot/internal/domain/user"
+	memorysvc "omnibot/internal/service/memory"
 	userLLM "omnibot/internal/service/user"
 
 	"github.com/gin-gonic/gin"
@@ -38,12 +41,20 @@ type LLMConfigService interface {
 	GetFullConfigForUser(userID int64) (*userLLM.FullLLMConfig, bool, error)
 }
 
+// MemoryService 长期记忆服务接口
+type MemoryService interface {
+	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
+	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
+	Clear(ctx context.Context, userID int64) error
+}
+
 // Handler Web 聊天 API 处理器
 type Handler struct {
 	userService      UserService
 	messageService   MessageService
 	llmClient        LLMClient
 	llmConfigService LLMConfigService
+	memoryService    MemoryService
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -52,12 +63,14 @@ func NewHandler(
 	messageService MessageService,
 	llmClient LLMClient,
 	llmConfigService LLMConfigService,
+	memoryService MemoryService,
 ) *Handler {
 	return &Handler{
 		userService:      userService,
 		messageService:   messageService,
 		llmClient:        llmClient,
 		llmConfigService: llmConfigService,
+		memoryService:    memoryService,
 	}
 }
 
@@ -224,6 +237,174 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	resp.Data.CreatedAt = time.Now().Format(time.RFC3339)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// ========== 长期记忆接口 ==========
+
+type MemoryDTO struct {
+	ID        int64  `json:"id"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+type GetMemoriesRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+}
+
+type GetMemoriesResponse struct {
+	Memories []MemoryDTO `json:"memories"`
+}
+
+type CreateMemoryRequest struct {
+	SessionID string `json:"session_id" binding:"required"`
+	Content   string `json:"content" binding:"required"`
+}
+
+type CreateMemoryResponse struct {
+	Message string    `json:"message"`
+	Memory  MemoryDTO `json:"memory"`
+}
+
+type ClearMemoriesRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+}
+
+type ClearMemoriesResponse struct {
+	Message string `json:"message"`
+}
+
+func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
+	return MemoryDTO{
+		ID:        memory.ID,
+		Content:   memory.Content,
+		CreatedAt: memory.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+// HandleGetMemories 获取用户的全部长期记忆
+func (h *Handler) HandleGetMemories(c *gin.Context) {
+	var req GetMemoriesRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "缺少 session_id 参数",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	memories, err := h.memoryService.List(c.Request.Context(), user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	items := make([]MemoryDTO, 0, len(memories))
+	for _, memory := range memories {
+		items = append(items, toMemoryDTO(memory))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": GetMemoriesResponse{
+			Memories: items,
+		},
+	})
+}
+
+// HandleCreateMemory 新增一条长期记忆
+func (h *Handler) HandleCreateMemory(c *gin.Context) {
+	var req CreateMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	memory, err := h.memoryService.Remember(c.Request.Context(), user.ID, req.Content)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "服务暂时不可用，请稍后再试。"
+		if errors.Is(err, memorysvc.ErrEmptyContent) {
+			status = http.StatusBadRequest
+			message = "请输入要长期记住的内容。"
+		}
+		if errors.Is(err, memorysvc.ErrContentTooLong) {
+			status = http.StatusBadRequest
+			message = "这条记忆太长了，请控制在 200 字以内。"
+		}
+		c.JSON(status, gin.H{
+			"success": false,
+			"error":   message,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": CreateMemoryResponse{
+			Message: "已记住。",
+			Memory:  toMemoryDTO(memory),
+		},
+	})
+}
+
+// HandleClearMemories 清空用户的全部长期记忆
+func (h *Handler) HandleClearMemories(c *gin.Context) {
+	var req ClearMemoriesRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "缺少 session_id 参数",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	if err := h.memoryService.Clear(c.Request.Context(), user.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": ClearMemoriesResponse{
+			Message: "已清空你的全部长期记忆。",
+		},
+	})
 }
 
 // ========== LLM 配置接口 ==========

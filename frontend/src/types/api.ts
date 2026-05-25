@@ -90,3 +90,42 @@ export interface UpdateUserLLMConfigRequest {
   temperature?: number;
   max_tokens?: number;
 }
+
+/**
+ * 长期记忆条目类型
+ */
+export interface MemoryItem {
+  id: number;
+  content: string;
+  created_at: string;
+}
+
+/**
+ * 获取长期记忆列表响应类型
+ */
+export interface GetMemoriesResponse {
+  memories: MemoryItem[];
+}
+
+/**
+ * 新增长期记忆请求类型
+ */
+export interface CreateMemoryRequest {
+  session_id: string;
+  content: string;
+}
+
+/**
+ * 新增长期记忆响应类型
+ */
+export interface CreateMemoryResponse {
+  message: string;
+  memory: MemoryItem;
+}
+
+/**
+ * 清空长期记忆响应类型
+ */
+export interface ClearMemoriesResponse {
+  message: string;
+}
