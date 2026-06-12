@@ -19,6 +19,7 @@
 | 文档 | 说明 | 版本 |
 |------|------|------|
 | ✅ [对话域/message-service.md](./对话域/message-service.md) | 消息服务（上下文记忆） | v1.2+ |
+| ✅ [对话域/memory-service.md](./对话域/memory-service.md) | 长期记忆服务 | v1.3+ |
 | [对话域/context-builder.md](./对话域/context-builder.md) | 上下文构建器 | v1.2+ |
 
 ### 接入层
@@ -28,12 +29,14 @@
 |------|------|------|
 | ✅ [接入层/message-channel.md](./接入层/message-channel.md) | 统一消息通道接口定义 | v1.3+ |
 | ✅ [接入层/wechat-channel.md](./接入层/wechat-channel.md) | 微信公众号通道实现 | v1.3+ |
+| ✅ [接入层/web-channel.md](./接入层/web-channel.md) | Web 对话通道实现 | v1.4+ |
 
 ### 基础设施层
 数据库、配置、日志等技术设施
 
 | 文档 | 说明 | 版本 |
 |------|------|------|
+| ✅ [基础设施层/llm-client.md](./基础设施层/llm-client.md) | LLM 客户端（同步+流式+降级） | v1.3+ |
 | [基础设施层/database.md](./基础设施层/database.md) | 数据库设计与迁移策略 | v1.0+ |
 | [基础设施层/config.md](./基础设施层/config.md) | 配置管理 | v1.0+ |
 
