@@ -4,6 +4,42 @@
 
 ---
 
+## [v1.3.0] - 2026-06-13
+
+### ✨ 新增功能
+
+- **单条记忆删除与编辑**
+  - 微信命令 `#删除记忆 N` 按序号删除单条记忆
+  - Web API `DELETE /api/v1/memories/:id` 和 `PUT /api/v1/memories/:id`
+  - Web 端记忆管理 UI：每条记忆支持删除按钮（确认弹窗）和内联编辑
+  - 输入校验：空内容提示、200 字上限
+
+- **SSE 流式对话输出**
+  - 新增 `POST /api/v1/chat/messages/stream` SSE 端点
+  - LLM Client 接口新增 `StreamChatCompletion`，OpenAI Provider 实现
+  - 前端 `sendMessageStream` 使用 fetch + ReadableStream 逐 chunk 渲染
+  - 打字机效果，用户无需等待完整响应
+  - 同步端点保留，提供降级能力
+
+### 🔧 架构改进
+
+- **Chat 层窄接口 `LongTermMemoryProvider`**：chat 层只依赖 `GetRecentForContext`，不再依赖完整 `MemoryService`
+- **Graphify 生成物清理**：`.gitignore` 新增 `graphify-out/`，已跟踪文件从索引移除
+- **CLAUDE.md 路径修复**：演进路线图文档路径更新为重组后位置
+
+### 📚 文档同步
+
+- PRD、设计文档、系统架构总览、消息服务文档、微信通道文档全面更新
+- 新增 `docs/90-迭代记录/archived/v1.3-长期记忆增强-SSE流式.md` 功能总结
+
+### 🧪 测试
+
+- 新增 29 个测试（21 个记忆删除/编辑 + 8 个 SSE 流式）
+- `go test ./...` 全部通过
+- `npm run build` 构建成功
+
+---
+
 ## [v1.2.0] - 2026-05-12
 
 ### ✨ 新增功能
