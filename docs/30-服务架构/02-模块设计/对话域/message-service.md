@@ -82,16 +82,26 @@ SaveAssistantMessage(userID int64, content string) error
 BuildContextMessages(userID int64, currentContent string) ([]llm.ChatMessage, error)
 ```
 
-**核心算法：滑动窗口策略**
+**核心算法：滑动窗口策略 + 长期记忆注入**
 
 ```
 输入：用户 ID、当前消息
 输出：LLM 可以直接用的 messages 数组
 
-1. 查询用户最近 N 条消息（默认 20 条 = 10 轮对话）
-2. 按时间正序排列（旧的在前，新的在后）
-3. 自动在最前面插入 system prompt
-4. 返回完整的 messages 数组
+1. 查询用户最近 10 条长期记忆，构造 system message
+2. 查询用户最近 N 条消息（默认 20 条 = 10 轮对话）
+3. 按时间正序排列（旧的在前，新的在后）
+4. 自动在最前面插入 system prompt
+5. 返回完整的 messages 数组
+```
+
+长期记忆 system message 内容格式：
+
+```text
+以下是用户长期记忆，请在回答时自然参考，不要主动提及"我参考了记忆"：
+
+1. 我偏好简洁直接的回答
+2. 我正在开发 OmniBot 项目
 ```
 
 **Token 控制**：
@@ -113,6 +123,12 @@ CountByUser(userID int64) (int64, error)
     ↓
 调用 BuildContextMessages(userID, 新消息)
     ↓
+┌─ 查询最近 10 条长期记忆 → 构造 system message
+│   "以下是用户长期记忆，请在回答时自然参考..."
+│   1. 我偏好简洁直接的回答
+│   2. 我正在开发 OmniBot 项目
+└─
+    ↓
 ┌─ 查询最近 20 条历史消息（按时间正序）
 │   1. user: "你好"
 │   2. assistant: "你好，有什么可以帮你？"
@@ -125,11 +141,12 @@ CountByUser(userID int64) (int64, error)
     ↓
 ┌─ 最终 messages 数组
 │   0. {role: "system", content: "你是一个友好的客服..."}
-│   1. {role: "user", content: "你好"}
-│   2. {role: "assistant", content: "你好，有什么可以帮你？"}
-│   3. {role: "user", content: "怎么用微信登录？"}
-│   4. {role: "assistant", content: "点击右上角菜单..."}
-│   5. {role: "user", content: "刚才说的是哪个菜单？"}  ← 新消息
+│   1. {role: "system", content: "以下是用户长期记忆..."}
+│   2. {role: "user", content: "你好"}
+│   3. {role: "assistant", content: "你好，有什么可以帮你？"}
+│   4. {role: "user", content: "怎么用微信登录？"}
+│   5. {role: "assistant", content: "点击右上角菜单..."}
+│   6. {role: "user", content: "刚才说的是哪个菜单？"}  ← 新消息
 └─
     ↓
 传给 LLM 客户端调用
@@ -154,6 +171,7 @@ CountByUser(userID int64) (int64, error)
 | 保存用户消息失败 | 记录 WARN 日志，继续处理对话，上下文从这次开始断了就断了，下次再重新开始 |
 | 保存 AI 回复失败 | 记录 WARN 日志，正常返回给用户，只是这次回复不会进入上下文 |
 | 查询历史消息失败 | 记录 ERROR 日志，只返回 system prompt + 当前消息，不影响对话 |
+| 查询长期记忆失败 | 记录 ERROR 日志，只使用短期上下文，不影响对话 |
 
 ---
 

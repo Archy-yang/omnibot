@@ -117,6 +117,10 @@ func (c *Channel) BuildResponseXML(fromUserName string, content string) string
 | `#设置地址 https://xxx` | 设置自定义 API 端点 | 兼容所有 OpenAI 格式服务 |
 | `#我的配置` | 查看当前配置 | API Key 脱敏显示（只显示前后 3 位） |
 | `#重置模型` | 清除自定义配置 | 恢复使用系统默认模型 |
+| `#记住 xxx` | 保存长期记忆 | 助手在后续对话中自动参考 |
+| `#我的记忆` | 查看长期记忆 | 返回已保存的全部记忆列表 |
+| `#清空记忆` | 清空长期记忆 | 删除当前用户全部长期记忆 |
+| `#删除记忆 N` | 删除单条记忆 | 按序号删除第 N 条记忆 |
 
 ### 命令处理流程
 
@@ -124,7 +128,9 @@ func (c *Channel) BuildResponseXML(fromUserName string, content string) string
 用户发送消息
     ↓
 是否以 # 开头？
-    ├─ 是 → 解析命令 → 执行配置操作 → 返回结果
+    ├─ 是 → 解析命令
+    │       ├─ LLM 配置命令 → 执行配置操作 → 返回结果
+    │       └─ 长期记忆命令 → 执行记忆操作 → 返回结果
     └─ 否 → 正常对话流程
 ```
 

@@ -19,9 +19,8 @@
 1. 不做自动记忆提取。
 2. 不做向量召回或 pgvector 字段。
 3. 不做分类、重要性评分、置顶、过期。
-4. 不做单条删除或单条编辑。
-5. 不做 Web 管理页面。
-6. 不做敏感信息强识别。
+4. 不做单条编辑。
+5. 不做敏感信息强识别。
 
 ## 架构
 
@@ -86,6 +85,9 @@ type MemoryRepository interface {
     ListByUserID(userID int64) ([]*memory.Memory, error)
     DeleteByUserID(userID int64) error
     GetRecentByUserID(userID int64, limit int) ([]*memory.Memory, error)
+    GetByID(id int64, userID int64) (*memory.Memory, error)
+    DeleteByID(id int64, userID int64) (bool, error)
+    UpdateContentByID(id int64, userID int64, content string) (*memory.Memory, error)
 }
 ```
 
@@ -109,6 +111,8 @@ type MemoryService interface {
     List(ctx context.Context, userID int64) ([]*memory.Memory, error)
     Clear(ctx context.Context, userID int64) error
     GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+    Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
+    Update(ctx context.Context, userID int64, memoryID int64, content string) (*memory.Memory, error)
 }
 ```
 
@@ -129,15 +133,21 @@ type MemoryService interface {
 
 ## Message Service 集成
 
-现有 `internal/service/chat.MessageService` 扩展为可选接收 `memory.MemoryService`。
+`internal/service/chat.MessageService` 通过窄接口 `LongTermMemoryProvider` 依赖长期记忆能力，避免依赖完整 `MemoryService`：
 
-建议构造函数保持简单：
+```go
+type LongTermMemoryProvider interface {
+    GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+}
+```
+
+构造函数保持简单：
 
 ```go
 func NewMessageService(msgRepo chat.MessageRepository, optionalServices ...interface{}) MessageService
 ```
 
-当传入 `memory.MemoryService` 时，`BuildContextMessages` 会先查询长期记忆，再查询短期消息。
+当传入 `LongTermMemoryProvider` 时，`BuildContextMessages` 会先查询长期记忆，再查询短期消息。
 
 普通对话的 messages 顺序为：
 
@@ -195,6 +205,7 @@ func (h *Handler) handleMemoryCommand(userID int64, content string) (string, boo
 - `#记住`：返回示例提示。
 - `#我的记忆`：返回全部记忆或空状态。
 - `#清空记忆`：清空当前用户全部长期记忆。
+- `#删除记忆 N`：按序号删除第 N 条记忆。
 
 微信返回文案与 PRD 保持一致。
 
@@ -241,6 +252,9 @@ Web handler 暂不暴露记忆管理入口，但如果它继续通过同一个 `
 - 清空只影响当前用户。
 - 最近 N 条只返回最新 N 条。
 - 最近 N 条返回顺序为从旧到新。
+- GetByID 正确用户可获取，错误用户返回 nil。
+- DeleteByID 正确用户可删除，错误用户/不存在返回 false。
+- UpdateContentByID 正确用户可更新，错误用户返回 nil。
 
 ### Service 测试
 
@@ -250,6 +264,8 @@ Web handler 暂不暴露记忆管理入口，但如果它继续通过同一个 `
 - `List` 无记忆时返回空列表。
 - `Clear` 在无记忆时仍成功。
 - `GetRecentForContext` 返回字符串列表。
+- `Delete` 正确用户可删除，不存在时返回 false。
+- `Update` 正确用户可更新，trim 内容，空内容/超长拒绝。
 
 ### Message Service 测试
 
@@ -270,6 +286,9 @@ Web handler 暂不暴露记忆管理入口，但如果它继续通过同一个 `
 - `#清空记忆` 返回成功。
 - 普通对话仍调用 LLM，且 LLM messages 包含长期记忆。
 - 记忆服务失败时返回统一服务不可用文案。
+- `#删除记忆 2` 按序号删除并返回删除内容。
+- `#删除记忆 2` 序号超出范围时返回提示。
+- `#删除记忆 abc` 格式错误时返回示例。
 
 ## 验收映射
 
