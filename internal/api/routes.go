@@ -111,6 +111,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.GET("", webHandler.HandleGetMemories)
 		memoryAPIGroup.POST("", webHandler.HandleCreateMemory)
 		memoryAPIGroup.DELETE("", webHandler.HandleClearMemories)
+		memoryAPIGroup.DELETE("/:id", webHandler.HandleDeleteMemory)
+		memoryAPIGroup.PUT("/:id", webHandler.HandleUpdateMemory)
 	}
 
 	// 用户 LLM 配置路由

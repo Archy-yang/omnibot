@@ -22,6 +22,8 @@ type mockMemoryService struct {
 	rememberErr     error
 	listErr         error
 	clearErr        error
+	deleteErr       error
+	updateErr       error
 	rememberUserID  int64
 	rememberContent string
 	listUserID      int64
@@ -64,6 +66,36 @@ func (m *mockMemoryService) Clear(ctx context.Context, userID int64) error {
 	return nil
 }
 
+func (m *mockMemoryService) Delete(ctx context.Context, userID int64, memoryID int64) (bool, error) {
+	if m.deleteErr != nil {
+		return false, m.deleteErr
+	}
+	for i, mem := range m.memories {
+		if mem.ID == memoryID {
+			m.memories = append(m.memories[:i], m.memories[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *mockMemoryService) Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error) {
+	if m.updateErr != nil {
+		return nil, m.updateErr
+	}
+	for _, mem := range m.memories {
+		if mem.ID == memoryID {
+			mem.Content = strings.TrimSpace(content)
+			return mem, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryService) GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error) {
+	return nil, nil
+}
+
 func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserService) {
 	gin.SetMode(gin.TestMode)
 	userSvc := &mockUserService{userID: 42, created: false}
@@ -79,6 +111,8 @@ func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserSe
 	router.GET("/api/v1/memories", handler.HandleGetMemories)
 	router.POST("/api/v1/memories", handler.HandleCreateMemory)
 	router.DELETE("/api/v1/memories", handler.HandleClearMemories)
+	router.DELETE("/api/v1/memories/:id", handler.HandleDeleteMemory)
+	router.PUT("/api/v1/memories/:id", handler.HandleUpdateMemory)
 	return router, userSvc
 }
 
@@ -249,4 +283,150 @@ func TestHandleClearMemories_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "服务暂时不可用，请稍后再试。")
 	assert.NotContains(t, w.Body.String(), "delete failed")
+}
+
+func TestHandleDeleteMemory_Success(t *testing.T) {
+	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{
+		{ID: 1, UserID: 42, Content: "记忆一"},
+		{ID: 2, UserID: 42, Content: "记忆二"},
+	}}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1?session_id=test-session", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已删除记忆。")
+	assert.Len(t, memorySvc.memories, 1)
+}
+
+func TestHandleDeleteMemory_NotFound(t *testing.T) {
+	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{}}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/999?session_id=test-session", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "记忆不存在或不属于当前用户。")
+}
+
+func TestHandleDeleteMemory_InvalidID(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/invalid?session_id=test-session", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "无效的记忆 ID。")
+}
+
+func TestHandleDeleteMemory_MissingSessionID(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "缺少 session_id 参数")
+}
+
+func TestHandleDeleteMemory_ServiceError(t *testing.T) {
+	memorySvc := &mockMemoryService{deleteErr: errors.New("delete failed")}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1?session_id=test-session", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "服务暂时不可用，请稍后再试。")
+}
+
+func TestHandleUpdateMemory_Success(t *testing.T) {
+	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{{ID: 1, UserID: 42, Content: "旧内容"}}}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
+		"session_id":"test-session",
+		"content":" 新内容 "
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已更新记忆。")
+	assert.Contains(t, w.Body.String(), "新内容")
+	assert.Equal(t, "新内容", memorySvc.memories[0].Content)
+}
+
+func TestHandleUpdateMemory_NotFound(t *testing.T) {
+	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{}}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/999", strings.NewReader(`{
+		"session_id":"test-session",
+		"content":"新内容"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "记忆不存在或不属于当前用户。")
+}
+
+func TestHandleUpdateMemory_InvalidID(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/invalid", strings.NewReader(`{
+		"session_id":"test-session",
+		"content":"新内容"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "无效的记忆 ID。")
+}
+
+func TestHandleUpdateMemory_EmptyContent(t *testing.T) {
+	memorySvc := &mockMemoryService{updateErr: memorysvc.ErrEmptyContent}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
+		"session_id":"test-session",
+		"content":"   "
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "请输入要长期记住的内容。")
+}
+
+func TestHandleUpdateMemory_ServiceError(t *testing.T) {
+	memorySvc := &mockMemoryService{updateErr: errors.New("update failed")}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
+		"session_id":"test-session",
+		"content":"新内容"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "服务暂时不可用，请稍后再试。")
 }

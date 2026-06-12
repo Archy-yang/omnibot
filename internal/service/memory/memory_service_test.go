@@ -22,6 +22,19 @@ type mockMemoryRepository struct {
 	deletedUser  int64
 	recentLimit  int
 	recentUserID int64
+	getByIDID    int64
+	getByIDUser  int64
+	getByIDMem   *memorydomain.Memory
+	getByIDErr   error
+	deletedID    int64
+	deletedIDUser int64
+	deleteByIDResult bool
+	deleteByIDErr error
+	updatedID int64
+	updatedUserID int64
+	updatedContent string
+	updateResult *memorydomain.Memory
+	updateErr error
 }
 
 func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
@@ -46,6 +59,25 @@ func (m *mockMemoryRepository) GetRecentByUserID(userID int64, limit int) ([]*me
 	m.recentUserID = userID
 	m.recentLimit = limit
 	return m.memories, m.recentErr
+}
+
+func (m *mockMemoryRepository) GetByID(id int64, userID int64) (*memorydomain.Memory, error) {
+	m.getByIDID = id
+	m.getByIDUser = userID
+	return m.getByIDMem, m.getByIDErr
+}
+
+func (m *mockMemoryRepository) DeleteByID(id int64, userID int64) (bool, error) {
+	m.deletedID = id
+	m.deletedIDUser = userID
+	return m.deleteByIDResult, m.deleteByIDErr
+}
+
+func (m *mockMemoryRepository) UpdateContentByID(id int64, userID int64, content string) (*memorydomain.Memory, error) {
+	m.updatedID = id
+	m.updatedUserID = userID
+	m.updatedContent = content
+	return m.updateResult, m.updateErr
 }
 
 func TestMemoryService_RememberTrimsAndSavesContent(t *testing.T) {
@@ -131,4 +163,96 @@ func TestMemoryService_PropagatesRepositoryErrors(t *testing.T) {
 
 	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, contents)
+}
+
+func TestMemoryService_DeleteByID_Success(t *testing.T) {
+	repo := &mockMemoryRepository{deleteByIDResult: true}
+	service := NewMemoryService(repo)
+
+	deleted, err := service.Delete(context.Background(), 123, 1)
+
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.Equal(t, int64(1), repo.deletedID)
+	assert.Equal(t, int64(123), repo.deletedIDUser)
+}
+
+func TestMemoryService_DeleteByID_NotFound(t *testing.T) {
+	repo := &mockMemoryRepository{deleteByIDResult: false}
+	service := NewMemoryService(repo)
+
+	deleted, err := service.Delete(context.Background(), 123, 999)
+
+	require.NoError(t, err)
+	assert.False(t, deleted)
+}
+
+func TestMemoryService_DeleteByID_Error(t *testing.T) {
+	expectedErr := errors.New("database error")
+	repo := &mockMemoryRepository{deleteByIDErr: expectedErr}
+	service := NewMemoryService(repo)
+
+	deleted, err := service.Delete(context.Background(), 123, 1)
+
+	assert.ErrorIs(t, err, expectedErr)
+	assert.False(t, deleted)
+}
+
+func TestMemoryService_Update_TrimsAndUpdatesContent(t *testing.T) {
+	expectedMemory := memorydomain.NewMemory(123, "新内容")
+	expectedMemory.ID = 1
+	repo := &mockMemoryRepository{updateResult: expectedMemory}
+	service := NewMemoryService(repo)
+
+	memory, err := service.Update(context.Background(), 123, 1, "  新内容  ")
+
+	require.NoError(t, err)
+	require.NotNil(t, memory)
+	assert.Equal(t, int64(1), repo.updatedID)
+	assert.Equal(t, int64(123), repo.updatedUserID)
+	assert.Equal(t, "新内容", repo.updatedContent)
+	assert.Equal(t, "新内容", memory.Content)
+}
+
+func TestMemoryService_Update_RejectsEmptyContent(t *testing.T) {
+	repo := &mockMemoryRepository{}
+	service := NewMemoryService(repo)
+
+	memory, err := service.Update(context.Background(), 123, 1, "   ")
+
+	assert.ErrorIs(t, err, ErrEmptyContent)
+	assert.Nil(t, memory)
+	assert.Zero(t, repo.updatedID)
+}
+
+func TestMemoryService_Update_RejectsTooLongContent(t *testing.T) {
+	repo := &mockMemoryRepository{}
+	service := NewMemoryService(repo)
+
+	memory, err := service.Update(context.Background(), 123, 1, strings.Repeat("你", MaxMemoryContentLength+1))
+
+	assert.ErrorIs(t, err, ErrContentTooLong)
+	assert.Nil(t, memory)
+	assert.Zero(t, repo.updatedID)
+}
+
+func TestMemoryService_Update_ReturnsNilWhenNotFound(t *testing.T) {
+	repo := &mockMemoryRepository{}
+	service := NewMemoryService(repo)
+
+	memory, err := service.Update(context.Background(), 123, 999, "新内容")
+
+	require.NoError(t, err)
+	assert.Nil(t, memory)
+}
+
+func TestMemoryService_Update_Error(t *testing.T) {
+	expectedErr := errors.New("database error")
+	repo := &mockMemoryRepository{updateErr: expectedErr}
+	service := NewMemoryService(repo)
+
+	memory, err := service.Update(context.Background(), 123, 1, "新内容")
+
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, memory)
 }

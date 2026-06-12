@@ -46,6 +46,8 @@ type MemoryService interface {
 	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
 	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
 	Clear(ctx context.Context, userID int64) error
+	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
+	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 }
 
 // Handler Web 聊天 API 处理器
@@ -273,6 +275,32 @@ type ClearMemoriesResponse struct {
 	Message string `json:"message"`
 }
 
+type DeleteMemoryQueryRequest struct {
+	SessionID string `form:"session_id" binding:"required"`
+}
+
+type DeleteMemoryURIRequest struct {
+	MemoryID int64 `uri:"id" binding:"required,min=1"`
+}
+
+type DeleteMemoryResponse struct {
+	Message string `json:"message"`
+}
+
+type UpdateMemoryURIRequest struct {
+	MemoryID int64 `uri:"id" binding:"required,min=1"`
+}
+
+type UpdateMemoryRequest struct {
+	SessionID string `json:"session_id" binding:"required"`
+	Content   string `json:"content" binding:"required"`
+}
+
+type UpdateMemoryResponse struct {
+	Message string    `json:"message"`
+	Memory  MemoryDTO `json:"memory"`
+}
+
 func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
 	return MemoryDTO{
 		ID:        memory.ID,
@@ -403,6 +431,125 @@ func (h *Handler) HandleClearMemories(c *gin.Context) {
 		"success": true,
 		"data": ClearMemoriesResponse{
 			Message: "已清空你的全部长期记忆。",
+		},
+	})
+}
+
+// HandleDeleteMemory 删除单条长期记忆
+func (h *Handler) HandleDeleteMemory(c *gin.Context) {
+	var queryReq DeleteMemoryQueryRequest
+	if err := c.ShouldBindQuery(&queryReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "缺少 session_id 参数",
+		})
+		return
+	}
+
+	var uriReq DeleteMemoryURIRequest
+	if err := c.ShouldBindUri(&uriReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的记忆 ID。",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", queryReq.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	deleted, err := h.memoryService.Delete(c.Request.Context(), user.ID, uriReq.MemoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "记忆不存在或不属于当前用户。",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": DeleteMemoryResponse{
+			Message: "已删除记忆。",
+		},
+	})
+}
+
+// HandleUpdateMemory 更新单条长期记忆
+func (h *Handler) HandleUpdateMemory(c *gin.Context) {
+	var uriReq UpdateMemoryURIRequest
+	if err := c.ShouldBindUri(&uriReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的记忆 ID。",
+		})
+		return
+	}
+
+	var req UpdateMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+
+	memory, err := h.memoryService.Update(c.Request.Context(), user.ID, uriReq.MemoryID, req.Content)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "服务暂时不可用，请稍后再试。"
+		if errors.Is(err, memorysvc.ErrEmptyContent) {
+			status = http.StatusBadRequest
+			message = "请输入要长期记住的内容。"
+		}
+		if errors.Is(err, memorysvc.ErrContentTooLong) {
+			status = http.StatusBadRequest
+			message = "这条记忆太长了，请控制在 200 字以内。"
+		}
+		c.JSON(status, gin.H{
+			"success": false,
+			"error":   message,
+		})
+		return
+	}
+
+	if memory == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "记忆不存在或不属于当前用户。",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": UpdateMemoryResponse{
+			Message: "已更新记忆。",
+			Memory:  toMemoryDTO(memory),
 		},
 	})
 }

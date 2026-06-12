@@ -9,7 +9,6 @@ import (
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
 	chatrepo "omnibot/internal/repository/chat"
-	memorysvc "omnibot/internal/service/memory"
 	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
@@ -40,9 +39,14 @@ type MessageService interface {
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 }
 
+// LongTermMemoryProvider 长期记忆上下文提供者
+type LongTermMemoryProvider interface {
+	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+}
+
 type messageService struct {
 	msgRepo   chatrepo.MessageRepository
-	memorySvc memorysvc.MemoryService
+	memorySvc LongTermMemoryProvider
 }
 
 // NewMessageService 创建消息服务
@@ -50,7 +54,7 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 	service := &messageService{msgRepo: msgRepo}
 	for _, svc := range optionalServices {
 		switch s := svc.(type) {
-		case memorysvc.MemoryService:
+		case LongTermMemoryProvider:
 			service.memorySvc = s
 		}
 	}

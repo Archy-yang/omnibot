@@ -22,6 +22,10 @@ type mockMemoryService struct {
 	listErr           error
 	clearUserID       int64
 	clearErr          error
+	deleteUserID      int64
+	deleteMemoryID    int64
+	deleteResult      bool
+	deleteErr         error
 }
 
 func (m *mockMemoryService) Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error) {
@@ -42,6 +46,16 @@ func (m *mockMemoryService) List(ctx context.Context, userID int64) ([]*memorydo
 func (m *mockMemoryService) Clear(ctx context.Context, userID int64) error {
 	m.clearUserID = userID
 	return m.clearErr
+}
+
+func (m *mockMemoryService) Delete(ctx context.Context, userID int64, memoryID int64) (bool, error) {
+	m.deleteUserID = userID
+	m.deleteMemoryID = memoryID
+	return m.deleteResult, m.deleteErr
+}
+
+func (m *mockMemoryService) Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error) {
+	return nil, nil
 }
 
 func (m *mockMemoryService) GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error) {
@@ -150,6 +164,58 @@ func TestHandler_HandleMemoryCommand_Clear(t *testing.T) {
 	require.True(t, handled)
 	assert.Equal(t, int64(42), memoryService.clearUserID)
 	assert.Equal(t, "已清空你的全部长期记忆。", reply)
+}
+
+func TestHandler_HandleMemoryCommand_DeleteByListIndex(t *testing.T) {
+	memoryService := &mockMemoryService{
+		listMemories: []*memorydomain.Memory{
+			{ID: 11, UserID: 42, Content: "第一条"},
+			{ID: 22, UserID: 42, Content: "第二条"},
+		},
+		deleteResult: true,
+	}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(42, "#删除记忆 2")
+
+	require.True(t, handled)
+	assert.Equal(t, int64(42), memoryService.deleteUserID)
+	assert.Equal(t, int64(22), memoryService.deleteMemoryID)
+	assert.Equal(t, "已删除记忆：第二条", reply)
+}
+
+func TestHandler_HandleMemoryCommand_DeleteInvalidIndex(t *testing.T) {
+	memoryService := &mockMemoryService{listMemories: []*memorydomain.Memory{{ID: 11, UserID: 42, Content: "第一条"}}}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(42, "#删除记忆 2")
+
+	require.True(t, handled)
+	assert.Equal(t, "记忆序号不存在，请发送 #我的记忆 查看当前列表。", reply)
+	assert.Zero(t, memoryService.deleteMemoryID)
+}
+
+func TestHandler_HandleMemoryCommand_DeleteBadFormat(t *testing.T) {
+	memoryService := &mockMemoryService{}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(42, "#删除记忆 abc")
+
+	require.True(t, handled)
+	assert.Equal(t, "请发送 #删除记忆 序号，例如：#删除记忆 2", reply)
+}
+
+func TestHandler_HandleMemoryCommand_DeleteServiceError(t *testing.T) {
+	memoryService := &mockMemoryService{
+		listMemories: []*memorydomain.Memory{{ID: 11, UserID: 42, Content: "第一条"}},
+		deleteErr:    errors.New("database down"),
+	}
+	handler := &Handler{memoryService: memoryService}
+
+	reply, handled := handler.handleMemoryCommand(42, "#删除记忆 1")
+
+	require.True(t, handled)
+	assert.Equal(t, "服务暂时不可用，请稍后再试", reply)
 }
 
 func TestHandler_HandleMemoryCommand_ServiceError(t *testing.T) {

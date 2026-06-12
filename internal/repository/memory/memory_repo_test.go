@@ -86,3 +86,97 @@ func TestMemoryRepository_GetRecentByUserIDReturnsNewestNInAscendingOrder(t *tes
 	assert.Equal(t, "记忆 03", memories[0].Content)
 	assert.Equal(t, "记忆 12", memories[9].Content)
 }
+
+func TestMemoryRepository_GetByID(t *testing.T) {
+	db := setupMemoryRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+
+	require.NoError(t, repo.Create(memorydomain.NewMemory(1, "用户一记忆")))
+	require.NoError(t, repo.Create(memorydomain.NewMemory(2, "用户二记忆")))
+
+	memories, _ := repo.ListByUserID(1)
+	memoryID := memories[0].ID
+
+	t.Run("正确用户可以获取", func(t *testing.T) {
+		memory, err := repo.GetByID(memoryID, 1)
+		require.NoError(t, err)
+		assert.Equal(t, "用户一记忆", memory.Content)
+	})
+
+	t.Run("错误用户返回 nil", func(t *testing.T) {
+		memory, err := repo.GetByID(memoryID, 2)
+		require.NoError(t, err)
+		assert.Nil(t, memory)
+	})
+
+	t.Run("不存在 ID 返回 nil", func(t *testing.T) {
+		memory, err := repo.GetByID(999, 1)
+		require.NoError(t, err)
+		assert.Nil(t, memory)
+	})
+}
+
+func TestMemoryRepository_DeleteByID(t *testing.T) {
+	db := setupMemoryRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+
+	require.NoError(t, repo.Create(memorydomain.NewMemory(1, "记忆一")))
+	require.NoError(t, repo.Create(memorydomain.NewMemory(1, "记忆二")))
+	require.NoError(t, repo.Create(memorydomain.NewMemory(2, "用户二记忆")))
+
+	memories, _ := repo.ListByUserID(1)
+	memory1ID := memories[0].ID
+
+	t.Run("正确用户可以删除", func(t *testing.T) {
+		deleted, err := repo.DeleteByID(memory1ID, 1)
+		require.NoError(t, err)
+		assert.True(t, deleted)
+
+		remaining, _ := repo.ListByUserID(1)
+		assert.Len(t, remaining, 1)
+		assert.Equal(t, "记忆二", remaining[0].Content)
+	})
+
+	t.Run("错误用户无法删除", func(t *testing.T) {
+		deleted, err := repo.DeleteByID(999, 2)
+		require.NoError(t, err)
+		assert.False(t, deleted)
+	})
+
+	t.Run("删除不存在 ID 返回 false", func(t *testing.T) {
+		deleted, err := repo.DeleteByID(999, 1)
+		require.NoError(t, err)
+		assert.False(t, deleted)
+	})
+}
+
+func TestMemoryRepository_UpdateContentByID(t *testing.T) {
+	db := setupMemoryRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+
+	require.NoError(t, repo.Create(memorydomain.NewMemory(1, "旧内容")))
+	require.NoError(t, repo.Create(memorydomain.NewMemory(2, "用户二内容")))
+
+	memories, _ := repo.ListByUserID(1)
+	memoryID := memories[0].ID
+
+	t.Run("正确用户可以更新", func(t *testing.T) {
+		updated, err := repo.UpdateContentByID(memoryID, 1, "新内容")
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		assert.Equal(t, "新内容", updated.Content)
+		assert.Equal(t, int64(1), updated.UserID)
+	})
+
+	t.Run("错误用户无法更新", func(t *testing.T) {
+		updated, err := repo.UpdateContentByID(memoryID, 2, "恶意修改")
+		require.NoError(t, err)
+		assert.Nil(t, updated)
+	})
+
+	t.Run("不存在 ID 返回 nil", func(t *testing.T) {
+		updated, err := repo.UpdateContentByID(999, 1, "新内容")
+		require.NoError(t, err)
+		assert.Nil(t, updated)
+	})
+}

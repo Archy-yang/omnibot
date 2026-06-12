@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -412,7 +413,8 @@ func (h *Handler) handleMemoryCommand(userID int64, content string) (string, boo
 
 	trimmed := strings.TrimSpace(content)
 	isRememberCommand := trimmed == "#记住" || strings.HasPrefix(trimmed, "#记住 ") || strings.HasPrefix(trimmed, "#记住\t")
-	isMemoryCommand := isRememberCommand || trimmed == "#我的记忆" || trimmed == "#清空记忆"
+	isDeleteCommand := trimmed == "#删除记忆" || strings.HasPrefix(trimmed, "#删除记忆 ") || strings.HasPrefix(trimmed, "#删除记忆\t")
+	isMemoryCommand := isRememberCommand || isDeleteCommand || trimmed == "#我的记忆" || trimmed == "#清空记忆"
 	if isMemoryCommand && userID <= 0 {
 		return "服务暂时不可用，请稍后再试", true
 	}
@@ -471,6 +473,41 @@ func (h *Handler) handleMemoryCommand(userID int64, content string) (string, boo
 			return "服务暂时不可用，请稍后再试", true
 		}
 		return "已清空你的全部长期记忆。", true
+	case trimmed == "#删除记忆" || strings.HasPrefix(trimmed, "#删除记忆 ") || strings.HasPrefix(trimmed, "#删除记忆\t"):
+		indexText := strings.TrimSpace(strings.TrimPrefix(trimmed, "#删除记忆"))
+		index, err := strconv.Atoi(indexText)
+		if err != nil || index <= 0 {
+			return "请发送 #删除记忆 序号，例如：#删除记忆 2", true
+		}
+
+		memories, err := h.memoryService.List(context.Background(), userID)
+		if err != nil {
+			logger.ErrorWithFields("Failed to list memories before delete command",
+				zap.Int64("user_id", userID),
+				zap.String("operation", "memory_command_delete_list"),
+				zap.Error(err),
+			)
+			return "服务暂时不可用，请稍后再试", true
+		}
+		if index > len(memories) {
+			return "记忆序号不存在，请发送 #我的记忆 查看当前列表。", true
+		}
+
+		selected := memories[index-1]
+		deleted, err := h.memoryService.Delete(context.Background(), userID, selected.ID)
+		if err != nil {
+			logger.ErrorWithFields("Failed to handle memory delete command",
+				zap.Int64("user_id", userID),
+				zap.Int64("memory_id", selected.ID),
+				zap.String("operation", "memory_command_delete"),
+				zap.Error(err),
+			)
+			return "服务暂时不可用，请稍后再试", true
+		}
+		if !deleted {
+			return "记忆序号不存在，请发送 #我的记忆 查看当前列表。", true
+		}
+		return fmt.Sprintf("已删除记忆：%s", selected.Content), true
 	}
 
 	return "", false

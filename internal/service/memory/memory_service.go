@@ -25,6 +25,8 @@ type MemoryService interface {
 	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
 	Clear(ctx context.Context, userID int64) error
 	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
+	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 }
 
 type memoryService struct {
@@ -96,4 +98,60 @@ func (s *memoryService) GetRecentForContext(ctx context.Context, userID int64, l
 		contents = append(contents, memory.Content)
 	}
 	return contents, nil
+}
+
+func (s *memoryService) Delete(ctx context.Context, userID int64, memoryID int64) (bool, error) {
+	deleted, err := s.repo.DeleteByID(memoryID, userID)
+	if err != nil {
+		logger.ErrorWithFields("Failed to delete memory",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.String("operation", "memory_delete"),
+			zap.Error(err),
+		)
+		return false, err
+	}
+
+	if deleted {
+		logger.InfoWithFields("Memory deleted",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.String("operation", "memory_delete"),
+		)
+	}
+
+	return deleted, nil
+}
+
+func (s *memoryService) Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil, ErrEmptyContent
+	}
+	if utf8.RuneCountInString(trimmed) > MaxMemoryContentLength {
+		return nil, ErrContentTooLong
+	}
+
+	memory, err := s.repo.UpdateContentByID(memoryID, userID, trimmed)
+	if err != nil {
+		logger.ErrorWithFields("Failed to update memory",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.Int("content_length", utf8.RuneCountInString(trimmed)),
+			zap.String("operation", "memory_update"),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	if memory != nil {
+		logger.InfoWithFields("Memory updated",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.Int("content_length", utf8.RuneCountInString(trimmed)),
+			zap.String("operation", "memory_update"),
+		)
+	}
+
+	return memory, nil
 }
