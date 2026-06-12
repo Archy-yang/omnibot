@@ -3,10 +3,12 @@ import { computed, onMounted, ref } from 'vue';
 import { useMemory } from '@/composables/useMemory';
 import { useToast } from '@/composables/useToast';
 
-const { memories, isLoading, isCreating, isClearing, loadMemories, createMemory, clearMemories } = useMemory();
+const { memories, isLoading, isCreating, isClearing, loadMemories, createMemory, clearMemories, deleteMemory, updateMemory } = useMemory();
 const { success, error } = useToast();
 
 const memoryInput = ref<string>('');
+const editingId = ref<number | null>(null);
+const editingContent = ref<string>('');
 
 const trimmedMemory = computed(() => memoryInput.value.trim());
 const memoryLength = computed(() => [...trimmedMemory.value].length);
@@ -40,6 +42,47 @@ const handleClearMemories = async (): Promise<void> => {
   try {
     await clearMemories();
     success('已清空你的全部长期记忆。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  }
+};
+
+const handleDeleteMemory = async (id: number): Promise<void> => {
+  try {
+    await deleteMemory(id);
+    success('已删除记忆。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  }
+};
+
+const startEditing = (id: number, content: string): void => {
+  editingId.value = id;
+  editingContent.value = content;
+};
+
+const cancelEditing = (): void => {
+  editingId.value = null;
+  editingContent.value = '';
+};
+
+const handleUpdateMemory = async (id: number): Promise<void> => {
+  const trimmed = editingContent.value.trim();
+  if (!trimmed) {
+    error('请输入要长期记住的内容。');
+    return;
+  }
+
+  if ([...trimmed].length > 200) {
+    error('这条记忆太长了，请控制在 200 字以内。');
+    return;
+  }
+
+  try {
+    await updateMemory(id, trimmed);
+    editingId.value = null;
+    editingContent.value = '';
+    success('已更新记忆。');
   } catch (err) {
     error(getErrorMessage(err));
   }
@@ -91,10 +134,41 @@ onMounted(() => {
 
       <NList v-else bordered>
         <NListItem v-for="(memory, index) in memories" :key="memory.id">
-          <div class="flex gap-2 text-sm leading-6">
-            <span class="text-gray-400">{{ index + 1 }}.</span>
-            <span class="whitespace-pre-wrap break-words">{{ memory.content }}</span>
-          </div>
+          <template v-if="editingId === memory.id">
+            <div class="flex flex-col gap-2 w-full">
+              <NInput
+                v-model:value="editingContent"
+                type="textarea"
+                :autosize="{ minRows: 1, maxRows: 4 }"
+                :maxlength="220"
+              />
+              <div class="flex items-center justify-end gap-2">
+                <NButton size="tiny" @click="cancelEditing">取消</NButton>
+                <NButton type="primary" size="tiny" @click="handleUpdateMemory(memory.id)">保存</NButton>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="flex items-start gap-2 w-full">
+              <span class="text-gray-400 text-sm leading-6">{{ index + 1 }}.</span>
+              <span class="whitespace-pre-wrap break-words text-sm leading-6 flex-1">{{ memory.content }}</span>
+              <div class="flex items-center gap-1 shrink-0">
+                <NButton text size="tiny" @click="startEditing(memory.id, memory.content)">
+                  编辑
+                </NButton>
+                <NPopconfirm
+                  positive-text="确认删除"
+                  negative-text="取消"
+                  @positive-click="handleDeleteMemory(memory.id)"
+                >
+                  <template #trigger>
+                    <NButton text type="error" size="tiny">删除</NButton>
+                  </template>
+                  确定要删除这条记忆吗？
+                </NPopconfirm>
+              </div>
+            </div>
+          </template>
         </NListItem>
       </NList>
     </NSpin>

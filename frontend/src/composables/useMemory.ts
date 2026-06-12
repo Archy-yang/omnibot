@@ -17,5 +17,7 @@ export function useMemory() {
     loadMemories: memoryStore.loadMemories,
     createMemory: memoryStore.createMemory,
     clearMemories: memoryStore.clearMemories,
+    deleteMemory: memoryStore.deleteMemory,
+    updateMemory: memoryStore.updateMemory,
   };
 }

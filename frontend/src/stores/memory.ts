@@ -45,6 +45,22 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
+  const deleteMemory = async (id: number): Promise<void> => {
+    await memoryService.deleteMemory(id, sessionId.value);
+    memories.value = memories.value.filter((m) => m.id !== id);
+  };
+
+  const updateMemory = async (id: number, content: string): Promise<void> => {
+    const response = await memoryService.updateMemory(id, {
+      session_id: sessionId.value,
+      content,
+    });
+    const index = memories.value.findIndex((m) => m.id === id);
+    if (index !== -1) {
+      memories.value[index] = response.memory;
+    }
+  };
+
   return {
     memories,
     isLoading,
@@ -53,5 +69,7 @@ export const useMemoryStore = defineStore('memory', () => {
     loadMemories,
     createMemory,
     clearMemories,
+    deleteMemory,
+    updateMemory,
   };
 });

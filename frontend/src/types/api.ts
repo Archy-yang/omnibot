@@ -129,3 +129,26 @@ export interface CreateMemoryResponse {
 export interface ClearMemoriesResponse {
   message: string;
 }
+
+/**
+ * 删除单条长期记忆响应类型
+ */
+export interface DeleteMemoryResponse {
+  message: string;
+}
+
+/**
+ * 更新长期记忆请求类型
+ */
+export interface UpdateMemoryRequest {
+  session_id: string;
+  content: string;
+}
+
+/**
+ * 更新长期记忆响应类型
+ */
+export interface UpdateMemoryResponse {
+  message: string;
+  memory: MemoryItem;
+}

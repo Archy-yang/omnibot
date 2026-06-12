@@ -4,7 +4,10 @@ import type {
   ClearMemoriesResponse,
   CreateMemoryRequest,
   CreateMemoryResponse,
+  DeleteMemoryResponse,
   GetMemoriesResponse,
+  UpdateMemoryRequest,
+  UpdateMemoryResponse,
 } from '../types/api';
 
 export const memoryService = {
@@ -38,6 +41,28 @@ export const memoryService = {
       return response.data.data;
     } catch (error) {
       console.error('Failed to clear memories:', error);
+      throw error;
+    }
+  },
+
+  async deleteMemory(id: number, sessionId: string): Promise<DeleteMemoryResponse> {
+    try {
+      const response = await request.delete<ApiResponse<DeleteMemoryResponse>>(`/memories/${id}`, {
+        params: { session_id: sessionId },
+      });
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to delete memory:', error);
+      throw error;
+    }
+  },
+
+  async updateMemory(id: number, requestBody: UpdateMemoryRequest): Promise<UpdateMemoryResponse> {
+    try {
+      const response = await request.put<ApiResponse<UpdateMemoryResponse>>(`/memories/${id}`, requestBody);
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to update memory:', error);
       throw error;
     }
   },
