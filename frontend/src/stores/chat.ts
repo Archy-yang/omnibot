@@ -40,15 +40,37 @@ export const useChatStore = defineStore(
       };
       addMessage(userMessage);
 
+      // Add placeholder assistant message for streaming
+      const assistantMessage: Message = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: '',
+        created_at: new Date().toISOString(),
+      };
+      addMessage(assistantMessage);
+
       isLoading.value = true;
       try {
-        const response = await chatService.sendMessage(content, sessionId.value);
-        addMessage(response);
+        await chatService.sendMessageStream(content, sessionId.value, {
+          onChunk: (chunk: string) => {
+            assistantMessage.content += chunk;
+          },
+          onDone: () => {
+            isLoading.value = false;
+          },
+          onError: (err: Error) => {
+            isLoading.value = false;
+            // Remove placeholder on error
+            messages.value = messages.value.filter((m) => m.id !== assistantMessage.id);
+            throw err;
+          },
+        });
       } catch (error) {
         console.error('Failed to send message:', error);
+        if (isLoading.value) {
+          isLoading.value = false;
+        }
         throw error;
-      } finally {
-        isLoading.value = false;
       }
     };
 

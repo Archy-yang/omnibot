@@ -62,6 +62,18 @@ func (m *mockLLMClient) ChatCompletion(ctx context.Context, messages []llm.ChatM
 	return "AI response", nil
 }
 
+func (m *mockLLMClient) StreamChatCompletion(ctx context.Context, messages []llm.ChatMessage) (<-chan llm.StreamChunk, error) {
+	ch := make(chan llm.StreamChunk, 10)
+	go func() {
+		defer close(ch)
+		for _, r := range []string{"你", "好", "，", "世", "界"} {
+			ch <- llm.StreamChunk{Content: r}
+		}
+		ch <- llm.StreamChunk{Done: true}
+	}()
+	return ch, nil
+}
+
 // LLMConfigService mock
 type mockLLMConfigService struct {
 	hasConfig    bool
@@ -391,4 +403,61 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return e.Message
+}
+
+// ========== SSE 流式响应测试 ==========
+
+func TestHandleSendMessageStream_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	llmClient := &mockLLMClient{}
+	configSvc := &mockLLMConfigService{hasConfig: false}
+
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)
+
+	reqBody := map[string]string{
+		"session_id": "test-session-123",
+		"content":    "你好",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), "data: ")
+	assert.Contains(t, w.Body.String(), `"content":"你"`)
+	assert.Contains(t, w.Body.String(), `"content":"好"`)
+	assert.Contains(t, w.Body.String(), "[DONE]")
+}
+
+func TestHandleSendMessageStream_InvalidBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	llmClient := &mockLLMClient{}
+	configSvc := &mockLLMConfigService{hasConfig: false}
+
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)
+
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/stream", bytes.NewBuffer([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

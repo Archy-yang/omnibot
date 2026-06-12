@@ -103,6 +103,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
+		chatAPIGroup.POST("/messages/stream", webHandler.HandleSendMessageStream)
 	}
 
 	// 长期记忆路由

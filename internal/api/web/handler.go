@@ -3,8 +3,11 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"omnibot/internal/client/llm"
@@ -31,6 +34,7 @@ type MessageService interface {
 // LLMClient 大模型客户端接口
 type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
+	StreamChatCompletion(ctx context.Context, messages []llm.ChatMessage) (<-chan llm.StreamChunk, error)
 }
 
 // LLMConfigService LLM 配置服务接口
@@ -239,6 +243,97 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	resp.Data.CreatedAt = time.Now().Format(time.RFC3339)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// HandleSendMessageStream SSE 流式对话
+func (h *Handler) HandleSendMessageStream(c *gin.Context) {
+	var req SendMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request body",
+		})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to get or create user",
+		})
+		return
+	}
+
+	userID := user.GetID()
+
+	h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+
+	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
+	if err != nil {
+		ctxMessages = []llm.ChatMessage{
+			{Role: "user", Content: req.Content},
+		}
+	}
+
+	activeClient := h.llmClient
+	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
+	if err == nil && hasCustomConfig {
+		customConfig := llm.UserConfig{
+			Provider: userConfig.Provider,
+			APIKey:   userConfig.APIKey,
+			BaseURL:  userConfig.BaseURL,
+			Model:    userConfig.Model,
+		}
+		customClient, err := llm.NewClientFromUserConfig(customConfig)
+		if err == nil {
+			activeClient = customClient
+		}
+	}
+
+	ch, err := activeClient.StreamChatCompletion(c.Request.Context(), ctxMessages)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to generate response",
+		})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Streaming not supported",
+		})
+		return
+	}
+
+	var fullContent strings.Builder
+	for chunk := range ch {
+		if chunk.Error != nil {
+			data, _ := json.Marshal(map[string]string{"error": chunk.Error.Error()})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			flusher.Flush()
+			return
+		}
+		if chunk.Done {
+			break
+		}
+		fullContent.WriteString(chunk.Content)
+		data, _ := json.Marshal(map[string]string{"content": chunk.Content})
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	h.messageService.SaveAssistantMessage(c.Request.Context(), userID, fullContent.String())
 }
 
 // ========== 长期记忆接口 ==========

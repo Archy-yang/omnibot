@@ -2,6 +2,14 @@ import { request } from '../utils/request';
 import type { Message } from '../types/chat';
 import type { ApiResponse, GetHistoryResponse, PaginationParams, SendMessageRequest } from '../types/api';
 
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+
+interface StreamCallbacks {
+  onChunk: (content: string) => void;
+  onDone: (fullContent: string) => void;
+  onError: (error: Error) => void;
+}
+
 export const chatService = {
   async sendMessage(content: string, sessionId: string): Promise<Message> {
     try {
@@ -15,6 +23,73 @@ export const chatService = {
     } catch (error) {
       console.error('Failed to send message:', error);
       throw error;
+    }
+  },
+
+  async sendMessageStream(
+    content: string,
+    sessionId: string,
+    callbacks: StreamCallbacks
+  ): Promise<void> {
+    const { onChunk, onDone, onError } = callbacks;
+
+    try {
+      const response = await fetch(`${BASE_URL}/chat/messages/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, session_id: sessionId }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('ReadableStream not supported');
+      }
+
+      const decoder = new TextDecoder();
+      let fullContent = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') {
+            onDone(fullContent);
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error) {
+              onError(new Error(parsed.error));
+              return;
+            }
+            if (parsed.content) {
+              fullContent += parsed.content;
+              onChunk(parsed.content);
+            }
+          } catch {
+            // skip unparseable lines
+          }
+        }
+      }
+
+      onDone(fullContent);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
     }
   },
 

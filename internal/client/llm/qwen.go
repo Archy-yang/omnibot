@@ -136,3 +136,8 @@ func (p *QwenProvider) ChatCompletion(ctx context.Context, messages []ChatMessag
 
 	return qwenResp.Output.Text, nil
 }
+
+// StreamChatCompletion 通义千问暂不支持流式
+func (p *QwenProvider) StreamChatCompletion(ctx context.Context, messages []ChatMessage) (<-chan StreamChunk, error) {
+	return nil, ErrStreamingNotSupported
+}

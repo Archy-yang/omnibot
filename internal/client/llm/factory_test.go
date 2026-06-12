@@ -23,6 +23,10 @@ func (m *mockProvider) ChatCompletion(ctx context.Context, messages []ChatMessag
 	return m.response, nil
 }
 
+func (m *mockProvider) StreamChatCompletion(ctx context.Context, messages []ChatMessage) (<-chan StreamChunk, error) {
+	return nil, ErrStreamingNotSupported
+}
+
 func TestFactory_CreateClient_Success(t *testing.T) {
 	// 初始化日志
 	logger.Init(config.LoggerConfig{

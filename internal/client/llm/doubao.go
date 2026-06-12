@@ -135,3 +135,8 @@ func (p *DoubaoProvider) ChatCompletion(ctx context.Context, messages []ChatMess
 
 	return doubaoResp.Choices[0].Message.Content, nil
 }
+
+// StreamChatCompletion 豆包暂不支持流式
+func (p *DoubaoProvider) StreamChatCompletion(ctx context.Context, messages []ChatMessage) (<-chan StreamChunk, error) {
+	return nil, ErrStreamingNotSupported
+}

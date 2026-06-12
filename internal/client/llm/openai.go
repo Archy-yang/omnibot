@@ -1,11 +1,14 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"omnibot/pkg/logger"
@@ -70,6 +73,19 @@ type openAIError struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    string `json:"code"`
+}
+
+// openAIStreamChunk SSE 流式响应的单条数据
+type openAIStreamChunk struct {
+	Choices []openAIStreamChoice `json:"choices"`
+}
+
+type openAIStreamChoice struct {
+	Delta openAIDelta `json:"delta"`
+}
+
+type openAIDelta struct {
+	Content string `json:"content"`
 }
 
 // ChatCompletion 对话补全实现
@@ -148,6 +164,88 @@ func (p *OpenAIProvider) ChatCompletion(ctx context.Context, messages []ChatMess
 	)
 
 	return result, nil
+}
+
+// StreamChatCompletion 流式对话补全实现
+func (p *OpenAIProvider) StreamChatCompletion(ctx context.Context, messages []ChatMessage) (<-chan StreamChunk, error) {
+	oaiMessages := make([]openAIMessage, len(messages))
+	for i, msg := range messages {
+		oaiMessages[i] = openAIMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+
+	reqBody := openAIRequest{
+		Model:    p.model,
+		Messages: oaiMessages,
+		Stream:   true,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", p.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.apiKey))
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+
+	ch := make(chan StreamChunk, 10)
+
+	go func() {
+		defer resp.Body.Close()
+		defer close(ch)
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				ch <- StreamChunk{Error: ctx.Err(), Done: true}
+				return
+			default:
+			}
+
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				ch <- StreamChunk{Done: true}
+				return
+			}
+
+			var chunk openAIStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+
+			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+				ch <- StreamChunk{Content: chunk.Choices[0].Delta.Content}
+			}
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			ch <- StreamChunk{Error: err, Done: true}
+			return
+		}
+
+		ch <- StreamChunk{Done: true}
+	}()
+
+	return ch, nil
 }
 
 // parseResponse 解析响应并提取内容

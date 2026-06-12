@@ -122,6 +122,11 @@ func (c *Client) ChatCompletion(ctx context.Context, messages []ChatMessage) (st
 	return "", errors.New("all providers failed")
 }
 
+// StreamChatCompletion 流式对话补全，不支持降级
+func (c *Client) StreamChatCompletion(ctx context.Context, messages []ChatMessage) (<-chan StreamChunk, error) {
+	return c.defaultProvider.StreamChatCompletion(ctx, messages)
+}
+
 // createProvider 根据名称创建具体 provider
 func createProvider(name string, cfg config.ProviderConfig) (LLMProvider, error) {
 	// 解析超时
