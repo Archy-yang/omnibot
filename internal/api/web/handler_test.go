@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -114,6 +115,28 @@ func (m *mockLLMConfigService) GetFullConfigForUser(userID int64) (*FullLLMConfi
 		return nil, false, nil
 	}
 	return m.fullConfig, true, nil
+}
+
+func (m *mockLLMConfigService) ListProviderOptions() []serviceuser.ProviderOption {
+	return []serviceuser.ProviderOption{
+		{
+			Value:          "openai",
+			Label:          "OpenAI 官方",
+			Mode:           "openai_compatible",
+			Status:         "available",
+			DefaultBaseURL: "https://api.openai.com/v1",
+			DefaultModel:   "gpt-4o-mini",
+			Description:    "OpenAI 官方 Chat Completions API。",
+		},
+		{
+			Value:          "qianfan_native",
+			Label:          "百度千帆专用",
+			Mode:           "native",
+			Status:         "disabled",
+			Description:    "百度千帆原生接口。",
+			DisabledReason: "专用接口暂不可用，请使用 OpenAI 兼容模式。",
+		},
+	}
 }
 
 func TestHandleSendMessage(t *testing.T) {
@@ -320,6 +343,73 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+
+	t.Run("update openai compatible preset success", func(t *testing.T) {
+		userSvc := &mockUserService{userID: 42, created: false}
+		msgSvc := &mockMessageService{}
+		llmClient := &mockLLMClient{}
+		configSvc := &mockLLMConfigService{hasConfig: false, updateErr: nil}
+
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+		router := gin.New()
+		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
+
+		reqBody := map[string]interface{}{
+			"session_id":  "test-session-123",
+			"provider":    "aliyun_qwen",
+			"model":       "qwen-plus",
+			"api_key":     "sk-test-key-1234567890abcdefghijk",
+			"base_url":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			"temperature": 0.7,
+			"max_tokens":  2048,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req, _ := http.NewRequest("PUT", "/api/v1/user/llm-config", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "aliyun_qwen", configSvc.lastUpdate.Provider)
+		assert.Equal(t, "https://dashscope.aliyuncs.com/compatible-mode/v1", configSvc.lastUpdate.BaseURL)
+		assert.Equal(t, "qwen-plus", configSvc.lastUpdate.Model)
+	})
+
+	t.Run("native provider disabled error", func(t *testing.T) {
+		userSvc := &mockUserService{userID: 42, created: false}
+		msgSvc := &mockMessageService{}
+		llmClient := &mockLLMClient{}
+		configSvc := &mockLLMConfigService{
+			hasConfig: false,
+			updateErr: errors.New("专用接口暂不可用，请使用 OpenAI 兼容模式。"),
+		}
+
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+		router := gin.New()
+		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
+
+		reqBody := map[string]interface{}{
+			"session_id":  "test-session-123",
+			"provider":    "qwen_native",
+			"model":       "qwen-plus",
+			"api_key":     "sk-test-key-1234567890abcdefghijk",
+			"base_url":    "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+			"temperature": 0.7,
+			"max_tokens":  2048,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req, _ := http.NewRequest("PUT", "/api/v1/user/llm-config", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "专用接口暂不可用")
+	})
 }
 
 func TestHandleDeleteLLMConfig(t *testing.T) {
@@ -360,6 +450,76 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+// ========== LLM 提供商列表接口测试 ==========
+
+func TestHandleGetLLMProviders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("returns provider options with success/data wrapping", func(t *testing.T) {
+		userSvc := &mockUserService{userID: 42, created: false}
+		msgSvc := &mockMessageService{}
+		llmClient := &mockLLMClient{}
+		configSvc := &mockLLMConfigService{}
+
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+		router := gin.New()
+		router.GET("/api/v1/user/llm-providers", handler.HandleGetLLMProviders)
+
+		req, _ := http.NewRequest("GET", "/api/v1/user/llm-providers", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var resp struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Providers []map[string]interface{} `json:"providers"`
+			} `json:"data"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.True(t, resp.Success)
+		assert.Len(t, resp.Data.Providers, 2)
+
+		// Check available provider fields
+		available := resp.Data.Providers[0]
+		assert.Equal(t, "openai", available["value"])
+		assert.Equal(t, "OpenAI 官方", available["label"])
+		assert.Equal(t, "openai_compatible", available["mode"])
+		assert.Equal(t, "available", available["status"])
+		assert.Equal(t, "https://api.openai.com/v1", available["default_base_url"])
+		assert.Equal(t, "gpt-4o-mini", available["default_model"])
+		assert.Contains(t, available, "description")
+
+		// Check disabled provider fields
+		disabled := resp.Data.Providers[1]
+		assert.Equal(t, "qianfan_native", disabled["value"])
+		assert.Equal(t, "disabled", disabled["status"])
+		assert.NotEmpty(t, disabled["disabled_reason"])
+	})
+
+	t.Run("no session id required", func(t *testing.T) {
+		userSvc := &mockUserService{userID: 42, created: false}
+		msgSvc := &mockMessageService{}
+		llmClient := &mockLLMClient{}
+		configSvc := &mockLLMConfigService{}
+
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+
+		router := gin.New()
+		router.GET("/api/v1/user/llm-providers", handler.HandleGetLLMProviders)
+
+		// No session_id needed - provider list is public
+		req, _ := http.NewRequest("GET", "/api/v1/user/llm-providers", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 }
 

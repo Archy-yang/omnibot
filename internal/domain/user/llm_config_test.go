@@ -58,8 +58,8 @@ func TestLLMConfig_GetModel(t *testing.T) {
 		expected string
 	}{
 		{"自定义模型", &custom, custom},
-		{"nil 使用默认", nil, "gpt-3.5-turbo"},
-		{"空字符串使用默认", &empty, "gpt-3.5-turbo"},
+		{"nil 使用默认", nil, "gpt-4o-mini"},
+		{"空字符串使用默认", &empty, "gpt-4o-mini"},
 	}
 
 	for _, tt := range tests {

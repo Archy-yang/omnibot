@@ -7,7 +7,7 @@
 | 项 | 内容 |
 |----|------|
 | 适用版本 | v1.1+ |
-| 最后更新 | 2026-05-16 |
+| 最后更新 | 2026-06-14 |
 | 状态 | ✅ 已实现 |
 
 ---
@@ -229,7 +229,47 @@ ClearConfig(userID int64) error
 
 ---
 
-## 8. 下一步演进
+## 8. v1.4.1 OpenAI 兼容服务商预设
+
+Web 端 LLM 配置从 v1.4.1 开始按"调用模式"组织服务商。
+
+### 服务商分组
+
+| 分组 | 状态 | Provider 值 |
+|------|------|-------------|
+| OpenAI 兼容 | 可用 | `openai`、`baidu_qianfan`、`volcengine`、`aliyun_qwen`、`custom_openai_compatible` |
+| 专用接口 | 暂不可用 | `qianfan_native`、`qwen_native`、`doubao_native` |
+
+### 预设默认值
+
+| 服务商 | 默认 Base URL | 推荐模型 |
+|--------|---------------|----------|
+| OpenAI 官方 | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| 百度千帆 | `https://qianfan.baidubce.com/v2` | `ernie-4.0-turbo-8k` |
+| 字节火山 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6` |
+| 阿里千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 自定义 OpenAI-compatible | 由用户填写 | 由用户填写 |
+
+### 服务接口
+
+- `ListProviderOptions()` — 向 Web 端返回服务商预设列表，前端不再自行维护服务商列表。
+- 新增 `GET /api/v1/user/llm-providers` 端点。
+
+### 调用路由
+
+- 用户保存 OpenAI 兼容预设后，provider 写入 `user_llm_configs.provider`。
+- 聊天时通过 `NewClientFromUserConfig` 创建 `OpenAIProvider`，按 `{base_url}/chat/completions` 调用。
+- 专用接口 provider 在保存时返回"专用接口暂不可用，请使用 OpenAI 兼容模式。"，v1.4.x 后续版本考虑激活。
+- 已保存的 legacy `qwen` / `doubao` 配置继续通过专用 Provider 调用，向后兼容。
+
+### 安全
+
+- API Key 继续 AES-256-GCM 加密存储，接口只返回脱敏信息。
+- 配置错误提示不暴露 API Key、内部堆栈或完整用户消息。
+
+---
+
+## 9. 下一步演进
 
 - v1.4：支持多套配置保存和切换
 - v1.5：支持密钥轮换（在线更换加密密钥，旧数据自动重加密）

@@ -7,7 +7,7 @@
 | 项 | 内容 |
 |----|------|
 | 适用版本 | v1.3+ |
-| 最后更新 | 2026-06-13 |
+| 最后更新 | 2026-06-14 |
 | 状态 | ✅ 已实现 |
 
 ---
@@ -135,7 +135,7 @@ ChatCompletion 调用
 
 ```go
 type UserConfig struct {
-    Provider string // openai/qwen/doubao
+    Provider string // openai/qwen/doubao/baidu_qianfan/volcengine/aliyun_qwen/custom_openai_compatible
     APIKey   string
     BaseURL  string
     Model    string
@@ -143,6 +143,25 @@ type UserConfig struct {
 ```
 
 `NewClientFromUserConfig` 根据用户配置创建单 provider 客户端（无 fallback）。
+
+### v1.4.1 路由表
+
+新增 OpenAI 兼容服务商预设后，`provider` 字段的路由逻辑如下：
+
+| 用户配置 provider | 路由目标 | 说明 |
+|------------------|----------|------|
+| `openai` | OpenAIProvider | v1.4.1 新增预设 |
+| `baidu_qianfan` | OpenAIProvider | v1.4.1 新增预设 |
+| `volcengine` | OpenAIProvider | v1.4.1 新增预设 |
+| `aliyun_qwen` | OpenAIProvider | v1.4.1 新增预设 |
+| `custom_openai_compatible` | OpenAIProvider | v1.4.1 新增预设 |
+| `qwen` | QwenProvider | legacy 专用接口，向后兼容 |
+| `doubao` | DoubaoProvider | legacy 专用接口，向后兼容 |
+| 空（旧配置） | OpenAIProvider | 向后兼容 |
+
+所有 v1.4.1 新增的预设 ID（`openai`/`baidu_qianfan`/`volcengine`/`aliyun_qwen`/`custom_openai_compatible`）统一路由到 `OpenAIProvider`，因为它们在 Web 端都选择了"OpenAI-compatible 调用模式"。
+
+legacy `qwen` 和 `doubao` 保持原有专用 Provider 路由，保证旧用户配置的读取和调用兼容。
 
 优先级：用户自定义配置 > 系统默认配置。
 
@@ -192,6 +211,7 @@ type UserConfig struct {
 
 ## 8. 下一步演进
 
+- v1.4.1：已完成 — OpenAI 兼容服务商预设统一路由到 OpenAIProvider
 - v1.4：Doubao/Qwen 流式支持
 - v1.5：Token 计数 + 动态截断
 - v1.6：请求重试 + 指数退避

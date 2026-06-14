@@ -118,6 +118,41 @@ func TestClient_ChatCompletion_Fallback(t *testing.T) {
 	assert.Equal(t, "fallback response", resp)
 }
 
+func TestNewClientFromUserConfig_Routing(t *testing.T) {
+	logger.Init(config.LoggerConfig{
+		Level: "info",
+	})
+
+	tests := []struct {
+		name         string
+		provider     string
+		expectedType interface{}
+	}{
+		{"openai routes to OpenAIProvider", "openai", &OpenAIProvider{}},
+		{"baidu_qianfan routes to OpenAIProvider", "baidu_qianfan", &OpenAIProvider{}},
+		{"volcengine routes to OpenAIProvider", "volcengine", &OpenAIProvider{}},
+		{"aliyun_qwen routes to OpenAIProvider", "aliyun_qwen", &OpenAIProvider{}},
+		{"custom_openai_compatible routes to OpenAIProvider", "custom_openai_compatible", &OpenAIProvider{}},
+		{"qwen routes to QwenProvider", "qwen", &QwenProvider{}},
+		{"doubao routes to DoubaoProvider", "doubao", &DoubaoProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := UserConfig{
+				Provider: tt.provider,
+				APIKey:   "test-key",
+				BaseURL:  "https://example.com/v1",
+				Model:    "test-model",
+			}
+			client, err := NewClientFromUserConfig(cfg)
+			assert.NoError(t, err)
+			assert.NotNil(t, client)
+			assert.IsType(t, tt.expectedType, client.defaultProvider)
+		})
+	}
+}
+
 func TestClient_ChatCompletion_AllFailed(t *testing.T) {
 	// 初始化日志
 	logger.Init(config.LoggerConfig{

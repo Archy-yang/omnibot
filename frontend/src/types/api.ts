@@ -1,3 +1,5 @@
+import type { GetLLMProvidersResponse } from './llmProvider';
+
 /**
  * 通用 API 响应接口 - 与后端响应格式一致
  */
@@ -152,3 +154,8 @@ export interface UpdateMemoryResponse {
   message: string;
   memory: MemoryItem;
 }
+
+/**
+ * 用户 LLM 服务商列表响应类型
+ */
+export type UserLLMProvidersResponse = GetLLMProvidersResponse;

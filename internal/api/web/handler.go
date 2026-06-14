@@ -43,6 +43,7 @@ type LLMConfigService interface {
 	UpdateFullConfig(userID int64, req userLLM.UpdateConfigRequest) error
 	ClearConfig(userID int64) error
 	GetFullConfigForUser(userID int64) (*userLLM.FullLLMConfig, bool, error)
+	ListProviderOptions() []userLLM.ProviderOption
 }
 
 // MemoryService 长期记忆服务接口
@@ -650,6 +651,53 @@ func (h *Handler) HandleUpdateMemory(c *gin.Context) {
 }
 
 // ========== LLM 配置接口 ==========
+
+// LLMProviderOptionDTO 服务商预设选项 DTO
+type LLMProviderOptionDTO struct {
+	Value          string `json:"value"`
+	Label          string `json:"label"`
+	Mode           string `json:"mode"`
+	Status         string `json:"status"`
+	DefaultBaseURL string `json:"default_base_url,omitempty"`
+	DefaultModel   string `json:"default_model,omitempty"`
+	Description    string `json:"description,omitempty"`
+	DisabledReason string `json:"disabled_reason,omitempty"`
+}
+
+// GetLLMProvidersResponse 提供商列表响应
+type GetLLMProvidersResponse struct {
+	Providers []LLMProviderOptionDTO `json:"providers"`
+}
+
+func toProviderOptionDTO(opt userLLM.ProviderOption) LLMProviderOptionDTO {
+	return LLMProviderOptionDTO{
+		Value:          opt.Value,
+		Label:          opt.Label,
+		Mode:           opt.Mode,
+		Status:         opt.Status,
+		DefaultBaseURL: opt.DefaultBaseURL,
+		DefaultModel:   opt.DefaultModel,
+		Description:    opt.Description,
+		DisabledReason: opt.DisabledReason,
+	}
+}
+
+// HandleGetLLMProviders 获取所有可用的 LLM 提供商选项
+func (h *Handler) HandleGetLLMProviders(c *gin.Context) {
+	options := h.llmConfigService.ListProviderOptions()
+
+	items := make([]LLMProviderOptionDTO, len(options))
+	for i, opt := range options {
+		items[i] = toProviderOptionDTO(opt)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": GetLLMProvidersResponse{
+			Providers: items,
+		},
+	})
+}
 
 // GetLLMConfigRequest 获取配置请求
 type GetLLMConfigRequest struct {

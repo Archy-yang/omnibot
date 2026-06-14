@@ -119,6 +119,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 用户 LLM 配置路由
 	userAPIGroup := r.Group("/api/v1/user")
 	{
+		userAPIGroup.GET("/llm-providers", webHandler.HandleGetLLMProviders)
 		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)
 		userAPIGroup.PUT("/llm-config", webHandler.HandleUpdateLLMConfig)
 		userAPIGroup.DELETE("/llm-config", webHandler.HandleDeleteLLMConfig)

@@ -22,7 +22,7 @@ type Client struct {
 
 // UserConfig 用户级 LLM 配置
 type UserConfig struct {
-	Provider string // 服务商：openai/anthropic/azure/qwen/doubao
+	Provider string // 服务商：openai/baidu_qianfan/volcengine/aliyun_qwen/custom_openai_compatible；legacy: qwen/doubao
 	APIKey   string
 	BaseURL  string
 	Model    string
@@ -75,9 +75,9 @@ func NewClientFromUserConfig(cfg UserConfig) (*Client, error) {
 	switch strings.ToLower(cfg.Provider) {
 	case "qwen", "tongyi", "alibabacloud":
 		provider = NewQwenProvider(cfg.APIKey, cfg.Model, timeout)
-	case "doubao", "bytedance", "volcengine":
+	case "doubao", "bytedance", "volcengine_native":
 		provider = NewDoubaoProvider(cfg.APIKey, cfg.Model, timeout)
-	case "openai", "azure", "anthropic":
+	case "openai", "azure", "anthropic", "baidu_qianfan", "volcengine", "aliyun_qwen", "custom_openai_compatible":
 		provider = NewOpenAIProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, timeout)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", cfg.Provider)

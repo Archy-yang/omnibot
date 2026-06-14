@@ -8,7 +8,7 @@ import (
 type LLMConfig struct {
 	ID          int64      `gorm:"primaryKey;autoIncrement"`
 	UserID      int64      `gorm:"not null;uniqueIndex"`
-	Provider    string     `gorm:"size:64;not null;default:'openai'"` // 服务商：openai/anthropic/azure/qwen/doubao
+	Provider    string     `gorm:"size:64;not null;default:'openai'"` // 服务商：openai/anthropic/azure/qwen/doubao/baidu_qianfan/volcengine/aliyun_qwen/custom_openai_compatible
 	APIKey      string     `gorm:"size:512;not null"`                 // 加密后存储
 	BaseURL     *string    `gorm:"size:256"`
 	Model       *string    `gorm:"size:128"`
@@ -48,12 +48,14 @@ func (c *LLMConfig) getDefaultBaseURL() string {
 	switch c.Provider {
 	case "anthropic":
 		return "https://api.anthropic.com/v1"
-	case "qwen":
+	case "qwen", "aliyun_qwen":
 		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	case "doubao":
+	case "doubao", "volcengine":
 		return "https://ark.cn-beijing.volces.com/api/v3"
-	case "azure":
-		return "" // Azure 需要用户自定义地址
+	case "baidu_qianfan":
+		return "https://qianfan.baidubce.com/v2"
+	case "azure", "custom_openai_compatible":
+		return "" // 需要用户自定义地址
 	default:
 		return "https://api.openai.com/v1"
 	}
@@ -74,12 +76,18 @@ func (c *LLMConfig) getDefaultModel() string {
 		return "claude-3-sonnet-20240229"
 	case "qwen":
 		return "qwen-turbo"
+	case "aliyun_qwen":
+		return "qwen-plus"
 	case "doubao":
 		return "doubao-pro-32k"
-	case "azure":
-		return "gpt-3.5-turbo"
+	case "volcengine":
+		return "doubao-seed-1-6"
+	case "baidu_qianfan":
+		return "ernie-4.0-turbo-8k"
+	case "azure", "custom_openai_compatible":
+		return "" // 需要用户自定义
 	default:
-		return "gpt-3.5-turbo"
+		return "gpt-4o-mini"
 	}
 }
 

@@ -1,5 +1,6 @@
 import { request } from '../utils/request';
 import type { ApiResponse, Config, UpdateConfigRequest, UserLLMConfigResponse, UpdateUserLLMConfigRequest } from '../types/api';
+import type { UserLLMProvidersResponse } from '../types/api';
 
 export const configService = {
   async getConfig(): Promise<Config> {
@@ -51,6 +52,18 @@ export const configService = {
       });
     } catch (error) {
       console.error('Failed to delete user LLM config:', error);
+      throw error;
+    }
+  },
+
+  // ========== LLM 服务商预设配置接口 ==========
+
+  async getUserLLMProviders(): Promise<UserLLMProvidersResponse> {
+    try {
+      const response = await request.get<ApiResponse<UserLLMProvidersResponse>>('/user/llm-providers');
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to get LLM providers:', error);
       throw error;
     }
   },

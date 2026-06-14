@@ -4,6 +4,29 @@
 
 ---
 
+## [v1.4.1] - 2026-06-14
+
+### ✨ 新增功能
+
+- **OpenAI 兼容服务商预设配置**
+  - Web 设置面板新增 OpenAI 兼容服务商预设：OpenAI 官方、百度千帆、字节火山、阿里千问、自定义 OpenAI-compatible
+  - 预设自动带出默认 Base URL 和推荐模型，用户仍可手动覆盖
+  - 专用接口保留展示并标注"暂不可用"
+  - 用户保存后的新预设统一走 OpenAI-compatible 调用路由
+
+### 🔧 架构改进
+
+- 新增后端 provider preset registry，前端通过 API 获取服务商选项，减少前后端硬编码不一致
+- 用户级新 provider preset ID 统一路由到 `OpenAIProvider`
+- 保留 legacy `qwen` / `doubao` 用户配置读取和调用兼容
+
+### 🔐 安全
+
+- API Key 继续 AES-256-GCM 加密存储，接口只返回脱敏信息
+- 配置错误提示不暴露 API Key、内部堆栈或完整用户消息
+
+---
+
 ## [v1.3.0] - 2026-06-13
 
 ### ✨ 新增功能

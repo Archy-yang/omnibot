@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { useToast } from '@/composables/useToast';
 import type { SettingsPanelProps, SettingsPanelEmits } from '@/types/components';
 import type { LLMConfig } from '@/types/api';
+import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
 import MemorySection from '@/components/functional/MemorySection.vue';
 
@@ -15,9 +16,9 @@ const { success, error } = useToast();
 // Local form state
 const localConfig = ref<LLMConfig>({
   provider: 'openai',
-  model: 'gpt-3.5-turbo',
+  model: 'gpt-4o-mini',
   apiKey: '',
-  baseUrl: '',
+  baseUrl: 'https://api.openai.com/v1',
   temperature: 0.7,
   maxTokens: 2048,
 });
@@ -37,46 +38,84 @@ watch(
   { immediate: true, deep: true }
 );
 
+// Load provider options and config when panel opens
+watch(
+  () => props.visible,
+  (visible) => {
+    if (visible) {
+      settingsStore.loadProviderOptions();
+      settingsStore.loadConfig();
+    }
+  },
+  { immediate: false }
+);
+
 const themeOptions = [
   { label: '浅色', value: 'light' },
   { label: '深色', value: 'dark' },
 ];
 
-const providerOptions = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Azure OpenAI', value: 'azure' },
-  { label: '通义千问', value: 'qwen' },
-  { label: '豆包', value: 'doubao' },
-];
+// Computed provider groups
 
-const modelOptions: Record<string, { label: string; value: string }[]> = {
-  openai: [
-    { label: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' },
-    { label: 'GPT-4', value: 'gpt-4' },
-    { label: 'GPT-4 Turbo', value: 'gpt-4-turbo' },
-  ],
-  anthropic: [
-    { label: 'Claude 3 Opus', value: 'claude-3-opus' },
-    { label: 'Claude 3 Sonnet', value: 'claude-3-sonnet' },
-    { label: 'Claude 3 Haiku', value: 'claude-3-haiku' },
-  ],
-  azure: [
-    { label: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' },
-    { label: 'GPT-4', value: 'gpt-4' },
-  ],
-  qwen: [
-    { label: 'Qwen-Turbo', value: 'qwen-turbo' },
-    { label: 'Qwen-Plus', value: 'qwen-plus' },
-    { label: 'Qwen-Max', value: 'qwen-max' },
-  ],
-  doubao: [
-    { label: 'Doubao-Pro', value: 'doubao-pro' },
-    { label: 'Doubao-Lite', value: 'doubao-lite' },
-  ],
+const availableProviders = computed<{ label: string; value: string; disabled?: boolean }[]>(() => {
+  return settingsStore.providerOptions
+    .filter((p) => p.status === 'available')
+    .map((p) => ({ label: p.label, value: p.value }));
+});
+
+const disabledProviders = computed<{ label: string; value: string; disabled?: boolean }[]>(() => {
+  return settingsStore.providerOptions
+    .filter((p) => p.status === 'disabled')
+    .map((p) => ({ label: p.label, value: p.value, disabled: true }));
+});
+
+const selectProviderOptions = computed(() => {
+  const groups: { label: string; children: { label: string; value: string; disabled?: boolean }[] }[] = [];
+  const avail = availableProviders.value;
+  if (avail.length > 0) {
+    groups.push({ label: 'OpenAI 兼容（可用）', children: avail });
+  }
+  const disabled = disabledProviders.value;
+  if (disabled.length > 0) {
+    groups.push({ label: '专用接口（暂不可用）', children: disabled });
+  }
+  return groups;
+});
+
+const selectedProvider = computed<LLMProviderOption | undefined>(() => {
+  return settingsStore.providerOptions.find((p) => p.value === localConfig.value.provider);
+});
+
+const isNativeProviderSelected = computed<boolean>(() => {
+  return selectedProvider.value?.mode === 'native';
+});
+
+const providerHelpText = computed<string>(() => {
+  if (!selectedProvider.value) return '';
+  return selectedProvider.value.description;
+});
+
+const handleProviderChange = (providerValue: string) => {
+  const option = settingsStore.providerOptions.find((p) => p.value === providerValue);
+  if (!option) return;
+
+  if (option.status === 'disabled') {
+    error(option.disabled_reason || '该服务商暂不可用');
+    return;
+  }
+
+  localConfig.value.provider = option.value;
+  localConfig.value.baseUrl = option.default_base_url;
+  localConfig.value.model = option.default_model;
 };
 
 const handleSave = async () => {
+  if (isNativeProviderSelected.value) {
+    const reason = selectedProvider.value?.disabled_reason || '该专用接口暂不可用';
+    error(reason);
+    return;
+  }
+
   isSaving.value = true;
   try {
     await settingsStore.updateLLMConfig(localConfig.value);
@@ -154,14 +193,19 @@ const handleCancel = () => {
       <NFormItem label="服务商">
         <NSelect
           v-model:value="localConfig.provider"
-          :options="providerOptions"
+          :options="selectProviderOptions"
+          @update:value="handleProviderChange"
         />
       </NFormItem>
 
+      <NFormItem v-if="providerHelpText" label=" ">
+        <span class="text-sm text-gray-500">{{ providerHelpText }}</span>
+      </NFormItem>
+
       <NFormItem label="模型">
-        <NSelect
+        <NInput
           v-model:value="localConfig.model"
-          :options="modelOptions[localConfig.provider] || []"
+          placeholder="输入模型名称，如 gpt-4o-mini"
         />
       </NFormItem>
 
@@ -177,7 +221,7 @@ const handleCancel = () => {
       <NFormItem label="Base URL">
         <NInput
           v-model:value="localConfig.baseUrl"
-          placeholder="https://api.example.com/v1"
+          placeholder="https://api.openai.com/v1"
         />
       </NFormItem>
 
@@ -209,7 +253,14 @@ const handleCancel = () => {
     <template #footer>
       <NSpace justify="end">
         <NButton @click="handleCancel">取消</NButton>
-        <NButton type="primary" @click="handleSave" :loading="isSaving">保存</NButton>
+        <NButton
+          type="primary"
+          @click="handleSave"
+          :loading="isSaving"
+          :disabled="isNativeProviderSelected"
+        >
+          保存
+        </NButton>
       </NSpace>
     </template>
   </NModal>

@@ -20,6 +20,7 @@ type LLMConfigService interface {
 	UpdateFullConfig(userID int64, config UpdateConfigRequest) error
 	GetConfigView(userID int64) (*LLMConfigView, error)
 	ClearConfig(userID int64) error
+	ListProviderOptions() []ProviderOption
 }
 
 // LLMConfigView 配置视图，用于前端展示
@@ -62,6 +63,10 @@ type GormLLMConfigService struct {
 // NewLLMConfigService 创建服务
 func NewLLMConfigService(repo repo.LLMConfigRepository) LLMConfigService {
 	return &GormLLMConfigService{repo: repo}
+}
+
+func (s *GormLLMConfigService) ListProviderOptions() []ProviderOption {
+	return listProviderOptions()
 }
 
 func (s *GormLLMConfigService) GetConfigForUser(userID int64) (string, string, string, bool, error) {
@@ -254,15 +259,12 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	}
 
 	// 验证服务商
-	validProviders := map[string]bool{
-		"openai":    true,
-		"anthropic": true,
-		"azure":     true,
-		"qwen":      true,
-		"doubao":    true,
-	}
-	if !validProviders[req.Provider] {
+	providerOption, knownProvider := findProviderOption(req.Provider)
+	if !knownProvider && !isLegacyProvider(req.Provider) {
 		return errors.New("不支持的服务商")
+	}
+	if knownProvider && providerOption.Status == ProviderStatusDisabled {
+		return errors.New(nativeProviderDisabledReason)
 	}
 
 	// 验证温度范围
@@ -279,6 +281,16 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	if req.BaseURL != "" {
 		if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 			return errors.New("API 地址必须以 http:// 或 https:// 开头")
+		}
+	}
+
+	// 自定义 OpenAI-compatible 必须提供 BaseURL 和 Model
+	if req.Provider == "custom_openai_compatible" {
+		if req.BaseURL == "" {
+			return errors.New("请输入 API 地址")
+		}
+		if req.Model == "" {
+			return errors.New("请输入模型名称")
 		}
 	}
 
@@ -314,11 +326,19 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		if req.BaseURL != "" {
-			cfg.BaseURL = &req.BaseURL
+		baseURL := req.BaseURL
+		if baseURL == "" && knownProvider {
+			baseURL = providerOption.DefaultBaseURL
 		}
-		if req.Model != "" {
-			cfg.Model = &req.Model
+		if baseURL != "" {
+			cfg.BaseURL = &baseURL
+		}
+		model := req.Model
+		if model == "" && knownProvider {
+			model = providerOption.DefaultModel
+		}
+		if model != "" {
+			cfg.Model = &model
 		}
 		temp := req.Temperature
 		cfg.Temperature = &temp
@@ -333,11 +353,19 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	if req.APIKey != "" {
 		cfg.APIKey = encryptedKey
 	}
-	if req.BaseURL != "" {
-		cfg.BaseURL = &req.BaseURL
+	baseURL := req.BaseURL
+	if baseURL == "" && knownProvider {
+		baseURL = providerOption.DefaultBaseURL
 	}
-	if req.Model != "" {
-		cfg.Model = &req.Model
+	if baseURL != "" {
+		cfg.BaseURL = &baseURL
+	}
+	model := req.Model
+	if model == "" && knownProvider {
+		model = providerOption.DefaultModel
+	}
+	if model != "" {
+		cfg.Model = &model
 	}
 	temp := req.Temperature
 	cfg.Temperature = &temp

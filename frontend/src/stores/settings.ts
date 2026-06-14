@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { LLMConfig } from '../types/api';
+import type { LLMProviderOption } from '../types/llmProvider';
 import { configService } from '../services/config';
 import { useSession } from '../composables/useSession';
 
@@ -15,6 +16,7 @@ export const useSettingsStore = defineStore(
     const showSettingsPanel = ref<boolean>(false);
     const configStatus = ref<string>('使用系统默认模型');
     const hasUserConfig = ref<boolean>(false);
+    const providerOptions = ref<LLMProviderOption[]>([]);
 
     // Actions
     const toggleTheme = (): void => {
@@ -70,11 +72,34 @@ export const useSettingsStore = defineStore(
         // 加载失败时使用默认配置
         llmConfig.value = {
           provider: 'openai',
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o-mini',
+          baseUrl: 'https://api.openai.com/v1',
           temperature: 0.7,
           maxTokens: 2048,
         };
         throw error;
+      }
+    };
+
+    const loadProviderOptions = async (): Promise<void> => {
+      try {
+        const data = await configService.getUserLLMProviders();
+        providerOptions.value = data.providers;
+      } catch (error) {
+        console.error('Failed to load provider options:', error);
+        // 加载失败时使用 fallback 默认值
+        providerOptions.value = [
+          {
+            value: 'openai',
+            label: 'OpenAI',
+            mode: 'openai_compatible',
+            status: 'available',
+            default_base_url: 'https://api.openai.com/v1',
+            default_model: 'gpt-4o-mini',
+            description: 'OpenAI 兼容服务',
+            disabled_reason: '',
+          },
+        ];
       }
     };
 
@@ -86,7 +111,8 @@ export const useSettingsStore = defineStore(
         // 清除本地配置但保留默认值
         llmConfig.value = {
           provider: 'openai',
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o-mini',
+          baseUrl: 'https://api.openai.com/v1',
           temperature: 0.7,
           maxTokens: 2048,
         };
@@ -107,11 +133,13 @@ export const useSettingsStore = defineStore(
       showSettingsPanel,
       configStatus,
       hasUserConfig,
+      providerOptions,
       // Methods
       toggleTheme,
       toggleSettingsPanel,
       updateLLMConfig,
       loadConfig,
+      loadProviderOptions,
       clearUserConfig,
       setTheme,
     };
