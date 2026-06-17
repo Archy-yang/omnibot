@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/conversation"
 	domainuser "omnibot/internal/domain/user"
 	serviceuser "omnibot/internal/service/user"
 )
@@ -36,6 +39,10 @@ func (m *mockUserService) GetOrCreateByChannel(channelType, channelUserID string
 type mockMessageService struct {
 	savedUserContent     string
 	savedAssistantContent string
+	listMessages         []*conversation.Message
+	listErr              error
+	listCalledLimit      int
+	listCalledBefore     int64
 }
 
 func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
@@ -52,6 +59,12 @@ func (m *mockMessageService) BuildContextMessages(ctx context.Context, userID in
 	return []llm.ChatMessage{
 		{Role: "user", Content: currentContent},
 	}, nil
+}
+
+func (m *mockMessageService) ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error) {
+	m.listCalledLimit = limit
+	m.listCalledBefore = before
+	return m.listMessages, m.listErr
 }
 
 type mockLLMClient struct {
@@ -148,7 +161,7 @@ func TestHandleSendMessage(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
@@ -182,7 +195,7 @@ func TestHandleGetHistory(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	// Test request
 	router := gin.New()
@@ -194,6 +207,108 @@ func TestHandleGetHistory(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "messages")
+}
+
+// TestHandleGetHistory_ReturnsStoredMessages 回归测试：HandleGetHistory 必须真正
+// 通过 MessageService.ListByUser 把库里的消息读出来，按时间正序返回；多取一条用于
+// 判断 has_more 翻页边界。这是为了防止再次出现「Handler 直接返回空数组」的桩实现。
+func TestHandleGetHistory_ReturnsStoredMessages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now()
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{
+		listMessages: []*conversation.Message{
+			{ID: 10, UserID: 42, Role: conversation.RoleUser, Content: "你好", CreatedAt: now.Add(-2 * time.Minute)},
+			{ID: 11, UserID: 42, Role: conversation.RoleAssistant, Content: "你好，有什么可以帮你？", CreatedAt: now.Add(-1 * time.Minute)},
+		},
+	}
+	llmClient := &mockLLMClient{}
+	configSvc := &mockLLMConfigService{hasConfig: false}
+
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
+	router := gin.New()
+	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
+
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=test-session-123&limit=50", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	// fetchLimit 应为 limit + 1，用来判断是否还有更多历史
+	assert.Equal(t, 51, msgSvc.listCalledLimit)
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Messages []MessageDTO `json:"messages"`
+			HasMore  bool         `json:"has_more"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	assert.False(t, resp.Data.HasMore)
+	require.Len(t, resp.Data.Messages, 2)
+	assert.Equal(t, int64(10), resp.Data.Messages[0].ID)
+	assert.Equal(t, "你好", resp.Data.Messages[0].Content)
+	assert.Equal(t, "user", resp.Data.Messages[0].Role)
+	assert.Equal(t, int64(11), resp.Data.Messages[1].ID)
+	assert.Equal(t, "assistant", resp.Data.Messages[1].Role)
+}
+
+// TestHandleGetHistory_HasMore 验证当 repo 返回的条数超过 limit 时，
+// 多取的那条会被丢弃，且 has_more=true 通知前端可以继续翻页。
+func TestHandleGetHistory_HasMore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now()
+	// 构造 3 条消息但请求 limit=2，模拟「还有更早的历史」场景
+	msgs := []*conversation.Message{
+		{ID: 100, UserID: 42, Role: conversation.RoleUser, Content: "最旧", CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: 101, UserID: 42, Role: conversation.RoleAssistant, Content: "中间", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 102, UserID: 42, Role: conversation.RoleUser, Content: "最新", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{listMessages: msgs}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, nil)
+
+	router := gin.New()
+	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=s&limit=2", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Messages []MessageDTO `json:"messages"`
+			HasMore  bool         `json:"has_more"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Data.HasMore)
+	require.Len(t, resp.Data.Messages, 2)
+	// 多取的「最旧」(ID=100) 应该被去掉，只返回最近 2 条
+	assert.Equal(t, int64(101), resp.Data.Messages[0].ID)
+	assert.Equal(t, int64(102), resp.Data.Messages[1].ID)
+}
+
+// TestHandleGetHistory_NewUserReturnsEmpty 新用户没有历史，直接返回空数组。
+func TestHandleGetHistory_NewUserReturnsEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	userSvc := &mockUserService{userID: 42, created: true} // 新建用户
+	msgSvc := &mockMessageService{}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, nil)
+
+	router := gin.New()
+	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=brand-new", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	// 新用户路径不应触碰消息服务
+	assert.Equal(t, 0, msgSvc.listCalledLimit)
 }
 
 // ========== LLM 配置接口测试 ==========
@@ -219,7 +334,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 			},
 		}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
@@ -240,7 +355,7 @@ func TestHandleGetLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
@@ -262,7 +377,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false, updateErr: nil}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -298,7 +413,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 			updateErr: &ValidationError{Message: "API Key 长度不正确"},
 		}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -325,7 +440,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -350,7 +465,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: false, updateErr: nil}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -386,7 +501,7 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 			updateErr: errors.New("专用接口暂不可用，请使用 OpenAI 兼容模式。"),
 		}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
@@ -421,7 +536,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: true, clearErr: nil}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
@@ -440,7 +555,7 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{hasConfig: true}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
@@ -464,7 +579,7 @@ func TestHandleGetLLMProviders(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-providers", handler.HandleGetLLMProviders)
@@ -509,7 +624,7 @@ func TestHandleGetLLMProviders(t *testing.T) {
 		llmClient := &mockLLMClient{}
 		configSvc := &mockLLMConfigService{}
 
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
 		router.GET("/api/v1/user/llm-providers", handler.HandleGetLLMProviders)
@@ -535,7 +650,7 @@ func TestHandleSendMessage_WithoutCustomLLMConfig(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
@@ -575,7 +690,7 @@ func TestHandleSendMessageStream_Success(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)
@@ -608,7 +723,7 @@ func TestHandleSendMessageStream_InvalidBody(t *testing.T) {
 	llmClient := &mockLLMClient{}
 	configSvc := &mockLLMConfigService{hasConfig: false}
 
-	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{})
+	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)

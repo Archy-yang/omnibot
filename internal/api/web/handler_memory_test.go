@@ -105,6 +105,7 @@ func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserSe
 		&mockLLMClient{},
 		&mockLLMConfigService{},
 		memorySvc,
+		nil,
 	)
 
 	router := gin.New()

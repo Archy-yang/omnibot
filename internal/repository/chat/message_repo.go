@@ -10,6 +10,7 @@ import (
 type MessageRepository interface {
 	Create(msg *conversation.Message) error
 	GetRecentByUserID(userID int64, limit int) ([]*conversation.Message, error)
+	GetByUserIDBefore(userID int64, beforeID int64, limit int) ([]*conversation.Message, error)
 	ExistsByMsgID(msgID string) (bool, error)
 }
 
@@ -42,6 +43,28 @@ func (r *messageRepository) GetRecentByUserID(userID int64, limit int) ([]*conve
 	}
 
 	// 反转数组为正序
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
+// GetByUserIDBefore 获取用户在指定 ID 之前的最近 limit 条消息，按时间正序排列（旧的在前）。
+// 用于历史消息翻页：前端把已加载列表中最旧一条的 ID 作为 beforeID 传入，逐步往前拉。
+func (r *messageRepository) GetByUserIDBefore(userID int64, beforeID int64, limit int) ([]*conversation.Message, error) {
+	var messages []*conversation.Message
+
+	err := r.db.Where("user_id = ? AND id < ?", userID, beforeID).
+		Order("id DESC").
+		Limit(limit).
+		Find(&messages).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 反转为正序
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}

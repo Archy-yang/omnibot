@@ -27,16 +27,21 @@ func (Message) TableName() string {
 	return "messages"
 }
 
-// NewUserMessage 创建用户消息
+// NewUserMessage 创建用户消息。
+// msgID 为空字符串时（如 Web 渠道），存储为 NULL，避免在 msg_id 唯一索引上发生
+// 第二条空串冲突；非空时（如微信渠道）存储具体值用于消息去重。
 func NewUserMessage(userID int64, content string, msgID string) *Message {
 	now := time.Now()
-	return &Message{
+	msg := &Message{
 		UserID:    userID,
 		Role:      RoleUser,
 		Content:   content,
-		MsgID:     &msgID,
 		CreatedAt: now,
 	}
+	if msgID != "" {
+		msg.MsgID = &msgID
+	}
+	return msg
 }
 
 // NewAssistantMessage 创建助手消息

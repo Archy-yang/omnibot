@@ -37,6 +37,10 @@ type MessageService interface {
 
 	// SaveAssistantMessage 保存助手消息
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
+
+	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
+	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
+	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
 // LongTermMemoryProvider 长期记忆上下文提供者
@@ -123,18 +127,21 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 
 // SaveUserMessage 保存用户消息
 func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
-	// 去重检查
-	exists, err := s.msgRepo.ExistsByMsgID(msgID)
-	if err != nil {
-		logger.ErrorWithFields("Failed to check duplicate message",
-			zap.Int64("user_id", userID),
-			zap.String("msg_id", msgID),
-			zap.Error(err),
-		)
-		// 去重检查失败时，继续执行保存（宁可重复也不要丢消息）
-	}
-	if exists {
-		return ErrDuplicateMessage
+	// 仅当传入了非空 msgID（如微信渠道）时才做去重检查；
+	// Web 渠道无 msgID，不应触发去重，否则第二条消息开始会被误判为重复。
+	if msgID != "" {
+		exists, err := s.msgRepo.ExistsByMsgID(msgID)
+		if err != nil {
+			logger.ErrorWithFields("Failed to check duplicate message",
+				zap.Int64("user_id", userID),
+				zap.String("msg_id", msgID),
+				zap.Error(err),
+			)
+			// 去重检查失败时，继续执行保存（宁可重复也不要丢消息）
+		}
+		if exists {
+			return ErrDuplicateMessage
+		}
 	}
 
 	msg := conversation.NewUserMessage(userID, content, msgID)
@@ -145,4 +152,19 @@ func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, cont
 func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
 	msg := conversation.NewAssistantMessage(userID, content)
 	return s.msgRepo.Create(msg)
+}
+
+// ListByUser 获取用户的历史消息（按时间正序）。
+// limit <= 0 时使用默认值 50，并强制上限 200，避免一次拉太多导致 DB 压力或前端渲染卡顿。
+func (s *messageService) ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if before > 0 {
+		return s.msgRepo.GetByUserIDBefore(userID, before, limit)
+	}
+	return s.msgRepo.GetRecentByUserID(userID, limit)
 }

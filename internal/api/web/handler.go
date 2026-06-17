@@ -11,12 +11,16 @@ import (
 	"time"
 
 	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	domainuser "omnibot/internal/domain/user"
+	agentpkg "omnibot/internal/service/agent"
 	memorysvc "omnibot/internal/service/memory"
 	userLLM "omnibot/internal/service/user"
+	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // UserService 用户服务接口
@@ -29,6 +33,7 @@ type MessageService interface {
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
+	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
 // LLMClient 大模型客户端接口
@@ -55,6 +60,12 @@ type MemoryService interface {
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 }
 
+// AgentService Agent 服务接口
+type AgentService interface {
+	Run(ctx context.Context, userID int64, conversation []map[string]interface{}, customLLMClient ...agentpkg.LLMClient) (*agentpkg.AgentResult, error)
+	DefaultLLMClient() agentpkg.LLMClient
+}
+
 // Handler Web 聊天 API 处理器
 type Handler struct {
 	userService      UserService
@@ -62,6 +73,7 @@ type Handler struct {
 	llmClient        LLMClient
 	llmConfigService LLMConfigService
 	memoryService    MemoryService
+	agentService     AgentService
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -71,6 +83,7 @@ func NewHandler(
 	llmClient LLMClient,
 	llmConfigService LLMConfigService,
 	memoryService MemoryService,
+	agentService AgentService,
 ) *Handler {
 	return &Handler{
 		userService:      userService,
@@ -78,6 +91,7 @@ func NewHandler(
 		llmClient:        llmClient,
 		llmConfigService: llmConfigService,
 		memoryService:    memoryService,
+		agentService:     agentService,
 	}
 }
 
@@ -133,8 +147,8 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 		return
 	}
 
-	// Get user by session ID
-	_, _, isNew, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	// 获取或创建用户
+	user, _, isNew, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -143,7 +157,7 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 		return
 	}
 
-	// New user has no history
+	// 新用户没有历史，直接返回空
 	if isNew {
 		resp := GetHistoryResponse{}
 		resp.Success = true
@@ -153,13 +167,46 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 		return
 	}
 
-	// Get messages from message service
-	// Note: MessageRepository.GetRecentByUser returns domain messages
-	// For now, return empty array - full implementation with actual message loading can be added later
+	// 多取一条用于判断是否还有更多历史，前端按需翻页
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	fetchLimit := limit + 1
+
+	messages, err := h.messageService.ListByUser(c.Request.Context(), user.GetID(), fetchLimit, req.Before)
+	if err != nil {
+		logger.ErrorWithFields("Failed to load chat history",
+			zap.Int64("user_id", user.GetID()),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to load chat history",
+		})
+		return
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		// messages 是正序（旧→新），多取的那条是「更旧」的，位于数组头部，去掉它
+		messages = messages[len(messages)-limit:]
+	}
+
+	items := make([]MessageDTO, 0, len(messages))
+	for _, msg := range messages {
+		items = append(items, MessageDTO{
+			ID:        msg.ID,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			CreatedAt: msg.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
 	resp := GetHistoryResponse{}
 	resp.Success = true
-	resp.Data.Messages = []MessageDTO{}
-	resp.Data.HasMore = false
+	resp.Data.Messages = items
+	resp.Data.HasMore = hasMore
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -187,9 +234,11 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	userID := user.GetID()
 
 	// 保存用户消息
-	err = h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
-	if err != nil {
-		// 记录错误但继续 - 消息保存失败不影响请求
+	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+		logger.ErrorWithFields("Failed to save user message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
 	}
 
 	// 构建上下文消息列表
@@ -230,9 +279,11 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	}
 
 	// 保存 AI 响应
-	err = h.messageService.SaveAssistantMessage(c.Request.Context(), userID, response)
-	if err != nil {
-		// 记录错误但继续
+	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, response); err != nil {
+		logger.ErrorWithFields("Failed to save assistant message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
 	}
 
 	// 返回响应
@@ -268,7 +319,12 @@ func (h *Handler) HandleSendMessageStream(c *gin.Context) {
 
 	userID := user.GetID()
 
-	h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+		logger.ErrorWithFields("Failed to save user message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
 
 	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
 	if err != nil {
@@ -334,7 +390,174 @@ func (h *Handler) HandleSendMessageStream(c *gin.Context) {
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	h.messageService.SaveAssistantMessage(c.Request.Context(), userID, fullContent.String())
+	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, fullContent.String()); err != nil {
+		logger.ErrorWithFields("Failed to save assistant message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
+}
+
+// HandleSendMessageAgent 处理 Agent 消息
+func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
+	var req SendMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request body"})
+		return
+	}
+	if h.agentService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Agent service unavailable"})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to get or create user"})
+		return
+	}
+	userID := user.GetID()
+
+	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+		logger.ErrorWithFields("Failed to save user message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
+	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
+	if err != nil {
+		ctxMessages = []llm.ChatMessage{{Role: "user", Content: req.Content}}
+	}
+
+	// 选择 LLM 客户端：优先使用用户自定义配置，和普通聊天逻辑保持一致
+	activeLLMClient := h.agentService.DefaultLLMClient()
+	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
+	if err == nil && hasCustomConfig {
+		// 使用用户自定义配置创建 Agent LLM 客户端，所有服务商均兼容 OpenAI 协议
+		timeout := 30 * time.Second
+		customAgentClient := agentpkg.NewOpenAILLMClient(
+			userConfig.APIKey,
+			userConfig.BaseURL,
+			userConfig.Model,
+			timeout,
+		)
+		activeLLMClient = customAgentClient
+	}
+
+	result, err := h.agentService.Run(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeLLMClient)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to generate response"})
+		return
+	}
+
+	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, result.FinalResponse); err != nil {
+		logger.ErrorWithFields("Failed to save assistant message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
+
+	resp := SendMessageResponse{}
+	resp.Success = true
+	resp.Data.ID = time.Now().Unix()
+	resp.Data.Role = "assistant"
+	resp.Data.Content = result.FinalResponse
+	resp.Data.CreatedAt = time.Now().Format(time.RFC3339)
+	c.JSON(http.StatusOK, resp)
+}
+
+// HandleSendMessageAgentStream SSE 流式 Agent 对话
+func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
+	var req SendMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request body"})
+		return
+	}
+	if h.agentService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Agent service unavailable"})
+		return
+	}
+
+	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to get or create user"})
+		return
+	}
+	userID := user.GetID()
+
+	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+		logger.ErrorWithFields("Failed to save user message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
+	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
+	if err != nil {
+		ctxMessages = []llm.ChatMessage{{Role: "user", Content: req.Content}}
+	}
+
+	// 选择 LLM 客户端：优先使用用户自定义配置，和普通聊天逻辑保持一致
+	activeLLMClient := h.agentService.DefaultLLMClient()
+	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
+	if err == nil && hasCustomConfig {
+		// 使用用户自定义配置创建 Agent LLM 客户端，所有服务商均兼容 OpenAI 协议
+		timeout := 30 * time.Second
+		customAgentClient := agentpkg.NewOpenAILLMClient(
+			userConfig.APIKey,
+			userConfig.BaseURL,
+			userConfig.Model,
+			timeout,
+		)
+		activeLLMClient = customAgentClient
+	}
+
+	result, err := h.agentService.Run(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeLLMClient)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to generate response"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Streaming not supported"})
+		return
+	}
+
+	for _, step := range result.Steps {
+		payload := map[string]interface{}{"step": step.StepNumber}
+		if step.ToolCall != nil {
+			payload["tool_call"] = step.ToolCall.Name
+		}
+		if step.ToolResult != "" {
+			payload["tool_result"] = step.ToolResult
+		}
+		data, _ := json.Marshal(payload)
+		fmt.Fprintf(c.Writer, "event: agent_step\n")
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	data, _ := json.Marshal(map[string]string{"content": result.FinalResponse})
+	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, result.FinalResponse); err != nil {
+		logger.ErrorWithFields("Failed to save assistant message",
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+	}
+}
+
+func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
+	}
+	return items
 }
 
 // ========== 长期记忆接口 ==========
@@ -707,11 +930,11 @@ type GetLLMConfigRequest struct {
 // GetLLMConfigResponse 获取配置响应
 type GetLLMConfigResponse struct {
 	HasConfig   bool    `json:"has_config"`
-	APIKeyMask string `json:"api_key_masked"`
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model"`
-	Provider    string `json:"provider"`
-	StatusText  string `json:"status_text"`
+	APIKeyMask  string  `json:"api_key_masked"`
+	BaseURL     string  `json:"base_url"`
+	Model       string  `json:"model"`
+	Provider    string  `json:"provider"`
+	StatusText  string  `json:"status_text"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
 }
@@ -747,7 +970,7 @@ func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
 
 	resp := GetLLMConfigResponse{
 		HasConfig:   configView.HasConfig,
-		APIKeyMask: configView.APIKeyMasked,
+		APIKeyMask:  configView.APIKeyMasked,
 		BaseURL:     configView.BaseURL,
 		Model:       configView.Model,
 		Provider:    configView.Provider,
@@ -765,10 +988,10 @@ func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
 // UpdateLLMConfigRequest 更新配置请求
 type UpdateLLMConfigRequest struct {
 	SessionID   string  `json:"session_id" binding:"required"`
-	Provider    string `json:"provider" binding:"required"`
-	APIKey      string `json:"api_key"`
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model" binding:"required"`
+	Provider    string  `json:"provider" binding:"required"`
+	APIKey      string  `json:"api_key"`
+	BaseURL     string  `json:"base_url"`
+	Model       string  `json:"model" binding:"required"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
 }

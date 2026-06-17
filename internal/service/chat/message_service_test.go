@@ -165,6 +165,25 @@ func TestMessageService_SaveUserMessage(t *testing.T) {
 	}
 }
 
+// TestMessageService_SaveUserMessage_EmptyMsgID 回归测试：Web 渠道无 msgID 时
+// 多条消息都应正常入库，不应被空字符串去重命中或被唯一索引拦截。
+func TestMessageService_SaveUserMessage_EmptyMsgID(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第一条", ""))
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第二条", ""))
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第三条", ""))
+
+	messages, err := msgRepo.GetRecentByUserID(123, 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, "第一条", messages[0].Content)
+	assert.Equal(t, "第二条", messages[1].Content)
+	assert.Equal(t, "第三条", messages[2].Content)
+}
+
 func TestMessageService_SaveAssistantMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
