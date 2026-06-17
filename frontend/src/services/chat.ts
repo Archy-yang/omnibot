@@ -1,6 +1,6 @@
 import { request } from '../utils/request';
 import type { Message } from '../types/chat';
-import type { ApiResponse, GetHistoryResponse, PaginationParams, SendMessageRequest } from '../types/api';
+import type { AgentStepEvent, ApiResponse, GetHistoryResponse, PaginationParams, SendMessageRequest } from '../types/api';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
@@ -8,6 +8,7 @@ interface StreamCallbacks {
   onChunk: (content: string) => void;
   onDone: (fullContent: string) => void;
   onError: (error: Error) => void;
+  onAgentStep?: (step: AgentStepEvent) => void;
 }
 
 export const chatService = {
@@ -29,12 +30,14 @@ export const chatService = {
   async sendMessageStream(
     content: string,
     sessionId: string,
+    isAgentMode: boolean = false,
     callbacks: StreamCallbacks
   ): Promise<void> {
-    const { onChunk, onDone, onError } = callbacks;
+    const { onChunk, onDone, onError, onAgentStep } = callbacks;
 
     try {
-      const response = await fetch(`${BASE_URL}/chat/messages/stream`, {
+      const endpoint = isAgentMode ? '/chat/messages/agent/stream' : '/chat/messages/stream';
+      const response = await fetch(`${BASE_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, session_id: sessionId }),
@@ -52,6 +55,7 @@ export const chatService = {
       const decoder = new TextDecoder();
       let fullContent = '';
       let buffer = '';
+      let currentEvent = 'message';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -63,7 +67,13 @@ export const chatService = {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          if (!trimmed) continue;
+
+          if (trimmed.startsWith('event: ')) {
+            currentEvent = trimmed.slice(7);
+            continue;
+          }
+          if (!trimmed.startsWith('data: ')) continue;
 
           const data = trimmed.slice(6);
           if (data === '[DONE]') {
@@ -77,7 +87,12 @@ export const chatService = {
               onError(new Error(parsed.error));
               return;
             }
-            if (parsed.content) {
+            if (currentEvent === 'agent_step') {
+              onAgentStep?.(parsed as AgentStepEvent);
+              currentEvent = 'message';
+              continue;
+            }
+            if (parsed.content !== undefined) {
               fullContent += parsed.content;
               onChunk(parsed.content);
             }

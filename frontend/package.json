@@ -11,7 +11,10 @@
     "format": "prettier --write src/**/*.{vue,js,ts,jsx,tsx,json,css}"
   },
   "dependencies": {
+    "@types/dompurify": "^3.0.5",
     "axios": "^1.16.1",
+    "dompurify": "^3.4.10",
+    "marked": "^18.0.5",
     "naive-ui": "^2.44.1",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",

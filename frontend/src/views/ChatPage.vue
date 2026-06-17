@@ -44,10 +44,10 @@ watch(() => sessionId.value, () => {
   loadHistory().catch(() => {});
 });
 
-const handleSend = async (content: string) => {
+const handleSend = async (content: string, isAgentMode: boolean) => {
   if (!content.trim()) return;
   try {
-    await sendMessage(content);
+    await sendMessage(content, isAgentMode);
   } catch (err) {
     error('消息发送失败，请重试');
   }

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, reactive } from 'vue';
 import type { Message } from '../types/chat';
 import { chatService } from '../services/chat';
 
@@ -26,7 +26,7 @@ export const useChatStore = defineStore(
       messages.value = [];
     };
 
-    const sendMessage = async (content: string): Promise<void> => {
+    const sendMessage = async (content: string, isAgentMode: boolean = false): Promise<void> => {
       if (!content.trim()) {
         return;
       }
@@ -41,19 +41,23 @@ export const useChatStore = defineStore(
       addMessage(userMessage);
 
       // Add placeholder assistant message for streaming
-      const assistantMessage: Message = {
+      const assistantMessage = reactive<Message>({
         id: Date.now() + 1,
         role: 'assistant',
         content: '',
         created_at: new Date().toISOString(),
-      };
+        agentSteps: [],
+      });
       addMessage(assistantMessage);
 
       isLoading.value = true;
       try {
-        await chatService.sendMessageStream(content, sessionId.value, {
+        await chatService.sendMessageStream(content, sessionId.value, isAgentMode, {
           onChunk: (chunk: string) => {
             assistantMessage.content += chunk;
+          },
+          onAgentStep: (step) => {
+            assistantMessage.agentSteps!.push(step);
           },
           onDone: () => {
             isLoading.value = false;

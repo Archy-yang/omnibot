@@ -4,6 +4,31 @@
 
 ---
 
+## [v1.5.0] - 2026-06-15
+
+### ✨ 新增功能
+
+- **Agent 基本能力**
+  - 新增 Tool Registry，支持工具注册、查询和 OpenAI Function Calling `tools` 格式转换
+  - 新增 ReAct Agent 循环，支持 LLM → 工具调用 → 工具结果回传 → 继续推理
+  - Web 对话新增 Agent SSE 流式端点，支持 `agent_step` 事件展示工具调用过程
+  - 前端聊天消息支持展示「思考过程」折叠区
+
+### 🧰 内置工具
+
+- `get_current_time`：获取当前时间
+- `calculator`：安全四则运算计算器
+- `search_memories`：搜索用户长期记忆
+- `search_history`：历史搜索占位工具，后续版本完善
+
+### 🔧 架构改进
+
+- 新增 `internal/service/agent` 包，Agent 层位于 Web Handler 与 LLM Client 之间
+- 保持现有 `LLMProvider` 接口不变，Agent 通过 OpenAI-compatible adapter 支持 tools 参数
+- Agent 默认最大步数 10，默认超时 120 秒，避免无限循环
+
+---
+
 ## [v1.4.1] - 2026-06-14
 
 ### ✨ 新增功能

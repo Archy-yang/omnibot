@@ -17,10 +17,11 @@ export function useChat() {
   /**
    * 发送消息
    * @param content 消息内容
+   * @param isAgentMode 是否使用Agent模式
    */
-  const sendMessage = async (content: string): Promise<void> => {
+  const sendMessage = async (content: string, isAgentMode: boolean = false): Promise<void> => {
     try {
-      await chatStore.sendMessage(content);
+      await chatStore.sendMessage(content, isAgentMode);
     } catch (error) {
       console.error('Send message failed in useChat:', error);
       throw error;

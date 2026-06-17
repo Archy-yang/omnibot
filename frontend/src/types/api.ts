@@ -40,6 +40,24 @@ export interface PaginationParams {
 export type GetHistoryResponse = HistoryData<import('./chat').Message>;
 
 /**
+ * Agent 执行步骤事件
+ */
+export interface AgentStepEvent {
+  step: number;
+  tool_call?: string;
+  tool_result?: string;
+  final?: boolean;
+}
+
+/**
+ * Agent 完成事件
+ */
+export interface AgentDoneEvent {
+  total_steps: number;
+  duration_ms: number;
+}
+
+/**
  * LLM 配置接口
  */
 export interface LLMConfig {
