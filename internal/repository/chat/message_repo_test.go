@@ -23,6 +23,43 @@ func TestMessageRepository_Create(t *testing.T) {
 	}
 }
 
+// TestMessageRepository_SegmentsRoundTrip 验证 segments JSON 列经 GORM serializer
+// 落库后能原样读回，普通消息读回 segments 为空（v1.5.4）。
+func TestMessageRepository_SegmentsRoundTrip(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	repo := NewMessageRepository(testDB)
+
+	segments := []conversation.MessageSegment{
+		{Type: "text", Content: "正在处理"},
+		{Type: "tool", Tool: "calculator", Label: "计算了一下", Result: "42"},
+	}
+	msg := conversation.NewAssistantMessageWithSegments(456, "正在处理，结果 42", segments)
+	if err := repo.Create(msg); err != nil {
+		t.Fatalf("Failed to create message with segments: %v", err)
+	}
+
+	got, err := repo.GetRecentByUserID(456, 10)
+	if err != nil {
+		t.Fatalf("Failed to read back: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Segments) != 2 {
+		t.Fatalf("Expected 1 message with 2 segments, got %d messages", len(got))
+	}
+	if got[0].Segments[1].Tool != "calculator" || got[0].Segments[1].Result != "42" {
+		t.Errorf("segment round-trip mismatch: %+v", got[0].Segments[1])
+	}
+
+	// 普通消息（无 segments）读回应为空，不报错
+	plain := conversation.NewAssistantMessage(456, "纯文本")
+	if err := repo.Create(plain); err != nil {
+		t.Fatalf("Failed to create plain message: %v", err)
+	}
+	got2, _ := repo.GetRecentByUserID(456, 10)
+	if len(got2[len(got2)-1].Segments) != 0 {
+		t.Errorf("Expected no segments on plain message, got %+v", got2[len(got2)-1].Segments)
+	}
+}
+
 func TestMessageRepository_GetRecentByUserID(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	repo := NewMessageRepository(testDB)

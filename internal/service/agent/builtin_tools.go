@@ -24,8 +24,9 @@ type MemoryProvider interface {
 // CreateGetCurrentTimeTool 获取当前时间工具
 func CreateGetCurrentTimeTool() Tool {
 	return Tool{
-		Name:        "get_current_time",
-		Description: "获取当前的日期和时间",
+		Name:         "get_current_time",
+		Description:  "获取当前的日期和时间",
+		DisplayLabel: "查询了当前时间",
 		Parameters: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -39,8 +40,9 @@ func CreateGetCurrentTimeTool() Tool {
 // CreateCalculatorTool 计算器工具
 func CreateCalculatorTool() Tool {
 	return Tool{
-		Name:        "calculator",
-		Description: "执行安全的数学计算（仅支持四则运算和括号）",
+		Name:         "calculator",
+		Description:  "执行安全的数学计算（仅支持四则运算和括号）",
+		DisplayLabel: "计算了一下",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -68,8 +70,9 @@ func CreateCalculatorTool() Tool {
 // CreateSearchMemoriesTool 搜索记忆工具
 func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 	return Tool{
-		Name:        "search_memories",
-		Description: "搜索用户的长期记忆，查找与查询相关的记忆内容",
+		Name:         "search_memories",
+		Description:  "搜索用户的长期记忆，查找与查询相关的记忆内容",
+		DisplayLabel: "翻了翻记忆",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -98,8 +101,9 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 // CreateSearchHistoryTool 搜索对话历史工具
 func CreateSearchHistoryTool() Tool {
 	return Tool{
-		Name:        "search_history",
-		Description: "搜索用户的历史对话记录",
+		Name:         "search_history",
+		Description:  "搜索用户的历史对话记录",
+		DisplayLabel: "搜索了历史对话",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -198,8 +202,9 @@ func filterMemories(memories []string, query string) string {
 // CreateRSSReaderTool RSS订阅阅读工具，支持解析所有主流RSS/Atom格式
 func CreateRSSReaderTool() Tool {
 	return Tool{
-		Name:        "rss_reader",
-		Description: "解析并获取RSS/Atom订阅源的内容，支持所有主流RSS(0.9x/1.0/2.0)和Atom(0.3/1.0)格式。传入RSS链接，返回订阅源的基本信息和最新文章列表。",
+		Name:         "rss_reader",
+		Description:  "解析并获取RSS/Atom订阅源的内容，支持所有主流RSS(0.9x/1.0/2.0)和Atom(0.3/1.0)格式。传入RSS链接，返回订阅源的基本信息和最新文章列表。",
+		DisplayLabel: "读取了 RSS 订阅",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"required": []string{"url"},

@@ -194,3 +194,39 @@ func TestMessageService_SaveAssistantMessage(t *testing.T) {
 		t.Fatalf("Failed to save assistant message: %v", err)
 	}
 }
+
+// TestMessageService_SaveAssistantMessageWithSegments 验证带 segments 的助手消息
+// 落库后能原样读回（往返一致），含 tool 段的工具名/文案/结果（v1.5.4）。
+func TestMessageService_SaveAssistantMessageWithSegments(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	segments := []conversation.MessageSegment{
+		{Type: "text", Content: "让我查一下。"},
+		{Type: "tool", Tool: "get_current_time", Label: "查询了当前时间", Result: "10:30"},
+		{Type: "text", Content: "现在是 10:30。"},
+	}
+
+	err := service.SaveAssistantMessageWithSegments(
+		context.Background(), 123, "让我查一下。现在是 10:30。", segments,
+	)
+	if err != nil {
+		t.Fatalf("Failed to save assistant message with segments: %v", err)
+	}
+
+	got, err := msgRepo.GetRecentByUserID(123, 10)
+	if err != nil {
+		t.Fatalf("Failed to read back: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(got))
+	}
+	if len(got[0].Segments) != 3 {
+		t.Fatalf("Expected 3 segments round-trip, got %d", len(got[0].Segments))
+	}
+	if got[0].Segments[1].Type != "tool" || got[0].Segments[1].Tool != "get_current_time" ||
+		got[0].Segments[1].Result != "10:30" {
+		t.Errorf("tool segment round-trip mismatch: %+v", got[0].Segments[1])
+	}
+}

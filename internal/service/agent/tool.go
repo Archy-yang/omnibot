@@ -9,8 +9,11 @@ import (
 type Tool struct {
 	Name        string
 	Description string
-	Parameters  map[string]interface{} // JSON Schema
-	Execute     func(ctx context.Context, args map[string]interface{}) (string, error)
+	// DisplayLabel 是面向用户的中文友好文案，用于流式 Agent 展示「正在调用 xxx」状态条。
+	// 留空时 UI 端会回落到 Name，避免出现内部英文工具名直接外露的尴尬。
+	DisplayLabel string
+	Parameters   map[string]interface{} // JSON Schema
+	Execute      func(ctx context.Context, args map[string]interface{}) (string, error)
 }
 
 // ToolCall 表示 LLM 发起的一次工具调用

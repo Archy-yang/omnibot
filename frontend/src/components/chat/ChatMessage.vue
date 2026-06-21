@@ -15,21 +15,29 @@ const props = withDefaults(defineProps<ChatMessageProps>(), {
 });
 
 const isUser = computed(() => props.message.role === 'user');
-const hasAgentSteps = computed(() => (props.message.agentSteps?.length || 0) > 0);
 
-// 渲染markdown内容，防XSS
-const renderedContent = computed(() => {
-  if (isUser.value) {
-    // 用户消息不需要markdown解析，直接展示文本
-    return props.message.content;
-  }
-  const html = marked.parse(props.message.content, {
+// 本会话流式产生的有序段落（text / tool 交错）。历史/刷新后的消息无此字段。
+const segments = computed(() => props.message.segments ?? []);
+const hasSegments = computed(() => segments.value.length > 0);
+
+// 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
+// 以及无 segments 时的 content 回退渲染共用。
+function renderMarkdown(text: string): string {
+  const html = marked.parse(text, {
     breaks: true, // 支持换行符转<br>
     gfm: true, // 支持GitHub Flavored Markdown
     async: false, // 强制同步解析
   }) as string;
   return DOMPurify.sanitize(html);
-});
+}
+
+// 无 segments（历史消息 / 刷新后）时回退渲染整段 content
+const renderedContent = computed(() => renderMarkdown(props.message.content));
+
+// 切换某个 tool 段的展开状态（查看工具结果）
+function toggleExpand(seg: { expanded?: boolean }) {
+  seg.expanded = !seg.expanded;
+}
 
 const { success, error: toastError } = useToast();
 const justCopied = ref(false);
@@ -84,18 +92,66 @@ defineEmits<{
           <div class="assistant-name">OmniBot</div>
         </div>
         <div class="assistant-body">
-          <details v-if="hasAgentSteps" class="agent-steps">
-            <summary>查看思考过程（{{ message.agentSteps?.length }} 步）</summary>
-            <div
-              v-for="step in message.agentSteps"
-              :key="step.step"
-              class="agent-step"
-            >
-              <div v-if="step.tool_call" class="agent-tool">调用工具：{{ step.tool_call }}</div>
-              <div v-if="step.tool_result" class="agent-result">{{ step.tool_result }}</div>
-            </div>
-          </details>
-          <div class="assistant-content markdown-body" v-html="renderedContent"></div>
+          <!--
+            v1.5.3：按 LLM 真实输出时序交错渲染段落。
+            text 段渲 markdown，tool 段渲可点击展开的思考条，顺序即发生顺序。
+            无 segments（历史 / 刷新后）时回退渲染整段 content。
+          -->
+          <template v-if="hasSegments">
+            <template v-for="(seg, idx) in segments" :key="idx">
+              <!-- 文本段 -->
+              <div
+                v-if="seg.type === 'text'"
+                class="assistant-content markdown-body"
+                v-html="renderMarkdown(seg.content)"
+              ></div>
+
+              <!-- 工具段：可点击展开看结果 -->
+              <div v-else class="tool-segment">
+                <button
+                  type="button"
+                  class="tool-segment-header"
+                  :aria-expanded="seg.expanded ? 'true' : 'false'"
+                  @click="toggleExpand(seg)"
+                >
+                  <!-- result 未回来时显示旋转 spinner，回来后显示工具图标 -->
+                  <svg
+                    v-if="seg.result === undefined"
+                    class="tool-segment-spinner"
+                    width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  >
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                  </svg>
+                  <svg
+                    v-else
+                    class="tool-segment-icon"
+                    width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                  >
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                  </svg>
+                  <span class="tool-segment-label">
+                    {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
+                  </span>
+                  <!-- result 回来后才显示展开箭头 -->
+                  <svg
+                    v-if="seg.result !== undefined"
+                    class="tool-segment-chevron"
+                    :class="{ 'is-open': seg.expanded }"
+                    width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+                <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
+              </div>
+            </template>
+          </template>
+
+          <!-- 回退：无 segments 的历史消息 -->
+          <div v-else class="assistant-content markdown-body" v-html="renderedContent"></div>
 
           <!-- 操作栏：仅在内容非空时显示，避免流式中途出现空按钮 -->
           <div v-if="message.content" class="assistant-actions">
@@ -239,32 +295,81 @@ defineEmits<{
   background: rgba(0, 0, 0, 0.08);
 }
 
-.agent-steps {
-  margin-bottom: 8px;
-  color: #6b7280;
-  font-size: 13px;
+/* ===== 工具思考段 (v1.5.3) =====
+   按时序交错出现在文本之间，可点击展开看工具结果。
+   ChatGPT / Claude 风格的低对比度「思考」条带，不打扰阅读。 */
+.tool-segment {
+  margin: 8px 0;
 }
 
-.agent-steps summary {
-  cursor: pointer;
-  user-select: none;
-}
-
-.agent-step {
-  margin-top: 6px;
-  padding-left: 12px;
+.tool-segment-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border: none;
   border-left: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
 }
 
-.agent-tool {
-  color: #2563eb;
+.tool-segment-header:hover {
+  background: #f3f4f6;
 }
 
-.agent-result {
-  margin-top: 4px;
+.tool-segment-icon,
+.tool-segment-spinner {
+  flex-shrink: 0;
+  color: #9ca3af;
+}
+
+.tool-segment-spinner {
+  animation: tool-spin 0.8s linear infinite;
+}
+
+@keyframes tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tool-segment-label {
+  flex: 1;
+}
+
+.tool-segment-chevron {
+  flex-shrink: 0;
+  color: #9ca3af;
+  transition: transform 0.2s ease;
+}
+
+.tool-segment-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* 展开区：限高滚动，长结果（RSS 全文 / 长 JSON）内部滚动，不撑乱对话 */
+.tool-segment-result {
+  margin: 4px 0 0 0;
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #f4f4f4;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #374151;
   white-space: pre-wrap;
   word-break: break-word;
 }
+
 /* ===== Markdown样式 ===== */
 :deep(.markdown-body) h1,
 :deep(.markdown-body) h2,

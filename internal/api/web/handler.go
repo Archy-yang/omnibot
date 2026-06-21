@@ -33,6 +33,7 @@ type MessageService interface {
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
+	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -63,7 +64,9 @@ type MemoryService interface {
 // AgentService Agent 服务接口
 type AgentService interface {
 	Run(ctx context.Context, userID int64, conversation []map[string]interface{}, customLLMClient ...agentpkg.LLMClient) (*agentpkg.AgentResult, error)
+	RunStream(ctx context.Context, userID int64, conversation []map[string]interface{}, customStreamClient ...agentpkg.StreamingLLMClient) (<-chan agentpkg.AgentEvent, error)
 	DefaultLLMClient() agentpkg.LLMClient
+	DefaultStreamingLLMClient() agentpkg.StreamingLLMClient
 }
 
 // Handler Web 聊天 API 处理器
@@ -130,10 +133,11 @@ type GetHistoryResponse struct {
 
 // MessageDTO represents a message in the response
 type MessageDTO struct {
-	ID        int64  `json:"id"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	ID        int64                          `json:"id"`
+	Role      string                         `json:"role"`
+	Content   string                         `json:"content"`
+	Segments  []conversation.MessageSegment  `json:"segments,omitempty"` // v1.5.4：Agent 思考过程片段，无则省略
+	CreatedAt string                         `json:"created_at"`
 }
 
 // HandleGetHistory gets message history for a session
@@ -199,6 +203,7 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 			ID:        msg.ID,
 			Role:      msg.Role,
 			Content:   msg.Content,
+			Segments:  msg.Segments,
 			CreatedAt: msg.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -465,7 +470,28 @@ func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// HandleSendMessageAgentStream SSE 流式 Agent 对话
+// sanitizeToolResult 对工具结果脱敏后再发给前端。
+// 工具执行成功的结果（时间、计算值、RSS 内容等）是用户自己的查询，原样返回；
+// 执行失败的结果由 agent 层以固定前缀产生（见 agent.go），可能携带内部细节
+// （IP、连接错误、堆栈），统一替换为友好文案，避免泄露内部实现（安全红线）。
+func sanitizeToolResult(result string) string {
+	if strings.HasPrefix(result, "工具执行错误:") ||
+		strings.HasPrefix(result, "错误：工具 ") {
+		return "工具执行失败"
+	}
+	return result
+}
+
+// HandleSendMessageAgentStream SSE 流式 Agent 对话。
+// 这是 v1.5.2 重构后的真流式实现：边推理边吐 token，工具调用以独立事件先于结果推送。
+//
+// SSE 协议：
+//
+//	event: token       data: {"content": "..."}    -- LLM 文本 token 增量
+//	event: tool_call   data: {"tool": "...", "label": "..."}  -- 工具调用开始
+//	event: tool_result data: {"tool": "...", "result": "..."} -- 工具结果（错误已脱敏）
+//	event: error       data: {"error": "..."}      -- 错误，流即将关闭
+//	(默认 event)       data: [DONE]                -- 完成标记
 func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	var req SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -495,11 +521,10 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		ctxMessages = []llm.ChatMessage{{Role: "user", Content: req.Content}}
 	}
 
-	// 选择 LLM 客户端：优先使用用户自定义配置，和普通聊天逻辑保持一致
-	activeLLMClient := h.agentService.DefaultLLMClient()
+	// 选择流式 LLM 客户端：优先使用用户自定义配置（OpenAI 兼容协议）
+	activeStreamClient := h.agentService.DefaultStreamingLLMClient()
 	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
 	if err == nil && hasCustomConfig {
-		// 使用用户自定义配置创建 Agent LLM 客户端，所有服务商均兼容 OpenAI 协议
 		timeout := 30 * time.Second
 		customAgentClient := agentpkg.NewOpenAILLMClient(
 			userConfig.APIKey,
@@ -507,15 +532,10 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			userConfig.Model,
 			timeout,
 		)
-		activeLLMClient = customAgentClient
+		activeStreamClient = customAgentClient
 	}
 
-	result, err := h.agentService.Run(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeLLMClient)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to generate response"})
-		return
-	}
-
+	// 先打开 SSE 头部和 flusher，再调 RunStream，避免错误时已经写过 header 还想 c.JSON
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -525,26 +545,85 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		return
 	}
 
-	for _, step := range result.Steps {
-		payload := map[string]interface{}{"step": step.StepNumber}
-		if step.ToolCall != nil {
-			payload["tool_call"] = step.ToolCall.Name
-		}
-		if step.ToolResult != "" {
-			payload["tool_result"] = step.ToolResult
-		}
-		data, _ := json.Marshal(payload)
-		fmt.Fprintf(c.Writer, "event: agent_step\n")
-		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+	eventCh, err := h.agentService.RunStream(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeStreamClient)
+	if err != nil {
+		// 流尚未开始（如 streaming client 未配置），按 SSE error 事件返回，前端能感知
+		errData, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
 		flusher.Flush()
+		return
 	}
 
-	data, _ := json.Marshal(map[string]string{"content": result.FinalResponse})
-	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+	// finalContent 累积所有 AgentEventToken 的 Content（也吸收 AgentEventDone 的兜底文本，
+	// 用于在结束后持久化为 assistant 消息）。
+	// segments 按和前端 store 相同的时序逻辑累积（text/tool 交错），用于历史持久化（v1.5.4）。
+	var finalContent string
+	var segments []conversation.MessageSegment
+	for ev := range eventCh {
+		switch ev.Type {
+		case agentpkg.AgentEventToken:
+			finalContent += ev.Content
+			// 末尾是 text 段就追加，否则新建 text 段（与前端 store onChunk 一致）
+			if n := len(segments); n > 0 && segments[n-1].Type == "text" {
+				segments[n-1].Content += ev.Content
+			} else {
+				segments = append(segments, conversation.MessageSegment{Type: "text", Content: ev.Content})
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
+			flusher.Flush()
+		case agentpkg.AgentEventToolCall:
+			// push tool 段（Result 待 ToolResult 回填），自然封口上一段文本
+			segments = append(segments, conversation.MessageSegment{
+				Type:  "tool",
+				Tool:  ev.ToolName,
+				Label: ev.ToolLabel,
+			})
+			data, _ := json.Marshal(map[string]string{
+				"tool":  ev.ToolName,
+				"label": ev.ToolLabel,
+			})
+			fmt.Fprintf(c.Writer, "event: tool_call\ndata: %s\n\n", data)
+			flusher.Flush()
+		case agentpkg.AgentEventToolResult:
+			// v1.5.3：向前端暴露工具结果，供「点击思考条展开看详情」。
+			// 安全红线：执行失败的结果可能含内部细节（IP、堆栈、连接错误），
+			// 统一脱敏为友好文案，不透传原始 error。SSE 推送和落库共用同一脱敏值。
+			sanitized := sanitizeToolResult(ev.ToolResult)
+			// 回填最后一个 Result 为空的 tool 段（与前端 store onToolResult 一致）
+			for i := len(segments) - 1; i >= 0; i-- {
+				if segments[i].Type == "tool" && segments[i].Result == "" {
+					segments[i].Result = sanitized
+					break
+				}
+			}
+			data, _ := json.Marshal(map[string]string{
+				"tool":   ev.ToolName,
+				"result": sanitized,
+			})
+			fmt.Fprintf(c.Writer, "event: tool_result\ndata: %s\n\n", data)
+			flusher.Flush()
+		case agentpkg.AgentEventDone:
+			// Done 携带的 Content 在常规 ReAct 路径下为「累计 token 拼接结果」，
+			// 等价于 finalContent；超时/超步数兜底情况下是固定提示语。
+			// 优先使用我们累计的 finalContent，若为空则回落到 ev.Content。
+			if finalContent == "" {
+				finalContent = ev.Content
+			}
+		case agentpkg.AgentEventError:
+			errData, _ := json.Marshal(map[string]string{"error": ev.Error.Error()})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+			flusher.Flush()
+			return // 错误后不再推 [DONE]，前端按错误处理
+		}
+	}
+
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, result.FinalResponse); err != nil {
+	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
+	// 纯文本提问 segments 只有一个 text 段，对历史展示也无害。
+	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),

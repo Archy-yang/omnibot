@@ -115,8 +115,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
-		LLMClient:    agentLLMClient,
-		ToolRegistry: agentToolRegistry,
+		LLMClient:          agentLLMClient,
+		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
+		ToolRegistry:       agentToolRegistry,
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)

@@ -12,14 +12,33 @@ const (
 	RoleTool      = "tool"
 )
 
+// MessageSegment 一条助手消息按 LLM 真实时序拆出的展示片段（v1.5.4）。
+//
+// Agent 回复可能是「文本 → 调工具 → 文本」的交错序列，segments 按顺序保存这些片段，
+// 使刷新页面后历史消息仍能还原完整的思考过程（而非回退成纯文本）。
+//
+//   - text 段：用 Content
+//   - tool 段：用 Tool / Label / Result（Result 已脱敏，见 web.sanitizeToolResult）
+//
+// omitempty 让另一类字段不进 JSON，序列化更紧凑。这是「JSON 骨架 + 实体表」混合架构
+// 的碎片层：纯展示片段内联在此，未来 artifact / 异步任务等一等实体改用独立表 + 引用 id。
+type MessageSegment struct {
+	Type    string `json:"type"`              // "text" | "tool"
+	Content string `json:"content,omitempty"` // text 段：文本内容
+	Tool    string `json:"tool,omitempty"`    // tool 段：工具名
+	Label   string `json:"label,omitempty"`   // tool 段：面向用户的友好文案
+	Result  string `json:"result,omitempty"`  // tool 段：脱敏后的工具结果
+}
+
 // Message 对话消息实体
 type Message struct {
-	ID        int64      `gorm:"primaryKey;autoIncrement"`
-	UserID    int64      `gorm:"index;not null"`                // 用户 ID
-	Role      string     `gorm:"size:20;not null;index"`        // 消息角色：user/assistant/system/tool
-	Content   string     `gorm:"type:text;not null"`             // 消息内容
-	MsgID     *string    `gorm:"size:100;uniqueIndex"`           // 微信消息 ID（用于去重，仅 user 消息有）
-	CreatedAt time.Time  `gorm:"not null"`
+	ID        int64            `gorm:"primaryKey;autoIncrement"`
+	UserID    int64            `gorm:"index;not null"`         // 用户 ID
+	Role      string           `gorm:"size:20;not null;index"` // 消息角色：user/assistant/system/tool
+	Content   string           `gorm:"type:text;not null"`     // 消息内容（纯文本投影，供复制/上下文/搜索）
+	MsgID     *string          `gorm:"size:100;uniqueIndex"`   // 微信消息 ID（用于去重，仅 user 消息有）
+	Segments  []MessageSegment `gorm:"serializer:json"`        // v1.5.4：Agent 思考过程有序片段，NULL 表示无（普通消息）
+	CreatedAt time.Time        `gorm:"not null"`
 }
 
 // TableName 指定表名
@@ -54,4 +73,13 @@ func NewAssistantMessage(userID int64, content string) *Message {
 		MsgID:     nil,
 		CreatedAt: now,
 	}
+}
+
+// NewAssistantMessageWithSegments 创建带思考过程片段的助手消息（v1.5.4）。
+// content 是纯文本投影（供复制 / 上下文 / 搜索），segments 是按时序的展示片段。
+// 仅 Web Agent 流式路径使用；其余路径继续用 NewAssistantMessage（segments 为 NULL）。
+func NewAssistantMessageWithSegments(userID int64, content string, segments []MessageSegment) *Message {
+	msg := NewAssistantMessage(userID, content)
+	msg.Segments = segments
+	return msg
 }

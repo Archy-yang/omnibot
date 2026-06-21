@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -30,11 +31,12 @@ type AgentResult struct {
 
 // ReActAgentConfig Agent 配置
 type ReActAgentConfig struct {
-	LLMClient    LLMClient
-	ToolRegistry *ToolRegistry
-	MaxSteps     int
-	Timeout      time.Duration
-	SystemPrompt string
+	LLMClient          LLMClient          // 同步路径（HandleSendMessageAgent 使用）
+	StreamingLLMClient StreamingLLMClient // 流式路径（HandleSendMessageAgentStream 使用），可为空
+	ToolRegistry       *ToolRegistry
+	MaxSteps           int
+	Timeout            time.Duration
+	SystemPrompt       string
 }
 
 // 默认值
@@ -50,11 +52,12 @@ If a tool call fails, try a different approach or let the user know.`
 
 // ReActAgent ReAct 模式 Agent
 type ReActAgent struct {
-	llmClient    LLMClient
-	toolRegistry *ToolRegistry
-	maxSteps     int
-	timeout      time.Duration
-	systemPrompt string
+	llmClient       LLMClient
+	streamingClient StreamingLLMClient
+	toolRegistry    *ToolRegistry
+	maxSteps        int
+	timeout         time.Duration
+	systemPrompt    string
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -69,11 +72,12 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		config.SystemPrompt = defaultSystemPrompt
 	}
 	return &ReActAgent{
-		llmClient:    config.LLMClient,
-		toolRegistry: config.ToolRegistry,
-		maxSteps:     config.MaxSteps,
-		timeout:      config.Timeout,
-		systemPrompt: config.SystemPrompt,
+		llmClient:       config.LLMClient,
+		streamingClient: config.StreamingLLMClient,
+		toolRegistry:    config.ToolRegistry,
+		maxSteps:        config.MaxSteps,
+		timeout:         config.Timeout,
+		systemPrompt:    config.SystemPrompt,
 	}
 }
 
@@ -205,4 +209,184 @@ func buildAssistantToolCallMessage(toolCalls []map[string]interface{}) map[strin
 		"content":    nil,
 		"tool_calls": oaiToolCalls,
 	}
+}
+
+// RunStream 执行流式 ReAct 循环。返回的 channel 由 agent 内部 goroutine 写入并关闭，
+// 调用方只需 range 消费。channel 关闭前一定会有一个 AgentEventDone 或 AgentEventError 事件，
+// 上游可据此判断流是否「正常结束」。
+//
+// 与同步 Run 的关键区别：
+//   - 不返回完整 AgentResult（无 Steps 列表），步骤信息以事件形式实时流出
+//   - 文本 token 一收到就立即转发，前端可立即渲染（解决 v1.5.0 那种「转圈 N 秒一次性吐」体验）
+//   - 错误不通过返回值传递，而是用 AgentEventError 事件（除非 stream 都打不开就直接返 error）
+func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]interface{}) (<-chan AgentEvent, error) {
+	if a.streamingClient == nil {
+		return nil, fmt.Errorf("agent: streaming LLM client not configured")
+	}
+
+	out := make(chan AgentEvent, 16) // 小缓冲，避免生产者阻塞但不无限缓冲
+
+	go func() {
+		defer close(out)
+
+		ctx, cancel := context.WithTimeout(ctx, a.timeout)
+		defer cancel()
+
+		messages := make([]map[string]interface{}, 0, len(conversation)+1)
+		messages = append(messages, map[string]interface{}{
+			"role":    "system",
+			"content": a.systemPrompt,
+		})
+		messages = append(messages, conversation...)
+
+		tools := a.toolRegistry.ToOpenAITools()
+
+		// 累积本轮 ReAct 中所有 token 拼接成的最终回答，仅在最后没有 tool_call 时才有意义。
+		// 用 string 拼接 OK，因为 LLM 单次回答的 token 总量有限（远小于 context window）。
+		var finalAnswer string
+
+		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
+			select {
+			case <-ctx.Done():
+				out <- AgentEvent{Type: AgentEventDone, Content: "处理超时，已返回当前结果。"}
+				return
+			default:
+			}
+
+			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, messages, tools)
+			if err != nil {
+				out <- AgentEvent{Type: AgentEventError, Error: fmt.Errorf("step %d: %w", stepNum, err)}
+				return
+			}
+
+			// 本轮内累积：一段 LLM 响应可能是文本（emit token）或工具调用（按 index 累积 delta）。
+			var roundContent string
+			toolCallAccum := make(map[int]*toolCallAccumulator) // 按 index 索引
+
+			for chunk := range chunkCh {
+				if chunk.Error != nil {
+					out <- AgentEvent{Type: AgentEventError, Error: chunk.Error}
+					return
+				}
+				if chunk.Done {
+					continue // [DONE] 信号，channel 即将关闭，主循环靠 range 退出
+				}
+				if chunk.ContentDelta != "" {
+					out <- AgentEvent{Type: AgentEventToken, Content: chunk.ContentDelta}
+					roundContent += chunk.ContentDelta
+				}
+				if chunk.ToolCallDelta != nil {
+					acc, ok := toolCallAccum[chunk.ToolCallDelta.Index]
+					if !ok {
+						acc = &toolCallAccumulator{}
+						toolCallAccum[chunk.ToolCallDelta.Index] = acc
+					}
+					if chunk.ToolCallDelta.ID != "" {
+						acc.id = chunk.ToolCallDelta.ID
+					}
+					if chunk.ToolCallDelta.Name != "" {
+						acc.name = chunk.ToolCallDelta.Name
+					}
+					if chunk.ToolCallDelta.ArgumentsDelta != "" {
+						acc.argumentsBuilder.WriteString(chunk.ToolCallDelta.ArgumentsDelta)
+					}
+				}
+			}
+
+			// 流结束。如果本轮没有工具调用 → ReAct 循环结束，本轮的 roundContent 就是最终回答。
+			if len(toolCallAccum) == 0 {
+				finalAnswer += roundContent
+				out <- AgentEvent{Type: AgentEventDone, Content: finalAnswer}
+				return
+			}
+
+			// 有工具调用。按 index 升序处理（map 无序，需排序）。
+			indices := make([]int, 0, len(toolCallAccum))
+			for idx := range toolCallAccum {
+				indices = append(indices, idx)
+			}
+			// 简单插入排序（一般 1~2 个工具，不值得 sort 包开销）
+			for i := 1; i < len(indices); i++ {
+				for j := i; j > 0 && indices[j-1] > indices[j]; j-- {
+					indices[j-1], indices[j] = indices[j], indices[j-1]
+				}
+			}
+
+			// 构造塞回 messages 的 OpenAI 风格 tool_calls 数组（保持和同步 Run 一致的格式）
+			rawToolCalls := make([]map[string]interface{}, 0, len(indices))
+			for _, idx := range indices {
+				acc := toolCallAccum[idx]
+				rawToolCalls = append(rawToolCalls, map[string]interface{}{
+					"id":   acc.id,
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      acc.name,
+						"arguments": acc.argumentsBuilder.String(),
+					},
+				})
+			}
+			messages = append(messages, buildAssistantToolCallMessage(rawToolCalls))
+
+			// 逐个执行工具：先 emit ToolCall（用户友好的「正在调用 xxx」），再执行，再 emit ToolResult。
+			for _, idx := range indices {
+				acc := toolCallAccum[idx]
+				toolCall := parseToolCall(map[string]interface{}{
+					"id": acc.id,
+					"function": map[string]interface{}{
+						"name":      acc.name,
+						"arguments": acc.argumentsBuilder.String(),
+					},
+				})
+
+				tool, ok := a.toolRegistry.Get(toolCall.Name)
+				label := toolCall.Name // 工具不存在时回落到英文名
+				if ok && tool.DisplayLabel != "" {
+					label = tool.DisplayLabel
+				}
+
+				out <- AgentEvent{
+					Type:      AgentEventToolCall,
+					ToolName:  toolCall.Name,
+					ToolLabel: label,
+				}
+
+				var toolResult string
+				if !ok {
+					toolResult = fmt.Sprintf("错误：工具 %q 不存在", toolCall.Name)
+				} else {
+					result, execErr := tool.Execute(ctx, toolCall.Arguments)
+					if execErr != nil {
+						toolResult = fmt.Sprintf("工具执行错误: %s", execErr.Error())
+					} else {
+						toolResult = result
+					}
+				}
+
+				out <- AgentEvent{
+					Type:       AgentEventToolResult,
+					ToolName:   toolCall.Name,
+					ToolResult: toolResult,
+				}
+
+				messages = append(messages, map[string]interface{}{
+					"role":         "tool",
+					"tool_call_id": toolCall.ID,
+					"content":      toolResult,
+				})
+			}
+			// 进入下一轮 ReAct，让 LLM 基于工具结果继续推理。
+		}
+
+		// 达到最大步数兜底
+		out <- AgentEvent{Type: AgentEventDone, Content: "已达到最大步数限制。"}
+	}()
+
+	return out, nil
+}
+
+// toolCallAccumulator 累积单个 tool_call 跨 chunk 的增量数据。
+type toolCallAccumulator struct {
+	id               string
+	name             string
+	argumentsBuilder strings.Builder
 }

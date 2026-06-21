@@ -38,6 +38,10 @@ type MessageService interface {
 	// SaveAssistantMessage 保存助手消息
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 
+	// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4）。
+	// content 为纯文本投影，segments 为按时序的展示片段。仅 Web Agent 流式路径使用。
+	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error
+
 	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
 	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
@@ -151,6 +155,12 @@ func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, cont
 // SaveAssistantMessage 保存助手消息
 func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
 	msg := conversation.NewAssistantMessage(userID, content)
+	return s.msgRepo.Create(msg)
+}
+
+// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4）。
+func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error {
+	msg := conversation.NewAssistantMessageWithSegments(userID, content, segments)
 	return s.msgRepo.Create(msg)
 }
 

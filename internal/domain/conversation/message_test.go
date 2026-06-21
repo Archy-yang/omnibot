@@ -57,3 +57,43 @@ func TestMessage_NewUserMessage_EmptyMsgID(t *testing.T) {
 		t.Errorf("Expected MsgID to be nil when msgID is empty, got %v (*MsgID=%q)", msg.MsgID, *msg.MsgID)
 	}
 }
+
+// TestMessage_NewAssistantMessageWithSegments 验证带 segments 的助手消息构造：
+// Role/Content/Segments 正确，MsgID 为 nil（v1.5.4 Agent 思考过程持久化）。
+func TestMessage_NewAssistantMessageWithSegments(t *testing.T) {
+	userID := int64(123)
+	content := "让我查一下。现在是 10:30。"
+	segments := []MessageSegment{
+		{Type: "text", Content: "让我查一下。"},
+		{Type: "tool", Tool: "get_current_time", Label: "查询了当前时间", Result: "10:30"},
+		{Type: "text", Content: "现在是 10:30。"},
+	}
+
+	msg := NewAssistantMessageWithSegments(userID, content, segments)
+
+	if msg.UserID != userID {
+		t.Errorf("Expected UserID %d, got %d", userID, msg.UserID)
+	}
+	if msg.Role != RoleAssistant {
+		t.Errorf("Expected Role %s, got %s", RoleAssistant, msg.Role)
+	}
+	if msg.Content != content {
+		t.Errorf("Expected Content %s, got %s", content, msg.Content)
+	}
+	if msg.MsgID != nil {
+		t.Errorf("Expected MsgID to be nil for assistant, got %v", msg.MsgID)
+	}
+	if len(msg.Segments) != 3 {
+		t.Fatalf("Expected 3 segments, got %d", len(msg.Segments))
+	}
+	if msg.Segments[0].Type != "text" || msg.Segments[0].Content != "让我查一下。" {
+		t.Errorf("Segment[0] mismatch: %+v", msg.Segments[0])
+	}
+	if msg.Segments[1].Type != "tool" || msg.Segments[1].Tool != "get_current_time" ||
+		msg.Segments[1].Label != "查询了当前时间" || msg.Segments[1].Result != "10:30" {
+		t.Errorf("Segment[1] mismatch: %+v", msg.Segments[1])
+	}
+	if msg.CreatedAt.IsZero() {
+		t.Error("Expected CreatedAt to be set")
+	}
+}

@@ -19,57 +19,11 @@
         <!-- 底部工具栏（在下） -->
         <div class="bottom-toolbar">
           <div class="left-tools">
-            <!-- 模式选择菜单 -->
-            <NPopover
-              v-model:show="showMenu"
-              placement="top-start"
-              trigger="click"
-              :show-arrow="false"
-            >
-              <template #trigger>
-                <button class="plus-btn" :class="{ active: showMenu }">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19"/>
-                    <line x1="5" y1="12" x2="19" y2="12"/>
-                  </svg>
-                </button>
-              </template>
-              <div class="mode-menu">
-                <div class="mode-item" @click="toggleThinking">
-                  <div class="mode-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M9.5 19h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1z"/>
-                      <path d="M12 3a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3 6l-3 3-3-3c-1.5-1.5-3-3.5-3-6a6 6 0 0 1 6-6z"/>
-                    </svg>
-                  </div>
-                  <div class="mode-info">
-                    <div class="mode-name">{{ isThinking ? '关闭思考模式' : '开启思考模式' }}</div>
-                    <div class="mode-desc">开启后支持多步推理和工具调用</div>
-                  </div>
-                </div>
-              </div>
-            </NPopover>
-
-            <!-- 思考模式标签，开启时显示 -->
-            <div
-              v-if="isThinking"
-              class="thinking-tag"
-              @mouseenter="showClose = true"
-              @mouseleave="showClose = false"
-            >
-              <button v-if="showClose" class="close-btn" @click.stop="toggleThinking">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2080f0" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              <span>思考</span>
-            </div>
+            <!--
+              v1.5.2 起取消「思考模式」开关。所有对话默认走 Agent 流式路径，
+              是否调用工具由 LLM 自动判断。底部左侧暂无功能，先留空，
+              将来要加附件/语音切换等再补。
+            -->
           </div>
 
           <div class="right-tools">
@@ -107,8 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { NPopover } from 'naive-ui'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
 
@@ -118,9 +71,6 @@ const { error, info } = useToast()
 const inputText = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isComposing = ref(false)
-const isThinking = ref(false)
-const showMenu = ref(false)
-const showClose = ref(false)
 
 const canSend = computed(() => {
   return inputText.value.trim().length > 0
@@ -154,35 +104,19 @@ function handleSend() {
   inputText.value = ''
   nextTick(autoResize)
 
-  chatStore.sendMessage(text, isThinking.value).catch((err: Error) => {
+  chatStore.sendMessage(text).catch((err: Error) => {
     error(err.message || '发送失败')
   })
-}
-
-function handleAttach() {
-  // 预留：打开附件选择
 }
 
 function handleVoiceInput() {
   info('语音输入功能即将上线')
 }
 
-function toggleThinking() {
-  isThinking.value = !isThinking.value
-}
-
-// 从 localStorage 恢复思考模式状态
 onMounted(() => {
-  const saved = localStorage.getItem('chat-thinking-mode')
-  if (saved === 'true') {
-    isThinking.value = true
-  }
+  // v1.5.2 起不再读取 chat-thinking-mode localStorage（已废弃）。
+  // 旧的本地残留值不会影响新行为，浏览器 localStorage 自然过期或用户手动清。
   autoResize()
-})
-
-// 持久化思考模式
-watch(isThinking, (val) => {
-  localStorage.setItem('chat-thinking-mode', String(val))
 })
 </script>
 
@@ -254,6 +188,8 @@ watch(isThinking, (val) => {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 占位高度，避免左右对齐时左侧塌陷 */
+  min-height: 32px;
 }
 
 .right-tools {
@@ -263,7 +199,7 @@ watch(isThinking, (val) => {
 }
 
 /* 按钮通用样式 */
-.plus-btn, .tool-btn {
+.tool-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -278,50 +214,9 @@ watch(isThinking, (val) => {
   transition: all 0.15s;
 }
 
-.plus-btn:hover, .tool-btn:hover {
+.tool-btn:hover {
   background: rgba(0, 0, 0, 0.05);
   color: #374151;
-}
-
-/* 思考模式标签 */
-.thinking-tag {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #2080f0;
-  font-size: 13px;
-  font-weight: 500;
-  user-select: none;
-  background: rgba(32, 128, 240, 0.1);
-  padding: 2px 6px;
-  border-radius: 6px;
-  transition: all 0.2s;
-}
-
-/* 关闭按钮 */
-.close-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border: none;
-  background: transparent;
-  color: #2080f0;
-  cursor: pointer;
-  padding: 0;
-  border-radius: 3px;
-  transition: all 0.15s;
-}
-
-.close-btn:hover {
-  background: rgba(32, 128, 240, 0.2);
-}
-
-/* 思考模式按钮激活态 */
-.thinking-btn.active {
-  color: #2080f0;
-  background: rgba(32, 128, 240, 0.1);
 }
 
 /* 发送按钮 */
@@ -353,54 +248,5 @@ watch(isThinking, (val) => {
   font-size: 11px;
   color: #9ca3af;
   margin-top: 12px;
-}
-
-/* 模式菜单样式 */
-.mode-menu {
-  width: 280px;
-  padding: 8px 0;
-}
-
-.mode-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: background 0.15s;
-}
-
-.mode-item:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.mode-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #6b7280;
-  flex-shrink: 0;
-}
-
-.mode-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.mode-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #111827;
-  line-height: 1.4;
-}
-
-.mode-desc {
-  font-size: 12px;
-  color: #6b7280;
-  line-height: 1.4;
-  margin-top: 2px;
 }
 </style>

@@ -15,13 +15,12 @@ export function useChat() {
   const lastMessage = computed<Message | null>(() => chatStore.lastMessage);
 
   /**
-   * 发送消息
+   * 发送消息（v1.5.2 起默认走 Agent 流式路径，工具调用由 LLM 自动决定）
    * @param content 消息内容
-   * @param isAgentMode 是否使用Agent模式
    */
-  const sendMessage = async (content: string, isAgentMode: boolean = false): Promise<void> => {
+  const sendMessage = async (content: string): Promise<void> => {
     try {
-      await chatStore.sendMessage(content, isAgentMode);
+      await chatStore.sendMessage(content);
     } catch (error) {
       console.error('Send message failed in useChat:', error);
       throw error;

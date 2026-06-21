@@ -85,7 +85,7 @@ export type ChatInputProps = {
 
 export type ChatInputEmits = {
   'update:modelValue': [value: string];
-  send: [content: string, isAgentMode: boolean];
+  send: [content: string];
 };
 
 // AppHeader types

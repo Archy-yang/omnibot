@@ -51,29 +51,60 @@ Agent 层位于 API Handler 与 LLM Client 之间。现有 `LLMProvider` 接口�
 
 ```go
 type Tool struct {
-    Name        string
-    Description string
-    Parameters  map[string]interface{}
-    Execute     func(ctx context.Context, args map[string]interface{}) (string, error)
+    Name         string
+    Description  string
+    DisplayLabel string  // v1.5.2 起：面向用户的中文友好文案，留空时回落到 Name
+    Parameters   map[string]interface{}
+    Execute      func(ctx context.Context, args map[string]interface{}) (string, error)
 }
 ```
+
+### LLMClient（同步）
+
+```go
+type LLMClient interface {
+    ChatCompletion(ctx, messages, tools) (content string, toolCalls []map[string]interface{}, err error)
+}
+```
+
+### StreamingLLMClient（流式，v1.5.2 新增）
+
+```go
+type StreamingLLMClient interface {
+    ChatCompletionStream(ctx, messages, tools) (<-chan LLMStreamChunk, error)
+}
+```
+
+`LLMStreamChunk` 是 SSE 单行解析后的原始增量单元，包含 `ContentDelta` /
+`ToolCallDelta` / `FinishReason` / `Done` / `Error` 字段。同一个
+`OpenAILLMClient` 同时实现 `LLMClient` 和 `StreamingLLMClient`。
 
 ### ReActAgent
 
 ```go
 type ReActAgent struct {
-    llmClient    LLMClient
-    toolRegistry *ToolRegistry
-    maxSteps     int
-    timeout      time.Duration
-    systemPrompt string
+    llmClient       LLMClient
+    streamingClient StreamingLLMClient  // 流式路径
+    toolRegistry    *ToolRegistry
+    maxSteps        int
+    timeout         time.Duration
+    systemPrompt    string
 }
 ```
+
+两个执行入口：
+
+- `Run(ctx, conversation) (*AgentResult, error)` —— 同步执行整个 ReAct 循环，
+  返回完整结果。供非流式场景（API 集成、未来异步任务等）使用。
+- `RunStream(ctx, conversation) (<-chan AgentEvent, error)` —— 流式执行，按时序
+  emit `AgentEvent`（Token / ToolCall / ToolResult / Done / Error）。这是
+  Web 端 `/messages/agent/stream` 的底层实现。
 
 ### AgentService
 
 ```go
-func (s *AgentService) Run(ctx context.Context, userID int64, conversation []map[string]interface{}) (*AgentResult, error)
+func (s *AgentService) Run(ctx, userID, conversation, customLLMClient...) (*AgentResult, error)
+func (s *AgentService) RunStream(ctx, userID, conversation, customStreamClient...) (<-chan AgentEvent, error)
 ```
 
 ---
@@ -112,18 +143,53 @@ LLM ChatCompletion(tools)
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/chat/messages/agent` | Agent 同步对话 |
-| POST | `/api/v1/chat/messages/agent/stream` | Agent SSE 流式对话 |
+| POST | `/api/v1/chat/messages/agent/stream` | Agent SSE 流式对话（v1.5.2 起为真流式） |
 
-SSE 事件示例：
+### SSE 协议（v1.5.2）
+
+简单提问（无工具调用）—— 体验等同普通流式：
 
 ```text
-event: agent_step
-data: {"step":1,"tool_call":"calculator","tool_result":"42"}
+event: token
+data: {"content":"你"}
 
-data: {"content":"计算结果是 42。"}
+event: token
+data: {"content":"好"}
 
 data: [DONE]
 ```
+
+工具调用场景 —— 工具调用立即推送状态，工具结果随后推送（供前端展开看详情），
+再继续 token 流：
+
+```text
+event: tool_call
+data: {"tool":"get_current_time","label":"查询了当前时间"}
+
+event: tool_result
+data: {"tool":"get_current_time","result":"10:30"}
+
+event: token
+data: {"content":"现在是 "}
+
+event: token
+data: {"content":"10:30"}
+
+data: [DONE]
+```
+
+错误：
+
+```text
+event: error
+data: {"error":"streaming client not configured"}
+```
+
+> 旧 `event: agent_step` 协议（v1.5.0 ~ v1.5.1）已下线，前端不再监听，后端不再产出。
+> `event: tool_result`（v1.5.3 起）携带工具结果，供前端「点击思考条展开看详情」。
+> 执行失败的结果已脱敏为「工具执行失败」，不透传原始 error（IP / 连接错误 / 堆栈），
+> 见 `sanitizeToolResult`（`internal/api/web/handler.go`）。tool_result 不计入落库内容。
+> 事件严格按 LLM 真实时序推送，前端据此交错渲染「文本 → 思考 → 文本」。
 
 ---
 
@@ -133,6 +199,21 @@ data: [DONE]
 - calculator 仅允许数字、四则运算、括号、小数点和空格
 - 工具执行失败不会导致进程 panic，错误作为 observation 回传给 LLM
 - 不提供文件读写、shell、网络访问等高风险工具
+
+---
+
+## 6.5 思考过程持久化（v1.5.4）
+
+Web Agent 流式回复的思考过程会落库，刷新页面后历史可还原（不再回退纯文本）。
+
+- `messages` 表新增 `segments` JSON 列（GORM `serializer:json`，SQLite/PostgreSQL 通用），
+  `content` 保留为纯文本投影（供复制 / 上下文拼接 / 搜索）
+- `HandleSendMessageAgentStream` 在推 SSE 的同时按时序累积 `[]conversation.MessageSegment`
+  （text/tool 交错），流结束调 `SaveAssistantMessageWithSegments` 落库
+- 落库的工具结果与 SSE 推送共用 `sanitizeToolResult`，失败结果存「工具执行失败」，
+  原始 error 不入库
+- 这是「JSON 骨架 + 实体表」混合存储的碎片层。未来 artifact / 生成文件 / 异步任务等
+  一等实体走独立表，segment 里放引用 id，不再改 messages 结构（详见演进路线图 v1.5.4）
 
 ---
 

@@ -26,7 +26,7 @@ export const useChatStore = defineStore(
       messages.value = [];
     };
 
-    const sendMessage = async (content: string, isAgentMode: boolean = false): Promise<void> => {
+    const sendMessage = async (content: string): Promise<void> => {
       if (!content.trim()) {
         return;
       }
@@ -46,18 +46,44 @@ export const useChatStore = defineStore(
         role: 'assistant',
         content: '',
         created_at: new Date().toISOString(),
-        agentSteps: [],
+        segments: [],
       });
       addMessage(assistantMessage);
 
       isLoading.value = true;
       try {
-        await chatService.sendMessageStream(content, sessionId.value, isAgentMode, {
+        await chatService.sendMessageStream(content, sessionId.value, {
           onChunk: (chunk: string) => {
+            // content 始终累加（复制按钮 / 落库用纯文本）
             assistantMessage.content += chunk;
+            // segments 按时序维护：末尾是 text 段就追加，否则新建一段 text
+            const segs = assistantMessage.segments!;
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') {
+              last.content += chunk;
+            } else {
+              segs.push({ type: 'text', content: chunk });
+            }
           },
-          onAgentStep: (step) => {
-            assistantMessage.agentSteps!.push(step);
+          onToolCall: (event) => {
+            // push 一个 tool 段，自然封口上一段文本；result 待 onToolResult 回填
+            assistantMessage.segments!.push({
+              type: 'tool',
+              tool: event.tool,
+              label: event.label,
+              expanded: false,
+            });
+          },
+          onToolResult: (event) => {
+            // 从尾部找最后一个尚未回填 result 的同名 tool 段
+            const segs = assistantMessage.segments!;
+            for (let i = segs.length - 1; i >= 0; i--) {
+              const seg = segs[i];
+              if (seg.type === 'tool' && seg.result === undefined) {
+                seg.result = event.result;
+                break;
+              }
+            }
           },
           onDone: () => {
             isLoading.value = false;

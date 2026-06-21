@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
 	domainuser "omnibot/internal/domain/user"
+	agentpkg "omnibot/internal/service/agent"
 	serviceuser "omnibot/internal/service/user"
 )
 
@@ -39,6 +41,7 @@ func (m *mockUserService) GetOrCreateByChannel(channelType, channelUserID string
 type mockMessageService struct {
 	savedUserContent     string
 	savedAssistantContent string
+	savedSegments        []conversation.MessageSegment
 	listMessages         []*conversation.Message
 	listErr              error
 	listCalledLimit      int
@@ -52,6 +55,12 @@ func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, 
 
 func (m *mockMessageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
 	m.savedAssistantContent = content
+	return nil
+}
+
+func (m *mockMessageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error {
+	m.savedAssistantContent = content
+	m.savedSegments = segments
 	return nil
 }
 
@@ -735,4 +744,343 @@ func TestHandleSendMessageStream_InvalidBody(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// ===== Agent stream handler tests =====
+
+// mockAgentService 模拟 AgentService，按预设序列推 AgentEvent 到 channel。
+type mockAgentService struct {
+	events    []agentpkg.AgentEvent
+	runErr    error
+	streamErr error
+}
+
+func (m *mockAgentService) Run(
+	ctx context.Context,
+	userID int64,
+	conversation []map[string]interface{},
+	customLLMClient ...agentpkg.LLMClient,
+) (*agentpkg.AgentResult, error) {
+	if m.runErr != nil {
+		return nil, m.runErr
+	}
+	return &agentpkg.AgentResult{FinalResponse: "noop"}, nil
+}
+
+func (m *mockAgentService) RunStream(
+	ctx context.Context,
+	userID int64,
+	conversation []map[string]interface{},
+	customStreamClient ...agentpkg.StreamingLLMClient,
+) (<-chan agentpkg.AgentEvent, error) {
+	if m.streamErr != nil {
+		return nil, m.streamErr
+	}
+	ch := make(chan agentpkg.AgentEvent, len(m.events))
+	for _, e := range m.events {
+		ch <- e
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockAgentService) DefaultLLMClient() agentpkg.LLMClient { return nil }
+func (m *mockAgentService) DefaultStreamingLLMClient() agentpkg.StreamingLLMClient {
+	return nil
+}
+
+// TestHandleSendMessageAgentStream_TokenAndDone：纯 token 流场景，
+// SSE 正文应该包含 event: token + data: {"content":"..."}，最后是 [DONE]。
+// 这是「默认全 Agent」体验下最常见的简单提问路径。
+func TestHandleSendMessageAgentStream_TokenAndDone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToken, Content: "你"},
+			{Type: agentpkg.AgentEventToken, Content: "好"},
+			{Type: agentpkg.AgentEventDone, Content: "你好"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "你好"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+
+	out := w.Body.String()
+	assert.Contains(t, out, "event: token")
+	assert.Contains(t, out, `"content":"你"`)
+	assert.Contains(t, out, `"content":"好"`)
+	assert.Contains(t, out, "[DONE]")
+
+	// 累计的 token 应该被持久化为 assistant 消息
+	assert.Equal(t, "你好", msgSvc.savedAssistantContent)
+}
+
+// TestHandleSendMessageAgentStream_ToolCallEvent：工具调用场景，
+// SSE 正文应该有 event: tool_call 行携带 tool + label，
+// 然后是后续 token 流，最后 [DONE]。
+func TestHandleSendMessageAgentStream_ToolCallEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30"},
+			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30"},
+			{Type: agentpkg.AgentEventDone, Content: "现在是 10:30"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点了"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	out := w.Body.String()
+
+	// tool_call 事件携带工具名和友好 label
+	assert.Contains(t, out, "event: tool_call")
+	assert.Contains(t, out, `"tool":"get_current_time"`)
+	assert.Contains(t, out, `"label":"查询了当前时间"`)
+
+	// v1.5.3：tool_result 现在向前端暴露（正常结果原样透传），供「展开看详情」
+	assert.Contains(t, out, "event: tool_result")
+	assert.Contains(t, out, `"result":"10:30"`)
+
+	// token 后跟 [DONE]
+	assert.Contains(t, out, "event: token")
+	assert.Contains(t, out, "[DONE]")
+	assert.Equal(t, "现在是 10:30", msgSvc.savedAssistantContent)
+
+	// tool_result 不计入落库的 assistant 内容
+	assert.NotContains(t, msgSvc.savedAssistantContent, "10:30\"")
+}
+
+// TestHandleSendMessageAgentStream_ToolResultSanitized：工具执行失败的结果
+// 不应原样透传给前端（安全红线：错误不泄露内部实现细节），而是替换为友好文案。
+func TestHandleSendMessageAgentStream_ToolResultSanitized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "工具执行错误: dial tcp 10.0.0.1:443: connection refused"},
+			{Type: agentpkg.AgentEventToken, Content: "抱歉，读取失败了。"},
+			{Type: agentpkg.AgentEventDone, Content: "抱歉，读取失败了。"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "读 rss"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	out := w.Body.String()
+
+	// tool_result 事件存在，但原始错误细节被脱敏
+	assert.Contains(t, out, "event: tool_result")
+	assert.NotContains(t, out, "connection refused")
+	assert.NotContains(t, out, "10.0.0.1")
+	assert.NotContains(t, out, "dial tcp")
+	assert.Contains(t, out, "工具执行失败")
+}
+
+// TestHandleSendMessageAgentStream_EventOrdering：SSE 事件必须保持 LLM 真实时序——
+// token → tool_call → tool_result → token，前端据此交错渲染思考过程。
+func TestHandleSendMessageAgentStream_EventOrdering(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToken, Content: "让我查一下。"},
+			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30"},
+			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
+			{Type: agentpkg.AgentEventDone, Content: "让我查一下。现在是 10:30。"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	out := w.Body.String()
+
+	// 各事件首次出现的字节位置必须严格递增，证明时序被保留
+	idxToken1 := strings.Index(out, "让我查一下")
+	idxToolCall := strings.Index(out, "event: tool_call")
+	idxToolResult := strings.Index(out, "event: tool_result")
+	idxToken2 := strings.Index(out, "现在是 10:30")
+
+	assert.Greater(t, idxToolCall, idxToken1, "tool_call 应在第一段 token 之后")
+	assert.Greater(t, idxToolResult, idxToolCall, "tool_result 应在 tool_call 之后")
+	assert.Greater(t, idxToken2, idxToolResult, "第二段 token 应在 tool_result 之后")
+}
+
+// TestHandleSendMessageAgentStream_PersistsSegments：流式跑完后，应把按时序累积的
+// segments（text → tool → text）连同纯文本 content 一起落库，工具结果经脱敏（v1.5.4）。
+func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToken, Content: "让我查一下。"},
+			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30"},
+			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
+			{Type: agentpkg.AgentEventDone, Content: "让我查一下。现在是 10:30。"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// content 是纯文本投影
+	assert.Equal(t, "让我查一下。现在是 10:30。", msgSvc.savedAssistantContent)
+
+	// segments 按时序：text → tool（含结果）→ text
+	require.Len(t, msgSvc.savedSegments, 3)
+	assert.Equal(t, "text", msgSvc.savedSegments[0].Type)
+	assert.Equal(t, "让我查一下。", msgSvc.savedSegments[0].Content)
+	assert.Equal(t, "tool", msgSvc.savedSegments[1].Type)
+	assert.Equal(t, "get_current_time", msgSvc.savedSegments[1].Tool)
+	assert.Equal(t, "查询了当前时间", msgSvc.savedSegments[1].Label)
+	assert.Equal(t, "10:30", msgSvc.savedSegments[1].Result)
+	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
+	assert.Equal(t, "现在是 10:30。", msgSvc.savedSegments[2].Content)
+}
+
+// TestHandleSendMessageAgentStream_PersistsSanitizedSegments：落库的工具失败结果
+// 必须脱敏，不把原始 error 写进 DB（安全红线，v1.5.4）。
+func TestHandleSendMessageAgentStream_PersistsSanitizedSegments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "工具执行错误: dial tcp 10.0.0.1:443: connection refused"},
+			{Type: agentpkg.AgentEventToken, Content: "抱歉，失败了。"},
+			{Type: agentpkg.AgentEventDone, Content: "抱歉，失败了。"},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "读 rss"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Len(t, msgSvc.savedSegments, 2)
+	toolSeg := msgSvc.savedSegments[0]
+	assert.Equal(t, "tool", toolSeg.Type)
+	assert.Equal(t, "工具执行失败", toolSeg.Result)
+	assert.NotContains(t, toolSeg.Result, "connection refused")
+	assert.NotContains(t, toolSeg.Result, "10.0.0.1")
+}
+
+// TestHandleGetHistory_IncludesSegments：历史响应应携带带 segments 的消息的 segments，
+// 无 segments 的消息该字段省略（omitempty）（v1.5.4）。
+func TestHandleGetHistory_IncludesSegments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgs := []*conversation.Message{
+		conversation.NewUserMessage(42, "几点", ""),
+		conversation.NewAssistantMessageWithSegments(42, "现在是 10:30", []conversation.MessageSegment{
+			{Type: "tool", Tool: "get_current_time", Label: "查询了当前时间", Result: "10:30"},
+			{Type: "text", Content: "现在是 10:30"},
+		}),
+	}
+	msgSvc := &mockMessageService{listMessages: msgs}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, &mockAgentService{})
+	router := gin.New()
+	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
+
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=s&limit=50", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	out := w.Body.String()
+
+	// assistant 消息带 segments
+	assert.Contains(t, out, `"segments"`)
+	assert.Contains(t, out, `"tool":"get_current_time"`)
+	assert.Contains(t, out, `"result":"10:30"`)
+	// user 消息无 segments —— 不应每条都带；用户那条不含 segments 字段
+	// （粗校验：segments 出现次数应为 1）
+	assert.Equal(t, 1, strings.Count(out, `"segments"`))
+}
+
+// TestHandleSendMessageAgentStream_StreamOpenError：RunStream 直接返回 error
+// （如未配置 streaming client）应该按 SSE error 事件返回，不应让 client 永远等。
+func TestHandleSendMessageAgentStream_StreamOpenError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{streamErr: errors.New("streaming client not configured")}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "x"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	out := w.Body.String()
+	assert.Contains(t, out, "event: error")
+	assert.Contains(t, out, "streaming client not configured")
+	// 错误路径不应推 [DONE]
+	assert.NotContains(t, out, "[DONE]")
 }
