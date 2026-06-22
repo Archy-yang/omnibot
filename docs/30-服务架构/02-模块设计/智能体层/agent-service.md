@@ -217,6 +217,41 @@ Web Agent 流式回复的思考过程会落库，刷新页面后历史可还原�
 
 ---
 
+## 6.6 Agent 运行链路记录（v1.5.5）
+
+「实体层」首次落地。`agent_steps` 独立表把一轮对话的**完整执行链**按顺序记下来——
+不只工具调用，连每次 LLM 调用也记。一轮 ReAct 由有序步骤组成（llm_call / tool_call），
+`WHERE message_id=? ORDER BY seq` 一句还原完整时序。
+
+与 segments 的脱敏展示分工：
+
+| 维度 | `segments[].result`（展示） | `agent_steps`（记录） |
+|------|------|------|
+| 内容 | 脱敏（失败显「工具执行失败」） | 完整原始（含真实错误、prompt、模型回复） |
+| 范围 | 仅工具结果 | 整条链：每次 LLM 调用 + 每次工具调用 |
+| 诉求 | 轻量、安全 | 完整、可分析、可复盘 |
+| 暴露 | 对外（前端展开看） | 内部表，不对外 |
+
+`agent_steps` 字段：`user_id` / `message_id`（锚到这一轮的 assistant 消息）/ `seq`（链内顺序）/
+`kind`（llm_call|tool_call）/ `status` / `duration_ms` / `tool`（tool 用）/ `model`（llm 用）/
+`request`（llm: messages JSON；tool: arguments）/ `response`（llm: {content,tool_calls}；
+tool: 原始未脱敏结果）/ `prompt_tokens` / `completion_tokens`（预留，本轮恒 0）/ `created_at`。
+
+数据流：`RunStream` 每轮调 LLM 前快照 messages、计时，轮末 emit `AgentEventLLMCall`；
+工具执行处 emit `AgentEventToolResult`（原始结果+arguments+status+duration）→
+handler 按时序累积 `[]AgentStep`（带 seq）→ `SaveAssistantMessageWithSegments` 保存消息后
+stamp `MessageID` 批量落库（非原子，记录失败仅记日志，不拖垮主消息）。
+
+**运行时与记录是两条独立的路**：运行时上下文由滑动窗口（最近10轮、纯文本）框住，工具结果是
+「轮内消耗品」、跨轮只留最终文本结论；`agent_steps` 纯离线，不进运行时上下文、不影响模型看到
+什么、不影响上下文成本。所以记录表按「分析最好查」设计，放开手记全。
+
+> **为什么记整条链而非只记工具，又为何不截断**：只记工具看不到「模型为什么这么走」；
+> 截断大结果则丢了「记录 + 分析」要的完整数据。正解是两条路分离——运行时瘦、记录全。
+> 分析能力（按 kind/status/tool/耗时聚合、token 成本）对接 v1.8+。
+
+---
+
 ## 7. 后续演进
 
 - v1.6+：第三入口复用 Agent 能力

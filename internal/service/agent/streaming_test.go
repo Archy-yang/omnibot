@@ -92,14 +92,19 @@ func TestReActAgent_RunStream_NoToolCall(t *testing.T) {
 
 	events := drainEvents(t, ch)
 
-	// 预期：3 个 Token + 1 个 Done
-	require.Len(t, events, 4)
+	// 预期：3 个 Token + 1 个 LLMCall（v1.5.5 运行链路记录）+ 1 个 Done
+	require.Len(t, events, 5)
 	assert.Equal(t, AgentEventToken, events[0].Type)
 	assert.Equal(t, "你", events[0].Content)
 	assert.Equal(t, "好", events[1].Content)
 	assert.Equal(t, "！", events[2].Content)
-	assert.Equal(t, AgentEventDone, events[3].Type)
-	assert.Equal(t, "你好！", events[3].Content)
+	// 无工具的简单回答也产出一个 llm_call 步骤
+	assert.Equal(t, AgentEventLLMCall, events[3].Type)
+	assert.Equal(t, StepStatusSuccess, events[3].StepStatus)
+	assert.NotEmpty(t, events[3].LLMRequest)
+	assert.Contains(t, events[3].LLMResponse, "你好！")
+	assert.Equal(t, AgentEventDone, events[4].Type)
+	assert.Equal(t, "你好！", events[4].Content)
 }
 
 // TestReActAgent_RunStream_SingleToolCall：LLM 第一轮决定调用一个工具，第二轮输出文本回答。
@@ -148,23 +153,32 @@ func TestReActAgent_RunStream_SingleToolCall(t *testing.T) {
 
 	events := drainEvents(t, ch)
 
-	// 预期事件序列：ToolCall、ToolResult、Token、Token、Done
-	require.GreaterOrEqual(t, len(events), 5)
-	assert.Equal(t, AgentEventToolCall, events[0].Type)
-	assert.Equal(t, "get_current_time", events[0].ToolName)
-	assert.Equal(t, "查询了当前时间", events[0].ToolLabel)
+	// 预期事件序列（v1.5.5）：LLMCall(决定调工具) → ToolCall → ToolResult → Token → Token → LLMCall(最终) → Done
+	require.GreaterOrEqual(t, len(events), 7)
+	// round1 的 llm_call：response 含 tool_calls
+	assert.Equal(t, AgentEventLLMCall, events[0].Type)
+	assert.Equal(t, StepStatusSuccess, events[0].StepStatus)
+	assert.Contains(t, events[0].LLMResponse, "get_current_time")
 
-	assert.Equal(t, AgentEventToolResult, events[1].Type)
+	assert.Equal(t, AgentEventToolCall, events[1].Type)
 	assert.Equal(t, "get_current_time", events[1].ToolName)
-	assert.Equal(t, "2026-06-17 10:30:00 CST", events[1].ToolResult)
+	assert.Equal(t, "查询了当前时间", events[1].ToolLabel)
 
-	// 后续是 token 流和 done
-	assert.Equal(t, AgentEventToken, events[2].Type)
-	assert.Equal(t, "现在是 ", events[2].Content)
+	assert.Equal(t, AgentEventToolResult, events[2].Type)
+	assert.Equal(t, "get_current_time", events[2].ToolName)
+	assert.Equal(t, "2026-06-17 10:30:00 CST", events[2].ToolResult)
+	assert.Equal(t, StepStatusSuccess, events[2].StepStatus)
+	assert.Equal(t, "{}", events[2].ToolArguments)
+	assert.GreaterOrEqual(t, events[2].StepDurationMs, int64(0))
+
+	// 后续是 token 流、round2 的 llm_call、done
 	assert.Equal(t, AgentEventToken, events[3].Type)
-	assert.Equal(t, "10:30", events[3].Content)
-	assert.Equal(t, AgentEventDone, events[4].Type)
-	assert.Equal(t, "现在是 10:30", events[4].Content)
+	assert.Equal(t, "现在是 ", events[3].Content)
+	assert.Equal(t, AgentEventToken, events[4].Type)
+	assert.Equal(t, "10:30", events[4].Content)
+	assert.Equal(t, AgentEventLLMCall, events[5].Type)
+	assert.Equal(t, AgentEventDone, events[6].Type)
+	assert.Equal(t, "现在是 10:30", events[6].Content)
 }
 
 // TestReActAgent_RunStream_MultipleToolCalls：LLM 连续调用两次工具再给最终回答。
@@ -227,17 +241,18 @@ func TestReActAgent_RunStream_MultipleToolCalls(t *testing.T) {
 	}
 
 	expected := []AgentEventType{
-		AgentEventToolCall, AgentEventToolResult, // tool_a
-		AgentEventToolCall, AgentEventToolResult, // tool_b
-		AgentEventToken, // "完成"
+		AgentEventLLMCall, AgentEventToolCall, AgentEventToolResult, // round1: tool_a
+		AgentEventLLMCall, AgentEventToolCall, AgentEventToolResult, // round2: tool_b
+		AgentEventToken,   // round3: "完成" token 先于 LLMCall（无工具轮先流 token，循环后才记 llm_call）
+		AgentEventLLMCall, // round3: llm_call 记录
 		AgentEventDone,
 	}
 	assert.Equal(t, expected, types)
 
-	// 验证两次工具调用顺序正确
-	assert.Equal(t, "tool_a", events[0].ToolName)
-	assert.Equal(t, "tool_b", events[2].ToolName)
-	assert.Equal(t, "完成", events[len(events)-1].Content)
+	// 验证两次工具调用顺序正确（ToolCall 现在分别在 index 1 和 4）
+	assert.Equal(t, "tool_a", events[1].ToolName)
+	assert.Equal(t, "tool_b", events[4].ToolName)
+	assert.Equal(t, "完成", events[6].Content)
 }
 
 // TestReActAgent_RunStream_ToolNotFound：LLM 调用了一个未注册的工具，
@@ -273,18 +288,67 @@ func TestReActAgent_RunStream_ToolNotFound(t *testing.T) {
 
 	events := drainEvents(t, ch)
 
-	// 第一个事件应该是 ToolCall（即使工具不存在，LLM 决定调就先 emit 给前端）
-	require.NotEmpty(t, events)
-	assert.Equal(t, AgentEventToolCall, events[0].Type)
-	assert.Equal(t, "nonexistent", events[0].ToolName)
+	// 第一个事件是 round1 的 llm_call（决定调工具），然后才是 ToolCall
+	require.GreaterOrEqual(t, len(events), 3)
+	assert.Equal(t, AgentEventLLMCall, events[0].Type)
+	assert.Equal(t, AgentEventToolCall, events[1].Type)
+	assert.Equal(t, "nonexistent", events[1].ToolName)
 
-	// 第二个事件 ToolResult 应该携带"工具不存在"的错误信息
-	require.GreaterOrEqual(t, len(events), 2)
-	assert.Equal(t, AgentEventToolResult, events[1].Type)
-	assert.Contains(t, events[1].ToolResult, "nonexistent")
+	// ToolResult 应携带"工具不存在"错误信息，status 为 not_found
+	assert.Equal(t, AgentEventToolResult, events[2].Type)
+	assert.Contains(t, events[2].ToolResult, "nonexistent")
+	assert.Equal(t, StepStatusNotFound, events[2].StepStatus)
 
 	// 最后应正常以 Done 结束
 	assert.Equal(t, AgentEventDone, events[len(events)-1].Type)
+}
+
+// TestReActAgent_RunStream_ToolError：工具执行返回 error 时，ToolResult 事件 status 为 error，
+// 且 ToolResult 携带原始未脱敏错误（供记录/分析，v1.5.5）。
+func TestReActAgent_RunStream_ToolError(t *testing.T) {
+	llm := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			{
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "failing_tool", ArgumentsDelta: `{"x":1}`}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			{
+				{ContentDelta: "失败了"},
+				{FinishReason: "stop"},
+				{Done: true},
+			},
+		},
+	}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "failing_tool", DisplayLabel: "执行了工具",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	require.NoError(t, err)
+
+	events := drainEvents(t, ch)
+	// 序列：LLMCall(决定调) → ToolCall → ToolResult → ... 工具步骤在 index 2
+	require.GreaterOrEqual(t, len(events), 3)
+	assert.Equal(t, AgentEventToolResult, events[2].Type)
+	assert.Equal(t, StepStatusError, events[2].StepStatus)
+	assert.Equal(t, `{"x":1}`, events[2].ToolArguments)
+	// 原始错误透传（未脱敏）
+	assert.Contains(t, events[2].ToolResult, context.DeadlineExceeded.Error())
 }
 
 // noopSyncLLM 仅用于满足 ReActAgentConfig.LLMClient 必填，流式路径不会调用它。

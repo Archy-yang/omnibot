@@ -38,9 +38,11 @@ type MessageService interface {
 	// SaveAssistantMessage 保存助手消息
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 
-	// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4）。
-	// content 为纯文本投影，segments 为按时序的展示片段。仅 Web Agent 流式路径使用。
-	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error
+	// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4），
+	// 并落 Agent 运行步骤链（v1.5.5）。content 为纯文本投影，segments 为展示片段，
+	// steps 为该轮的有序执行步骤（LLM 调用 + 工具调用），保存消息后 stamp MessageID 批量落库；
+	// 为空时不写。步骤落库失败不影响消息持久化（仅记日志）。
+	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 
 	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
 	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
@@ -53,8 +55,9 @@ type LongTermMemoryProvider interface {
 }
 
 type messageService struct {
-	msgRepo   chatrepo.MessageRepository
-	memorySvc LongTermMemoryProvider
+	msgRepo      chatrepo.MessageRepository
+	memorySvc    LongTermMemoryProvider
+	stepRepo     chatrepo.AgentStepRepository
 }
 
 // NewMessageService 创建消息服务
@@ -64,6 +67,8 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 		switch s := svc.(type) {
 		case LongTermMemoryProvider:
 			service.memorySvc = s
+		case chatrepo.AgentStepRepository:
+			service.stepRepo = s
 		}
 	}
 	return service
@@ -158,10 +163,28 @@ func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64,
 	return s.msgRepo.Create(msg)
 }
 
-// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4）。
-func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error {
+// SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4），并落 Agent 运行步骤链（v1.5.5）。
+func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
 	msg := conversation.NewAssistantMessageWithSegments(userID, content, segments)
-	return s.msgRepo.Create(msg)
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+
+	// 运行步骤链是辅助记录：消息已落库成功，步骤落库失败不应让整次保存失败，仅记日志。
+	if s.stepRepo != nil && len(steps) > 0 {
+		for _, step := range steps {
+			step.MessageID = msg.ID
+			step.UserID = userID
+		}
+		if err := s.stepRepo.CreateBatch(steps); err != nil {
+			logger.ErrorWithFields("Failed to save agent steps",
+				zap.Int64("user_id", userID),
+				zap.Int64("message_id", msg.ID),
+				zap.Error(err),
+			)
+		}
+	}
+	return nil
 }
 
 // ListByUser 获取用户的历史消息（按时间正序）。

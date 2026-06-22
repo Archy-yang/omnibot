@@ -33,7 +33,7 @@ type MessageService interface {
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
-	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error
+	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -559,6 +559,14 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	// segments 按和前端 store 相同的时序逻辑累积（text/tool 交错），用于历史持久化（v1.5.4）。
 	var finalContent string
 	var segments []conversation.MessageSegment
+	// steps 累积该轮的 Agent 运行步骤链（LLM 调用 + 工具调用），落 agent_steps 表（v1.5.5）。
+	// seq 是链内顺序，stepModel 用于给 llm_call 步骤标注模型名（自定义配置时已知）。
+	var steps []*conversation.AgentStep
+	seq := 0
+	stepModel := ""
+	if hasCustomConfig && userConfig != nil {
+		stepModel = userConfig.Model
+	}
 	for ev := range eventCh {
 		switch ev.Type {
 		case agentpkg.AgentEventToken:
@@ -588,7 +596,7 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		case agentpkg.AgentEventToolResult:
 			// v1.5.3：向前端暴露工具结果，供「点击思考条展开看详情」。
 			// 安全红线：执行失败的结果可能含内部细节（IP、堆栈、连接错误），
-			// 统一脱敏为友好文案，不透传原始 error。SSE 推送和落库共用同一脱敏值。
+			// 统一脱敏为友好文案，不透传原始 error。SSE 推送和展示共用同一脱敏值。
 			sanitized := sanitizeToolResult(ev.ToolResult)
 			// 回填最后一个 Result 为空的 tool 段（与前端 store onToolResult 一致）
 			for i := len(segments) - 1; i >= 0; i-- {
@@ -597,12 +605,28 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 					break
 				}
 			}
+			// v1.5.5：append 一个 tool_call 步骤。Response 用原始未脱敏值（含真实错误），
+			// 供记录/分析；展示用的 segment.result 仍是上面脱敏后的值。MessageID 在 service 层 stamp。
+			toolStep := conversation.NewToolStep(
+				userID, ev.ToolName, ev.ToolArguments, ev.ToolResult, ev.StepStatus, ev.StepDurationMs,
+			)
+			toolStep.Seq = seq
+			seq++
+			steps = append(steps, toolStep)
 			data, _ := json.Marshal(map[string]string{
 				"tool":   ev.ToolName,
 				"result": sanitized,
 			})
 			fmt.Fprintf(c.Writer, "event: tool_result\ndata: %s\n\n", data)
 			flusher.Flush()
+		case agentpkg.AgentEventLLMCall:
+			// v1.5.5：append 一个 llm_call 步骤。不推给前端，仅落 agent_steps。
+			llmStep := conversation.NewLLMStep(
+				userID, ev.LLMRequest, ev.LLMResponse, stepModel, ev.StepStatus, ev.StepDurationMs,
+			)
+			llmStep.Seq = seq
+			seq++
+			steps = append(steps, llmStep)
 		case agentpkg.AgentEventDone:
 			// Done 携带的 Content 在常规 ReAct 路径下为「累计 token 拼接结果」，
 			// 等价于 finalContent；超时/超步数兜底情况下是固定提示语。
@@ -623,7 +647,7 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 
 	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
 	// 纯文本提问 segments 只有一个 text 段，对历史展示也无害。
-	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments); err != nil {
+	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments, steps); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),

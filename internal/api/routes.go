@@ -68,7 +68,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 初始化消息服务
 	memorySvc := memoryService.NewMemoryService(memoryRepository)
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
-	msgSvc := chatService.NewMessageService(msgRepo, memorySvc)
+	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
+	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
 
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{

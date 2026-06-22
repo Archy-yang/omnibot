@@ -46,6 +46,13 @@ type StreamingLLMClient interface {
 // AgentEventType 是 ReActAgent 流式输出事件的类型枚举。
 type AgentEventType string
 
+// 步骤状态（v1.5.5）。值与 conversation.StepStatus* 保持一致，handler 直接透传。
+const (
+	StepStatusSuccess  = "success"   // 执行成功
+	StepStatusError    = "error"     // 执行返回 error
+	StepStatusNotFound = "not_found" // 工具不存在
+)
+
 const (
 	// AgentEventToken：LLM 在最终回答阶段吐出的文本 token。前端按字符级拼接渲染。
 	AgentEventToken AgentEventType = "token"
@@ -55,6 +62,10 @@ const (
 
 	// AgentEventToolResult：工具执行完成，附带原始结果。前端默认不展示，留作调试或后续展开 UI。
 	AgentEventToolResult AgentEventType = "tool_result"
+
+	// AgentEventLLMCall：一次 LLM 调用完成（v1.5.5）。携带该轮发出的请求与模型回复，
+	// 供运行链路记录（agent_steps）。不推给前端，仅 handler 消费落库。
+	AgentEventLLMCall AgentEventType = "llm_call"
 
 	// AgentEventDone：整个 ReAct 循环结束，Content 字段携带最终拼接的完整文本，供 handler
 	// 用于持久化（SaveAssistantMessage）。
@@ -68,14 +79,26 @@ const (
 // 字段语义按 Type 区分：
 //   - Token       → Content 是 token 增量
 //   - ToolCall    → ToolName + ToolLabel
-//   - ToolResult  → ToolName + ToolResult
+//   - ToolResult  → ToolName + ToolResult（原始未脱敏）+ ToolArguments + StepStatus + StepDurationMs
+//   - LLMCall     → LLMRequest + LLMResponse + StepStatus + StepDurationMs（运行链路记录，v1.5.5）
 //   - Done        → Content 是完整最终回答（用于持久化）
 //   - Error       → Error
+//
+// ToolResult 事件的 ToolResult 字段携带**原始未脱敏**结果（含真实错误），供 handler 落
+// agent_steps 记录表；对外展示时由 handler 单独脱敏（sanitizeToolResult）。
+// StepStatus / StepDurationMs 是工具与 LLM 步骤共用的通用字段（v1.5.5）。
 type AgentEvent struct {
 	Type       AgentEventType
 	Content    string
 	ToolName   string
 	ToolLabel  string
 	ToolResult string
-	Error      error
+	// 工具与 LLM 步骤共用的记录字段（v1.5.5）
+	ToolArguments  string // 工具步骤：原始 arguments JSON
+	StepStatus     string // success/error/not_found
+	StepDurationMs int64  // 本步耗时（毫秒）
+	// LLM 调用步骤专用（v1.5.5）
+	LLMRequest  string // 该轮发出的 messages JSON 快照
+	LLMResponse string // 模型回复 {content, tool_calls} JSON
+	Error       error
 }

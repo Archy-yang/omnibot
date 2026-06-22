@@ -253,8 +253,20 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			default:
 			}
 
+			// v1.5.5：快照本轮发给模型的 messages 作为 request 记录，并起计耗时。
+			reqSnapshot := marshalMessagesSnapshot(messages)
+			roundStart := time.Now()
+
 			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, messages, tools)
 			if err != nil {
+				// LLM 调用打开失败也记一条 error 的 llm_call 步骤，再 emit Error。
+				out <- AgentEvent{
+					Type:           AgentEventLLMCall,
+					LLMRequest:     reqSnapshot,
+					LLMResponse:    "",
+					StepStatus:     StepStatusError,
+					StepDurationMs: time.Since(roundStart).Milliseconds(),
+				}
 				out <- AgentEvent{Type: AgentEventError, Error: fmt.Errorf("step %d: %w", stepNum, err)}
 				return
 			}
@@ -265,6 +277,13 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			for chunk := range chunkCh {
 				if chunk.Error != nil {
+					out <- AgentEvent{
+						Type:           AgentEventLLMCall,
+						LLMRequest:     reqSnapshot,
+						LLMResponse:    roundContent,
+						StepStatus:     StepStatusError,
+						StepDurationMs: time.Since(roundStart).Milliseconds(),
+					}
 					out <- AgentEvent{Type: AgentEventError, Error: chunk.Error}
 					return
 				}
@@ -295,6 +314,14 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 流结束。如果本轮没有工具调用 → ReAct 循环结束，本轮的 roundContent 就是最终回答。
 			if len(toolCallAccum) == 0 {
+				// v1.5.5：记一条 llm_call 步骤（response 是本轮文本回答）。
+				out <- AgentEvent{
+					Type:           AgentEventLLMCall,
+					LLMRequest:     reqSnapshot,
+					LLMResponse:    marshalLLMResponse(roundContent, nil),
+					StepStatus:     StepStatusSuccess,
+					StepDurationMs: time.Since(roundStart).Milliseconds(),
+				}
 				finalAnswer += roundContent
 				out <- AgentEvent{Type: AgentEventDone, Content: finalAnswer}
 				return
@@ -327,6 +354,15 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			}
 			messages = append(messages, buildAssistantToolCallMessage(rawToolCalls))
 
+			// v1.5.5：记一条 llm_call 步骤（response 是模型决定调用的 tool_calls）。
+			out <- AgentEvent{
+				Type:           AgentEventLLMCall,
+				LLMRequest:     reqSnapshot,
+				LLMResponse:    marshalLLMResponse(roundContent, rawToolCalls),
+				StepStatus:     StepStatusSuccess,
+				StepDurationMs: time.Since(roundStart).Milliseconds(),
+			}
+
 			// 逐个执行工具：先 emit ToolCall（用户友好的「正在调用 xxx」），再执行，再 emit ToolResult。
 			for _, idx := range indices {
 				acc := toolCallAccum[idx]
@@ -350,22 +386,33 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					ToolLabel: label,
 				}
 
+				// 执行工具并捕获记录字段（v1.5.5）：原始结果、状态、耗时、原始 arguments。
 				var toolResult string
+				var status string
+				rawArgs := acc.argumentsBuilder.String()
+				execStart := time.Now()
 				if !ok {
 					toolResult = fmt.Sprintf("错误：工具 %q 不存在", toolCall.Name)
+					status = StepStatusNotFound
 				} else {
 					result, execErr := tool.Execute(ctx, toolCall.Arguments)
 					if execErr != nil {
 						toolResult = fmt.Sprintf("工具执行错误: %s", execErr.Error())
+						status = StepStatusError
 					} else {
 						toolResult = result
+						status = StepStatusSuccess
 					}
 				}
+				durationMs := time.Since(execStart).Milliseconds()
 
 				out <- AgentEvent{
-					Type:       AgentEventToolResult,
-					ToolName:   toolCall.Name,
-					ToolResult: toolResult,
+					Type:           AgentEventToolResult,
+					ToolName:       toolCall.Name,
+					ToolResult:     toolResult,
+					ToolArguments:  rawArgs,
+					StepStatus:     status,
+					StepDurationMs: durationMs,
 				}
 
 				messages = append(messages, map[string]interface{}{
@@ -389,4 +436,28 @@ type toolCallAccumulator struct {
 	id               string
 	name             string
 	argumentsBuilder strings.Builder
+}
+
+// marshalMessagesSnapshot 把本轮发给模型的 messages 序列化为 JSON 字符串，作为
+// agent_steps 的 llm_call request 记录（v1.5.5）。序列化失败返回空串，不阻断主流程。
+func marshalMessagesSnapshot(messages []map[string]interface{}) string {
+	b, err := json.Marshal(messages)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// marshalLLMResponse 把模型本轮回复（文本 + 可选 tool_calls）序列化为 JSON 字符串，作为
+// agent_steps 的 llm_call response 记录（v1.5.5）。
+func marshalLLMResponse(content string, toolCalls []map[string]interface{}) string {
+	payload := map[string]interface{}{"content": content}
+	if len(toolCalls) > 0 {
+		payload["tool_calls"] = toolCalls
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

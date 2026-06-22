@@ -4,6 +4,56 @@
 
 ---
 
+## [v1.5.5] - 2026-06-21
+
+### 🔧 架构改进
+
+- **Agent 运行链路记录（实体层首次落地）**：新增 `agent_steps` 独立表，把一轮对话的
+  **完整执行链**按顺序记下来——不只工具调用，连**每次 LLM 调用**（发出的 messages、模型
+  回复/决定调的工具、耗时、模型名）也记。一轮 ReAct 循环由有序步骤组成
+  （llm_call / tool_call），靠 `message_id + seq` 一句 SQL 还原完整时序。这是
+  「JSON 骨架 + 实体表」存储架构中实体层的首次落地，供复盘与将来分析。
+- **为什么记整条链而非只记工具**：只记工具调用是残缺的——看不到「模型为什么这么走、
+  发了什么 prompt、每步多久」。按模型调用链依次记录才能完整复盘一轮对话。
+- **运行时与记录两条路分离**：运行时上下文仍由滑动窗口（最近10轮、纯文本）框住，工具结果
+  是「轮内消耗品」，跨轮只留最终文本结论；`agent_steps` 是**纯离线**记录，不进运行时上下文、
+  不影响模型看到什么、不影响上下文成本。因此记录表按「分析最好查」设计，放开手记全。
+- **展示与记录职责分离**：`messages.segments` 的 `result` 维持**脱敏展示**（失败显
+  「工具执行失败」），`agent_steps` 的 tool 步骤 `response` 存**完整原始**结果（含真实错误）。
+
+### 🔐 安全
+
+- 对外展示（segment.result、SSE tool_result）仍脱敏，原始错误不泄露给用户
+- `agent_steps` 是内部记录/分析表，不对外暴露
+
+### 🧩 实现要点
+
+- `AgentEvent` 新增 `AgentEventLLMCall` 事件 + 通用 `StepStatus`/`StepDurationMs` +
+  `LLMRequest`/`LLMResponse`；`RunStream` 每轮快照 messages、计时，轮末 emit llm_call
+- `handler` 按事件时序累积 `[]AgentStep`（llm_call + tool_call，带 seq），流结束批量落库
+- `SaveAssistantMessageWithSegments` 第 5 参数改为 `[]*AgentStep`，保存消息后 stamp
+  `MessageID` 批量写；落库失败仅记日志，不影响主消息持久化（非原子）
+- `AgentStepRepository` 经 `NewMessageService` 的 variadic 注入，零签名破坏
+
+### 📋 数据模型
+
+- `agent_steps`：`user_id` / `message_id` / `seq` / `kind`(llm_call|tool_call) / `status` /
+  `duration_ms` / `tool` / `model` / `request` / `response` / `prompt_tokens` /
+  `completion_tokens`(预留，本轮恒 0) / `created_at`
+
+### ⚠️ 兼容性 / 范围
+
+- 前端无改动（内部表，不展示）；仅 Web Agent 流式端点产生记录；AutoMigrate 自动建表
+- token 用量本轮留列不填（将来加 `stream_options.include_usage`）；request 按完整存
+  （离线线性追加可接受，将来涨爆再优化成增量/引用）
+
+### 📚 文档
+
+- 演进路线图 v1.5.5 小节：实体层首次落地 = Agent 运行链路 trace；「运行时瘦、记录全」结论
+- `agent-service.md` 用 agent_steps 替换说明，画出步骤链表结构与「记录离线、不进上下文」关系
+
+---
+
 ## [v1.5.4] - 2026-06-21
 
 ### 🚀 体验改进

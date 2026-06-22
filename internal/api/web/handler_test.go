@@ -42,6 +42,7 @@ type mockMessageService struct {
 	savedUserContent     string
 	savedAssistantContent string
 	savedSegments        []conversation.MessageSegment
+	savedSteps           []*conversation.AgentStep
 	listMessages         []*conversation.Message
 	listErr              error
 	listCalledLimit      int
@@ -58,9 +59,10 @@ func (m *mockMessageService) SaveAssistantMessage(ctx context.Context, userID in
 	return nil
 }
 
-func (m *mockMessageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment) error {
+func (m *mockMessageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
 	m.savedAssistantContent = content
 	m.savedSegments = segments
+	m.savedSteps = steps
 	return nil
 }
 
@@ -960,9 +962,11 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 	agentSvc := &mockAgentService{
 		events: []agentpkg.AgentEvent{
 			{Type: agentpkg.AgentEventToken, Content: "让我查一下。"},
+			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[{"role":"user"}]`, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 300},
 			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
-			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30", ToolArguments: "{}", StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 5},
 			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
+			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[...]`, LLMResponse: `{"content":"现在是 10:30。"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 250},
 			{Type: agentpkg.AgentEventDone, Content: "让我查一下。现在是 10:30。"},
 		},
 	}
@@ -991,6 +995,17 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 	assert.Equal(t, "10:30", msgSvc.savedSegments[1].Result)
 	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
 	assert.Equal(t, "现在是 10:30。", msgSvc.savedSegments[2].Content)
+
+	// v1.5.5：agent_steps 步骤链按 seq 有序：llm_call → tool_call → llm_call
+	require.Len(t, msgSvc.savedSteps, 3)
+	assert.Equal(t, conversation.StepKindLLMCall, msgSvc.savedSteps[0].Kind)
+	assert.Equal(t, 0, msgSvc.savedSteps[0].Seq)
+	assert.Equal(t, conversation.StepKindToolCall, msgSvc.savedSteps[1].Kind)
+	assert.Equal(t, 1, msgSvc.savedSteps[1].Seq)
+	assert.Equal(t, "get_current_time", msgSvc.savedSteps[1].Tool)
+	assert.Equal(t, "10:30", msgSvc.savedSteps[1].Response) // 工具步骤 response 是原始结果
+	assert.Equal(t, conversation.StepKindLLMCall, msgSvc.savedSteps[2].Kind)
+	assert.Equal(t, 2, msgSvc.savedSteps[2].Seq)
 }
 
 // TestHandleSendMessageAgentStream_PersistsSanitizedSegments：落库的工具失败结果
@@ -1003,7 +1018,11 @@ func TestHandleSendMessageAgentStream_PersistsSanitizedSegments(t *testing.T) {
 	agentSvc := &mockAgentService{
 		events: []agentpkg.AgentEvent{
 			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
-			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "工具执行错误: dial tcp 10.0.0.1:443: connection refused"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader",
+				ToolResult:     "工具执行错误: dial tcp 10.0.0.1:443: connection refused",
+				ToolArguments:  `{"url":"https://x.com/rss"}`,
+				StepStatus:     agentpkg.StepStatusError,
+				StepDurationMs: 1200},
 			{Type: agentpkg.AgentEventToken, Content: "抱歉，失败了。"},
 			{Type: agentpkg.AgentEventDone, Content: "抱歉，失败了。"},
 		},
@@ -1018,12 +1037,22 @@ func TestHandleSendMessageAgentStream_PersistsSanitizedSegments(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
+	// 展示层：segment.result 脱敏
 	require.Len(t, msgSvc.savedSegments, 2)
 	toolSeg := msgSvc.savedSegments[0]
 	assert.Equal(t, "tool", toolSeg.Type)
 	assert.Equal(t, "工具执行失败", toolSeg.Result)
 	assert.NotContains(t, toolSeg.Result, "connection refused")
 	assert.NotContains(t, toolSeg.Result, "10.0.0.1")
+
+	// 记录层：agent_steps 保留完整原始结果（含真实错误）+ status + duration（v1.5.5）
+	require.Len(t, msgSvc.savedSteps, 1)
+	step := msgSvc.savedSteps[0]
+	assert.Equal(t, "rss_reader", step.Tool)
+	assert.Equal(t, `{"url":"https://x.com/rss"}`, step.Request)
+	assert.Contains(t, step.Response, "connection refused") // 原始错误未脱敏
+	assert.Equal(t, conversation.StepStatusError, step.Status)
+	assert.Equal(t, int64(1200), step.DurationMs)
 }
 
 // TestHandleGetHistory_IncludesSegments：历史响应应携带带 segments 的消息的 segments，
