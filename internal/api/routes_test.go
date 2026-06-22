@@ -13,7 +13,7 @@ func TestSetupRouter_RegistersMemoryRoutes(t *testing.T) {
 	require.NoError(t, err)
 	content := string(source)
 
-	assert.Contains(t, content, "web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc)")
+	assert.Contains(t, content, "web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)")
 	assert.Contains(t, content, "r.Group(\"/api/v1/memories\")")
 	assert.Contains(t, content, "HandleGetMemories")
 	assert.Contains(t, content, "HandleCreateMemory")

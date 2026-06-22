@@ -165,6 +165,25 @@ func TestMessageService_SaveUserMessage(t *testing.T) {
 	}
 }
 
+// TestMessageService_SaveUserMessage_EmptyMsgID 回归测试：Web 渠道无 msgID 时
+// 多条消息都应正常入库，不应被空字符串去重命中或被唯一索引拦截。
+func TestMessageService_SaveUserMessage_EmptyMsgID(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第一条", ""))
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第二条", ""))
+	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第三条", ""))
+
+	messages, err := msgRepo.GetRecentByUserID(123, 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, "第一条", messages[0].Content)
+	assert.Equal(t, "第二条", messages[1].Content)
+	assert.Equal(t, "第三条", messages[2].Content)
+}
+
 func TestMessageService_SaveAssistantMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
@@ -173,5 +192,97 @@ func TestMessageService_SaveAssistantMessage(t *testing.T) {
 	err := service.SaveAssistantMessage(context.Background(), 123, "你好！有什么可以帮你的？")
 	if err != nil {
 		t.Fatalf("Failed to save assistant message: %v", err)
+	}
+}
+
+// TestMessageService_SaveAssistantMessageWithSegments 验证带 segments 的助手消息
+// 落库后能原样读回（往返一致），含 tool 段的工具名/文案/结果（v1.5.4）。
+func TestMessageService_SaveAssistantMessageWithSegments(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	segments := []conversation.MessageSegment{
+		{Type: "text", Content: "让我查一下。"},
+		{Type: "tool", Tool: "get_current_time", Label: "查询了当前时间", Result: "10:30"},
+		{Type: "text", Content: "现在是 10:30。"},
+	}
+
+	err := service.SaveAssistantMessageWithSegments(
+		context.Background(), 123, "让我查一下。现在是 10:30。", segments, nil,
+	)
+	if err != nil {
+		t.Fatalf("Failed to save assistant message with segments: %v", err)
+	}
+
+	got, err := msgRepo.GetRecentByUserID(123, 10)
+	if err != nil {
+		t.Fatalf("Failed to read back: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(got))
+	}
+	if len(got[0].Segments) != 3 {
+		t.Fatalf("Expected 3 segments round-trip, got %d", len(got[0].Segments))
+	}
+	if got[0].Segments[1].Type != "tool" || got[0].Segments[1].Tool != "get_current_time" ||
+		got[0].Segments[1].Result != "10:30" {
+		t.Errorf("tool segment round-trip mismatch: %+v", got[0].Segments[1])
+	}
+}
+
+// TestMessageService_SaveAssistantMessageWithSegments_AgentSteps 验证：保存消息时
+// 同时落 Agent 运行步骤链，按 seq 有序，且 MessageID 正确关联（v1.5.5）。
+func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	stepRepo := chat.NewAgentStepRepository(testDB)
+	service := NewMessageService(msgRepo, stepRepo)
+
+	segments := []conversation.MessageSegment{
+		{Type: "tool", Tool: "rss_reader", Label: "读取了 RSS 订阅", Result: "工具执行失败"},
+	}
+	steps := []*conversation.AgentStep{
+		func() *conversation.AgentStep { s := conversation.NewLLMStep(0, `[{"role":"user"}]`, `{"tool_calls":[]}`, "gpt-4o", conversation.StepStatusSuccess, 300); s.Seq = 0; return s }(),
+		func() *conversation.AgentStep {
+			s := conversation.NewToolStep(0, "rss_reader", `{"url":"x"}`, "工具执行错误: dial tcp refused", conversation.StepStatusError, 1200)
+			s.Seq = 1
+			return s
+		}(),
+	}
+
+	err := service.SaveAssistantMessageWithSegments(
+		context.Background(), 123, "抱歉，读取失败了。", segments, steps,
+	)
+	if err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	msgs, err := msgRepo.GetRecentByUserID(123, 10)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("GetRecentByUserID: %v, len=%d", err, len(msgs))
+	}
+	savedMsgID := msgs[0].ID
+
+	chain, err := stepRepo.ListByMessageID(savedMsgID)
+	if err != nil {
+		t.Fatalf("ListByMessageID: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(chain))
+	}
+	// MessageID 关联 + 按 seq 有序：llm_call → tool_call
+	if chain[0].MessageID != savedMsgID || chain[0].Kind != conversation.StepKindLLMCall {
+		t.Errorf("step[0] = %+v, want llm_call linked to msg %d", chain[0], savedMsgID)
+	}
+	if chain[1].Kind != conversation.StepKindToolCall {
+		t.Errorf("step[1] kind = %q, want tool_call", chain[1].Kind)
+	}
+	// 工具步骤 response 保留完整原始（含真实错误，未脱敏）
+	if chain[1].Response != "工具执行错误: dial tcp refused" {
+		t.Errorf("tool Response = %q, want 原始未脱敏", chain[1].Response)
+	}
+	if chain[1].Status != conversation.StepStatusError {
+		t.Errorf("Status = %q", chain[1].Status)
 	}
 }

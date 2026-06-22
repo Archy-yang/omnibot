@@ -57,27 +57,37 @@ const themeOptions = [
 
 // Computed provider groups
 
-const availableProviders = computed<{ label: string; value: string; disabled?: boolean }[]>(() => {
-  return settingsStore.providerOptions
-    .filter((p) => p.status === 'available')
-    .map((p) => ({ label: p.label, value: p.value }));
-});
-
-const disabledProviders = computed<{ label: string; value: string; disabled?: boolean }[]>(() => {
-  return settingsStore.providerOptions
-    .filter((p) => p.status === 'disabled')
-    .map((p) => ({ label: p.label, value: p.value, disabled: true }));
-});
-
 const selectProviderOptions = computed(() => {
-  const groups: { label: string; children: { label: string; value: string; disabled?: boolean }[] }[] = [];
-  const avail = availableProviders.value;
-  if (avail.length > 0) {
-    groups.push({ label: 'OpenAI 兼容（可用）', children: avail });
+  const groups: any[] = [];
+  // 兼容模式分组：mode = openai_compatible
+  const compatibleProviders = settingsStore.providerOptions
+    .filter((p) => p.mode === 'openai_compatible')
+    .map((p) => ({
+      label: p.label,
+      value: p.value,
+      disabled: p.status === 'disabled'
+    }));
+  if (compatibleProviders.length > 0) {
+    groups.push({
+      type: 'group',
+      label: 'OpenAI 兼容模式',
+      children: compatibleProviders
+    });
   }
-  const disabled = disabledProviders.value;
-  if (disabled.length > 0) {
-    groups.push({ label: '专用接口（暂不可用）', children: disabled });
+  // 专用接口分组：mode = native
+  const nativeProviders = settingsStore.providerOptions
+    .filter((p) => p.mode === 'native')
+    .map((p) => ({
+      label: p.label,
+      value: p.value,
+      disabled: p.status === 'disabled'
+    }));
+  if (nativeProviders.length > 0) {
+    groups.push({
+      type: 'group',
+      label: '专用接口',
+      children: nativeProviders
+    });
   }
   return groups;
 });
@@ -161,7 +171,7 @@ const handleCancel = () => {
     @update:show="(v: boolean) => !v && emit('close')"
     :mask-closable="false"
   >
-    <NForm label-placement="left" label-width="100px">
+    <NForm label-placement="left" label-width="100px" :show-feedback="false" label-align="left">
       <NFormItem label="主题">
         <NSelect
           v-model:value="settingsStore.theme"
@@ -176,10 +186,11 @@ const handleCancel = () => {
       <NAlert
         :type="settingsStore.hasUserConfig ? 'success' : 'info'"
         :title="settingsStore.configStatus"
-        class="mb-4"
+        size="small"
+        class="mb-8"
       />
 
-      <div v-if="settingsStore.hasUserConfig" class="mb-4">
+      <div v-if="settingsStore.hasUserConfig" class="mb-6">
         <NButton
           type="error"
           size="small"
@@ -190,7 +201,7 @@ const handleCancel = () => {
         </NButton>
       </div>
 
-      <NFormItem label="服务商">
+      <NFormItem label="服务商" style="margin-bottom: 4px !important;">
         <NSelect
           v-model:value="localConfig.provider"
           :options="selectProviderOptions"
@@ -198,7 +209,7 @@ const handleCancel = () => {
         />
       </NFormItem>
 
-      <NFormItem v-if="providerHelpText" label=" ">
+      <NFormItem v-if="providerHelpText" label=" " style="margin-bottom: 4px !important;">
         <span class="text-sm text-gray-500">{{ providerHelpText }}</span>
       </NFormItem>
 
@@ -225,14 +236,15 @@ const handleCancel = () => {
         />
       </NFormItem>
 
-      <NFormItem label="Temperature">
+      <NFormItem label="Temperature" class="flex items-center">
         <NSlider
           v-model:value="localConfig.temperature"
           :min="0"
           :max="2"
           :step="0.1"
+          class="mr-4 flex-1"
         />
-        <span class="ml-4 text-sm text-gray-500">
+        <span class="text-sm text-gray-500 w-10 text-right whitespace-nowrap">
           {{ localConfig.temperature }}
         </span>
       </NFormItem>
@@ -265,3 +277,12 @@ const handleCancel = () => {
     </template>
   </NModal>
 </template>
+
+<style scoped>
+:deep(.n-form-item) {
+  margin-bottom: 8px !important;
+}
+:deep(.n-form-item--no-label) {
+  margin-bottom: 8px !important;
+}
+</style>

@@ -3,6 +3,7 @@ package api
 import (
 	"io/fs"
 	"net/http"
+	"time"
 
 	"omnibot/frontend"
 	"omnibot/internal/api/admin"
@@ -16,6 +17,7 @@ import (
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
+	agentpkg "omnibot/internal/service/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	userService "omnibot/internal/service/user"
@@ -66,7 +68,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 初始化消息服务
 	memorySvc := memoryService.NewMemoryService(memoryRepository)
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
-	msgSvc := chatService.NewMessageService(msgRepo, memorySvc)
+	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
+	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
 
 	// 微信回调路由
 	wechatHandler := wechat.NewHandler(wechat.Config{
@@ -98,12 +101,34 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// Web 聊天 API 路由
-	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc)
+	// 创建 Agent 服务
+	agentToolRegistry := agentpkg.NewToolRegistry()
+	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
+	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
+	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
+	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
+	agentToolRegistry.Register(agentpkg.CreateRSSReaderTool())
+
+	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
+	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
+	if err != nil {
+		agentTimeout = 30 * time.Second
+	}
+	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
+		LLMClient:          agentLLMClient,
+		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
+		ToolRegistry:       agentToolRegistry,
+	})
+
+	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	chatAPIGroup := r.Group("/api/v1/chat")
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
 		chatAPIGroup.POST("/messages/stream", webHandler.HandleSendMessageStream)
+		chatAPIGroup.POST("/messages/agent", webHandler.HandleSendMessageAgent)
+		chatAPIGroup.POST("/messages/agent/stream", webHandler.HandleSendMessageAgentStream)
 	}
 
 	// 长期记忆路由

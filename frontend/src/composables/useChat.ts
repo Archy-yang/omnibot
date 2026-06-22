@@ -15,7 +15,7 @@ export function useChat() {
   const lastMessage = computed<Message | null>(() => chatStore.lastMessage);
 
   /**
-   * 发送消息
+   * 发送消息（v1.5.2 起默认走 Agent 流式路径，工具调用由 LLM 自动决定）
    * @param content 消息内容
    */
   const sendMessage = async (content: string): Promise<void> => {

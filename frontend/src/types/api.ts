@@ -40,6 +40,44 @@ export interface PaginationParams {
 export type GetHistoryResponse = HistoryData<import('./chat').Message>;
 
 /**
+ * Agent 工具调用事件（v1.5.2 流式协议）
+ *
+ * 后端 SSE 格式：
+ *   event: tool_call
+ *   data: {"tool": "rss_reader", "label": "读取了 RSS 订阅"}
+ *
+ * 前端按时序累积到 message.segments，渲染为对话中交错的思考条。
+ * 没有工具调用时无 tool 段，UI 完全是纯文本（视觉等同纯聊天）。
+ */
+export interface ToolCallEvent {
+  tool: string;
+  label: string;
+}
+
+/**
+ * Agent 工具结果事件（v1.5.3 流式协议）
+ *
+ * 后端 SSE 格式：
+ *   event: tool_result
+ *   data: {"tool": "get_current_time", "result": "10:30"}
+ *
+ * 紧跟在对应 tool_call 之后推送，供前端回填到思考条、点击展开查看。
+ * 执行失败的结果已由后端脱敏为「工具执行失败」，不含原始 error。
+ */
+export interface ToolResultEvent {
+  tool: string;
+  result: string;
+}
+
+/**
+ * Agent 完成事件
+ */
+export interface AgentDoneEvent {
+  total_steps: number;
+  duration_ms: number;
+}
+
+/**
  * LLM 配置接口
  */
 export interface LLMConfig {

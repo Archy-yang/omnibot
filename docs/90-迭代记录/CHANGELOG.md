@@ -4,6 +4,257 @@
 
 ---
 
+## [v1.5.5] - 2026-06-21
+
+### 🔧 架构改进
+
+- **Agent 运行链路记录（实体层首次落地）**：新增 `agent_steps` 独立表，把一轮对话的
+  **完整执行链**按顺序记下来——不只工具调用，连**每次 LLM 调用**（发出的 messages、模型
+  回复/决定调的工具、耗时、模型名）也记。一轮 ReAct 循环由有序步骤组成
+  （llm_call / tool_call），靠 `message_id + seq` 一句 SQL 还原完整时序。这是
+  「JSON 骨架 + 实体表」存储架构中实体层的首次落地，供复盘与将来分析。
+- **为什么记整条链而非只记工具**：只记工具调用是残缺的——看不到「模型为什么这么走、
+  发了什么 prompt、每步多久」。按模型调用链依次记录才能完整复盘一轮对话。
+- **运行时与记录两条路分离**：运行时上下文仍由滑动窗口（最近10轮、纯文本）框住，工具结果
+  是「轮内消耗品」，跨轮只留最终文本结论；`agent_steps` 是**纯离线**记录，不进运行时上下文、
+  不影响模型看到什么、不影响上下文成本。因此记录表按「分析最好查」设计，放开手记全。
+- **展示与记录职责分离**：`messages.segments` 的 `result` 维持**脱敏展示**（失败显
+  「工具执行失败」），`agent_steps` 的 tool 步骤 `response` 存**完整原始**结果（含真实错误）。
+
+### 🔐 安全
+
+- 对外展示（segment.result、SSE tool_result）仍脱敏，原始错误不泄露给用户
+- `agent_steps` 是内部记录/分析表，不对外暴露
+
+### 🧩 实现要点
+
+- `AgentEvent` 新增 `AgentEventLLMCall` 事件 + 通用 `StepStatus`/`StepDurationMs` +
+  `LLMRequest`/`LLMResponse`；`RunStream` 每轮快照 messages、计时，轮末 emit llm_call
+- `handler` 按事件时序累积 `[]AgentStep`（llm_call + tool_call，带 seq），流结束批量落库
+- `SaveAssistantMessageWithSegments` 第 5 参数改为 `[]*AgentStep`，保存消息后 stamp
+  `MessageID` 批量写；落库失败仅记日志，不影响主消息持久化（非原子）
+- `AgentStepRepository` 经 `NewMessageService` 的 variadic 注入，零签名破坏
+
+### 📋 数据模型
+
+- `agent_steps`：`user_id` / `message_id` / `seq` / `kind`(llm_call|tool_call) / `status` /
+  `duration_ms` / `tool` / `model` / `request` / `response` / `prompt_tokens` /
+  `completion_tokens`(预留，本轮恒 0) / `created_at`
+
+### ⚠️ 兼容性 / 范围
+
+- 前端无改动（内部表，不展示）；仅 Web Agent 流式端点产生记录；AutoMigrate 自动建表
+- token 用量本轮留列不填（将来加 `stream_options.include_usage`）；request 按完整存
+  （离线线性追加可接受，将来涨爆再优化成增量/引用）
+
+### 📚 文档
+
+- 演进路线图 v1.5.5 小节：实体层首次落地 = Agent 运行链路 trace；「运行时瘦、记录全」结论
+- `agent-service.md` 用 agent_steps 替换说明，画出步骤链表结构与「记录离线、不进上下文」关系
+
+---
+
+## [v1.5.4] - 2026-06-21
+
+### 🚀 体验改进
+
+- **思考过程历史持久化**：v1.5.3 的交错思考过程此前只活在前端内存，刷新页面后回退成
+  纯文本。现在 Agent 流式回复的 segments（文本段 + 工具调用 + 脱敏后的工具结果）会随
+  消息一起落库，**刷新页面后历史里仍能完整还原思考过程**，并可点击展开看工具结果。
+
+### 🔧 架构改进
+
+- **确立「JSON 骨架 + 实体表」混合存储方向**：经评估同类产品的内容格式后确定——纯展示
+  碎片（文本、工具条、思考链、引用等）走消息内的 JSON 段落序列；未来的一等实体
+  （artifact、生成文件、异步任务）走独立表 + 段落里放引用 id。本次只做 JSON 列，是该
+  架构的第一步，未来扩展新内容类型零迁移。详见演进路线图 v1.5.4 小节。
+- `messages` 表新增 `segments` JSON 列（GORM `serializer:json`，SQLite/PostgreSQL 通用），
+  `content` 保留为纯文本投影（复制 / 上下文 / 搜索）。AutoMigrate 自动加列，无需数据迁移。
+- domain 新增 `MessageSegment` 类型 + `NewAssistantMessageWithSegments` 构造函数
+- service 新增 `SaveAssistantMessageWithSegments`，原 `SaveAssistantMessage` 保留
+- `MessageDTO` 加 `segments` 字段（omitempty），`HandleGetHistory` 透传
+
+### 🔐 安全
+
+- 落库的工具结果与 SSE 推送**共用同一 `sanitizeToolResult` 脱敏**：工具失败结果存的是
+  「工具执行失败」，原始 error（IP / 连接错误 / 堆栈）不写进 DB（安全红线）
+
+### ⚠️ 兼容性 / 范围
+
+- 仅 Web Agent 流式端点落库 segments；其余 3 个保存路径（同步、普通流式、Agent 同步）
+  保持原样。旧消息 / 非 agent 消息 `segments` 为空，前端走纯文本回退渲染，无需迁移。
+- 前端零改动：v1.5.3 的「有 segments 交错渲染、无则回退 content」逻辑天然兼容历史数据。
+- `expanded` 是纯 UI 态，不持久化。
+
+### 📚 文档
+
+- 演进路线图 v1.5 章节追加 v1.5.4 小节，记录混合存储架构方向
+- `agent-service.md` 补充 segments 持久化说明
+
+---
+
+## [v1.5.3] - 2026-06-21
+
+### 🚀 体验改进
+
+- **思考过程按真实时序交错展示**：Agent 回复若是「文本 → 调工具 → 文本」，前端现在
+  按实际发生顺序交错渲染——先一段文本，再一条思考条，再思考之后的文本。此前所有
+  文本被拼成一坨、所有工具堆在顶部，丢失了 LLM 的真实输出时序。
+- **点击思考条展开看工具结果**：每条思考条可点击展开，查看该工具的返回结果（如时间、
+  计算值、RSS 内容）。展开区限高 240px 滚动，长结果（RSS 全文 / 长 JSON）内部滚动，
+  不撑乱对话。工具结果回来前思考条显示「正在调用 xxx…」旋转态。
+
+### 🔐 安全
+
+- **工具错误结果脱敏**：工具执行成功的结果原样展示（用户自己的查询），但执行失败的
+  结果可能含内部细节（IP、连接错误、堆栈），统一脱敏为「工具执行失败」，不透传原始
+  error（安全红线：错误不泄露内部实现）。见 `sanitizeToolResult`（handler.go）。
+
+### 🔧 架构改进
+
+- 后端放开此前被丢弃的 `AgentEventToolResult`，以 `event: tool_result` 推送给前端
+  （脱敏后），不计入落库的 assistant 内容
+- 前端消息模型从「content 一坨 + toolCalls 一个数组」改为有序 `segments` 段落序列
+  （text / tool 交错），store 按 SSE 事件顺序维护
+
+### 📋 SSE 协议变更
+
+- 新增 `event: tool_result`、`data: {"tool": "...", "result": "..."}` —— 工具结果
+  （紧跟对应 tool_call，错误已脱敏）
+- 事件严格按 LLM 真实时序推送，前端据此交错渲染
+
+### 🚮 删除内容
+
+- 前端 `ChatMessage.vue` 的顶部堆叠式 `tool-call-strip` 状态条移除，换成交错的
+  `tool-segment` 思考条
+- 前端类型 `ToolCall` / `Message.toolCalls` 替换为 `MessageSegment` / `Message.segments`
+
+### ⚠️ 兼容性
+
+- segments 仅活在本次会话内存中，不做历史/DB 持久化；刷新页面后历史消息回退用
+  `content` 纯文本渲染（思考过程丢失，符合预期）。历史 segments 持久化作为独立迭代后续做。
+
+### 📚 文档
+
+- `docs/30-服务架构/02-模块设计/智能体层/agent-service.md` 第 5 节更新 tool_result 协议
+- `docs/30-服务架构/01-高层设计/02-演进路线图-v3.0.md` v1.5 章节追加 v1.5.3 小节
+
+---
+
+## [v1.5.2] - 2026-06-17
+
+### 🚀 体验改进
+
+- **Agent 真流式**：`/messages/agent/stream` 端点重构为 token 级流式输出，简单提问的
+  首字延迟从原来「转圈 N 秒后整段吐」变为字符级实时渲染，体验等同 v1.5.0 之前的
+  普通流式。工具调用问题也是在工具被决定调用的瞬间立即推送状态条，再继续流式 token。
+- **默认全 Agent**：取消前端「思考模式」开关。所有对话默认走 Agent 路径，是否调用
+  工具由 LLM 自动判断，符合《单一长期对话模型》决策。
+- **工具状态条重设计**：把折叠面板「查看思考过程（N 步）」换成行内简洁状态条，
+  显示在助手回复正文上方。无工具调用时不渲染状态条，简单聊天视觉等同纯文本，
+  避免无关 UI 噪音。
+
+### 🧰 工具友好化
+
+- `Tool` 结构新增 `DisplayLabel` 字段，5 个内置工具补上中文文案：
+  - `get_current_time` → 「查询了当前时间」
+  - `calculator` → 「计算了一下」
+  - `search_memories` → 「翻了翻记忆」
+  - `search_history` → 「搜索了历史对话」
+  - `rss_reader` → 「读取了 RSS 订阅」
+
+### 🔧 架构改进
+
+- 新增 `StreamingLLMClient` 接口（`ChatCompletionStream`），与同步 `LLMClient` 并存，
+  上层按需选择
+- 新增 `LLMStreamChunk` / `ToolCallDelta` / `AgentEvent` 流式类型层，明确区分 LLM
+  原始增量和 Agent 高层事件
+- `OpenAILLMClient` 实现 SSE 流式解析，支持 token delta 和 tool_call delta 跨 chunk
+  累积，处理 [DONE] / finish_reason / API error 边界
+- `ReActAgent.RunStream` 实现流式 ReAct 循环：边收 token 边转发，工具调用按 index
+  累积参数后执行，结果塞回 messages 进入下一轮
+- `HandleSendMessageAgentStream` 改为消费 `AgentEvent` channel，按 `event: token` /
+  `event: tool_call` / `event: error` SSE 协议推给前端
+
+### 📋 SSE 协议变更
+
+- 旧协议（v1.5.0）：`event: agent_step` 一次性推送已完成的步骤摘要
+- 新协议（v1.5.2）：
+  - `event: token`、`data: {"content": "..."}` —— LLM token 增量
+  - `event: tool_call`、`data: {"tool": "...", "label": "..."}` —— 工具调用开始
+  - `event: error`、`data: {"error": "..."}` —— 错误
+  - `data: [DONE]` —— 完成
+- 旧 `event: agent_step` 协议同时下线（前端不再监听，后端不再产出）
+
+### 🚮 删除内容
+
+- 前端 `ChatInput.vue` 的「+」按钮、思考模式 popover 菜单、「思考」标签、
+  `chat-thinking-mode` localStorage 持久化逻辑全部移除
+- 前端类型 `AgentStep` / `AgentStepEvent` / `Message.agentSteps` 替换为
+  `ToolCall` / `ToolCallEvent` / `Message.toolCalls`
+- `chatService.sendMessageStream` 的 `isAgentMode` 参数删除，永远走 agent 流式路径
+
+### ⚠️ 兼容性
+
+- 后端 `/messages/stream` 普通流式端点保留为兼容兜底，前端不再调用，等 v2.0 全量
+  验证 Agent 真流式稳定后再考虑彻底删除
+- 微信端本次未改造为 Agent 路径（涉及客服消息异步推送），保持原行为；将作为
+  独立小迭代后续完成
+
+### 📚 文档
+
+- `docs/30-服务架构/02-模块设计/智能体层/agent-service.md` 更新流式接口签名
+- `docs/30-服务架构/01-高层设计/02-演进路线图-v3.0.md` v1.5 章节追加 v1.5.2 小节
+- `docs/20-产品PRD/in_progress/v1.5.1-Agent模式可切换PRD.md` 移到 `completed/`
+- `docs/20-产品PRD/in_progress/v1.5.2-Agent真流式与默认开启PRD.md` 移到 `completed/`
+
+---
+
+## [v1.5.1] - 2026-06-16
+
+### ✨ 新增功能
+
+- **Agent 模式可切换**：前端聊天输入框新增「思考模式」开关，用户手动决定单次对话
+  走普通流式还是 Agent 流式，开关状态本地持久化到 `localStorage`
+
+### 🔧 架构改进
+
+- Agent 接口适配用户自定义 LLM 配置：和普通聊天逻辑保持完全对齐——优先用户自定义
+  服务商/Model/API Key/BaseURL，缺省回落系统默认
+- 修复 v1.5.0 中 Agent 服务硬编码使用全局 LLM 配置导致用户自定义配置不生效的问题
+
+### 🚮 已废弃（v1.5.2 中移除）
+
+本版本引入的「思考模式」开关在 v1.5.2 重新评估后被移除：单一长期对话模型不应该
+有「模式切换」概念，是否调用工具应由 LLM 自动判断。详见 `docs/10-宪章/单一长期对话模型.md`。
+
+---
+
+## [v1.5.0] - 2026-06-15
+
+### ✨ 新增功能
+
+- **Agent 基本能力**
+  - 新增 Tool Registry，支持工具注册、查询和 OpenAI Function Calling `tools` 格式转换
+  - 新增 ReAct Agent 循环，支持 LLM → 工具调用 → 工具结果回传 → 继续推理
+  - Web 对话新增 Agent SSE 流式端点，支持 `agent_step` 事件展示工具调用过程
+  - 前端聊天消息支持展示「思考过程」折叠区
+
+### 🧰 内置工具
+
+- `get_current_time`：获取当前时间
+- `calculator`：安全四则运算计算器
+- `search_memories`：搜索用户长期记忆
+- `search_history`：历史搜索占位工具，后续版本完善
+
+### 🔧 架构改进
+
+- 新增 `internal/service/agent` 包，Agent 层位于 Web Handler 与 LLM Client 之间
+- 保持现有 `LLMProvider` 接口不变，Agent 通过 OpenAI-compatible adapter 支持 tools 参数
+- Agent 默认最大步数 10，默认超时 120 秒，避免无限循环
+
+---
+
 ## [v1.4.1] - 2026-06-14
 
 ### ✨ 新增功能
