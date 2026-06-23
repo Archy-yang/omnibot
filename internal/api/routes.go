@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io/fs"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"omnibot/internal/api/web"
 	"omnibot/internal/api/wechat"
 	channelfactory "omnibot/internal/channel"
+	channelfeishu "omnibot/internal/channel/feishu"
 	channelweb "omnibot/internal/channel/web"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
@@ -25,6 +27,7 @@ import (
 	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"go.uber.org/zap"
 )
 
@@ -131,6 +134,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		chatAPIGroup.POST("/messages/agent/stream", webHandler.HandleSendMessageAgentStream)
 	}
 
+	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
+	// channel 复用现有 userSvc/msgSvc/agentSvc/llmConfigSvc——同步 Run 路径,所有
+	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
+	startFeishuChannel(cfg, userSvc, msgSvc, agentSvc, llmConfigSvc)
+
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
 	{
@@ -174,4 +182,54 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 
 	return r
+}
+
+// startFeishuChannel 装配并启动飞书 channel(v1.6)。
+//
+//   - cfg.Feishu.Enabled=false: 跳过,不日志(避免 dev 启动噪音)
+//   - cfg.Feishu.Enabled=true 但凭证空: 仅警告日志,不阻断主服务
+//   - 否则: 构造 sender + handler + channel,go-routine 启动长连接,带 recover
+//
+// 长连接由飞书 SDK 内部循环 + 自动重连维护;Start() 阻塞,故必须放 goroutine。
+// 程序退出时由进程结束统一回收(SDK ws client 没有显式 Stop 接口)。
+func startFeishuChannel(
+	cfg *config.Config,
+	userSvc *userService.UserService,
+	msgSvc chatService.MessageService,
+	agentSvc *agentpkg.AgentService,
+	llmConfigSvc userService.LLMConfigService,
+) {
+	feishuCfg := channelfeishu.Config{
+		AppID:     cfg.Feishu.AppID,
+		AppSecret: cfg.Feishu.AppSecret,
+		Enabled:   cfg.Feishu.Enabled,
+	}
+	if !feishuCfg.Enabled {
+		return
+	}
+	if feishuCfg.AppID == "" || feishuCfg.AppSecret == "" {
+		logger.Warn("feishu enabled but credentials missing, skipping")
+		return
+	}
+
+	// SDK lark client(发消息用)
+	larkClient := lark.NewClient(feishuCfg.AppID, feishuCfg.AppSecret)
+	sender := channelfeishu.NewLarkSender(larkClient)
+
+	handler := channelfeishu.NewMessageHandler(userSvc, msgSvc, agentSvc, llmConfigSvc, sender)
+	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
+
+	channelfactory.Register(channel)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorWithFields("feishu: long connection goroutine panic", zap.Any("recover", r))
+			}
+		}()
+		// 用独立 background context;主服务退出由进程结束统一回收
+		if err := channel.Start(context.Background()); err != nil {
+			logger.ErrorWithFields("feishu: long connection ended with error", zap.Error(err))
+		}
+	}()
 }

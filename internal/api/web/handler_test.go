@@ -751,10 +751,12 @@ func TestHandleSendMessageStream_InvalidBody(t *testing.T) {
 // ===== Agent stream handler tests =====
 
 // mockAgentService 模拟 AgentService，按预设序列推 AgentEvent 到 channel。
+// v1.6: runResult 用于让 Run 返回预设 AgentResult(测同步端点落 Records 时用)。
 type mockAgentService struct {
 	events    []agentpkg.AgentEvent
 	runErr    error
 	streamErr error
+	runResult *agentpkg.AgentResult
 }
 
 func (m *mockAgentService) Run(
@@ -765,6 +767,9 @@ func (m *mockAgentService) Run(
 ) (*agentpkg.AgentResult, error) {
 	if m.runErr != nil {
 		return nil, m.runErr
+	}
+	if m.runResult != nil {
+		return m.runResult, nil
 	}
 	return &agentpkg.AgentResult{FinalResponse: "noop"}, nil
 }
@@ -1112,4 +1117,84 @@ func TestHandleSendMessageAgentStream_StreamOpenError(t *testing.T) {
 	assert.Contains(t, out, "streaming client not configured")
 	// 错误路径不应推 [DONE]
 	assert.NotContains(t, out, "[DONE]")
+}
+
+// TestHandleSendMessageAgent_PersistsRecordsAsAgentSteps (v1.6):
+// 同步端点 /messages/agent 必须把 AgentResult.Records 转成 conversation.AgentStep
+// 落库,与流式端点行为对齐(同步/流式两条返回形式,记录单一来源)。
+func TestHandleSendMessageAgent_PersistsRecordsAsAgentSteps(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 7}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		runResult: &agentpkg.AgentResult{
+			FinalResponse: "现在是 10:30",
+			Records: []agentpkg.StepRecord{
+				{Kind: agentpkg.StepKindLLMCall, Status: agentpkg.StepStatusSuccess, DurationMs: 100, Request: "[req1]", Response: `{"tool_calls":[...]}`},
+				{Kind: agentpkg.StepKindToolCall, Status: agentpkg.StepStatusSuccess, DurationMs: 5, Tool: "get_current_time", Request: "{}", Response: "10:30"},
+				{Kind: agentpkg.StepKindLLMCall, Status: agentpkg.StepStatusSuccess, DurationMs: 200, Request: "[req2]", Response: `{"content":"现在是 10:30"}`},
+			},
+		},
+	}
+	llmCfgSvc := &mockLLMConfigService{
+		hasConfig: true,
+		fullConfig: &FullLLMConfig{
+			Provider: "test", APIKey: "k", BaseURL: "http://x", Model: "test-model-x",
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, llmCfgSvc, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent", handler.HandleSendMessageAgent)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点了"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "现在是 10:30", msgSvc.savedAssistantContent)
+	assert.Nil(t, msgSvc.savedSegments)
+	require.Len(t, msgSvc.savedSteps, 3)
+	assert.Equal(t, conversation.StepKindLLMCall, msgSvc.savedSteps[0].Kind)
+	assert.Equal(t, 0, msgSvc.savedSteps[0].Seq)
+	assert.Equal(t, "test-model-x", msgSvc.savedSteps[0].Model)
+	assert.Equal(t, conversation.StepKindToolCall, msgSvc.savedSteps[1].Kind)
+	assert.Equal(t, 1, msgSvc.savedSteps[1].Seq)
+	assert.Equal(t, "get_current_time", msgSvc.savedSteps[1].Tool)
+	assert.Equal(t, "10:30", msgSvc.savedSteps[1].Response)
+	assert.Equal(t, conversation.StepKindLLMCall, msgSvc.savedSteps[2].Kind)
+	assert.Equal(t, 2, msgSvc.savedSteps[2].Seq)
+	assert.Equal(t, "test-model-x", msgSvc.savedSteps[2].Model)
+}
+
+// TestHandleSendMessageAgent_NoCustomConfig_ModelEmpty (v1.6):
+// 无用户自定义配置时,llm_call step 的 Model 字段留空(handler 层填充,agent 包拿不到模型名)。
+func TestHandleSendMessageAgent_NoCustomConfig_ModelEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 7}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		runResult: &agentpkg.AgentResult{
+			FinalResponse: "你好",
+			Records: []agentpkg.StepRecord{
+				{Kind: agentpkg.StepKindLLMCall, Status: agentpkg.StepStatusSuccess, DurationMs: 50, Request: "[req]", Response: `{"content":"你好"}`},
+			},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.POST("/api/v1/chat/messages/agent", handler.HandleSendMessageAgent)
+
+	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "你好"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, msgSvc.savedSteps, 1)
+	assert.Equal(t, "", msgSvc.savedSteps[0].Model)
 }

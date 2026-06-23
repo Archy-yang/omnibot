@@ -4,6 +4,72 @@
 
 ---
 
+## [v1.6.0] - 2026-06-22
+
+### 🚀 用户可见
+
+- **第三个入口:飞书机器人接入**——飞书 IM 用户可与 OmniBot 单聊,直接享有 v1.5 全部
+  Agent 能力(工具调用 / 多步推理)、长期记忆、用户自定义 LLM 配置。
+- 飞书端通过**长连接(WebSocket)**接收消息——开发/内网部署无需公网回调地址。
+- 跨入口能力打通:同一用户在 Web 与飞书侧共享 user_id,长期记忆与 LLM 配置完全一致。
+
+### 🔧 架构核心(本版关键)
+
+- **底层只剩一个真实流式实现,同步 Run 是 RunStream 之上的聚合层**。流式/同步只是
+  返回形式不同——存储与运行链路记录完全一致,**记录逻辑只在 RunStream 单一来源**,
+  同步入口天然继承,杜绝两条路径行为漂移。
+- **agent_steps 现在两条入口都落库**——同步 `Run` 通过聚合产出 `Records`,handler 转
+  `conversation.AgentStep` 走和流式 handler 同一个 `SaveAssistantMessageWithSegments`。
+  Web 同步端点 `POST /api/v1/chat/messages/agent` 也受益,与流式端点行为对齐。
+- 新增 `agent.StepRecord` 中性记录结构 + `AgentResult.Records` 字段(`Steps` 旧字段
+  保留兼容 `ReActAgent.Run` 的既有测试,无新调用方)。
+
+### 🧩 实现要点
+
+- **agent 包**:`service.go` 重写 `Run` = `RunStream` drain 事件聚合
+  (Token→FinalResponse,LLMCall/ToolResult→StepRecord),抽 `runStreamWithClient`
+  私有助手共享;variadic `customLLMClient` 做 `StreamingLLMClient` 类型断言适配,
+  失败静默回退 default。
+- **`internal/channel/feishu`** 新增包:
+  - `interfaces.go`:UserService / MessageService / AgentService / LLMConfigService /
+    Sender 全部接口抽象,handler 完全可单测
+  - `handler.go` `MessageHandler.HandleInbound`:纯逻辑 pipeline,镜像 web 同步端点
+    (GetOrCreateByChannel("feishu") → SaveUserMessage 去重 → BuildContext → 选 LLM →
+    Run → Records→steps 落库 → Sender.SendText)
+  - `channel.go` `Channel`:实现 `MessageChannel` 接口 + `Start(ctx)` 阻塞长连接 +
+    `Starter` 抽象隔离 SDK(测试 mock)
+  - `sender.go` `larkSender`:绑飞书 SDK 发文本,JSON `{"text":"..."}`
+- **routes.go**:enabled 时构造 channel,`go channel.Start(ctx)` 带 recover;
+  enabled=false 静默跳过(开发态友好)
+- **pkg/config**:新增 `FeishuConfig{AppID, AppSecret, Enabled}`
+
+### 🔐 安全
+
+- 飞书凭证仅 `config.yaml` 内存,不入库不日志
+- 工具失败脱敏共用 v1.5.3 `sanitizeToolResult`,飞书端回复也不含原始错误细节
+- agent_steps 记录飞书端原始未脱敏 raw_result(内部表,与展示分离)
+
+### ⚠️ 兼容性 / 范围
+
+- **不动**:`RunStream` 行为 / v1.5 工具/消息/记忆/LLM 配置 / 微信端 / Web 流式端点 /
+  DB 表结构(user_channels 已支持任意 channel_type,零迁移)
+- 飞书端仅文本单聊;群聊、富消息卡片、图片/文件/语音、思考过程展示留后续
+- 事件订阅 HTTP 回调模式不做(仅长连接)
+
+### 📚 文档
+
+- 新增 `docs/20-产品PRD/in_progress/v1.6-飞书机器人接入PRD.md`
+- 新增 `docs/30-服务架构/02-模块设计/智能体层/feishu-channel.md`
+- 新增 `docs/50-测试/test-plans/v1.6-feishu-bot.md`
+- 演进路线图 v1.6 小节注记:选定飞书 + 长连接 + Run/RunStream 统一架构定义
+
+### 📦 依赖
+
+- `github.com/larksuite/oapi-sdk-go/v3` v3.9.6(飞书官方 Go SDK)
+- `github.com/gorilla/websocket` v1.5.0(SDK 长连接传递依赖)
+
+---
+
 ## [v1.5.5] - 2026-06-21
 
 ### 🔧 架构改进

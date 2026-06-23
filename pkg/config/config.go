@@ -11,6 +11,7 @@ import (
 type Config struct {
 	App      AppConfig      `mapstructure:"app"`
 	Wechat   WechatConfig   `mapstructure:"wechat"`
+	Feishu   FeishuConfig   `mapstructure:"feishu"`
 	LLM      LLMConfig      `mapstructure:"llm"`
 	Memory   MemoryConfig   `mapstructure:"memory"`
 	Redis    RedisConfig    `mapstructure:"redis"`
@@ -32,6 +33,16 @@ type WechatConfig struct {
 	Token          string `mapstructure:"token"`
 	EncodingAESKey string `mapstructure:"encoding_aes_key"`
 	CallbackURL    string `mapstructure:"callback_url"`
+}
+
+// FeishuConfig 飞书机器人配置(v1.6)。
+// 通过长连接(WebSocket)接收消息,无需公网回调地址;凭证仅 config.yaml 内存,
+// 不入库不日志(安全红线)。enabled=false 时跳过飞书 channel 初始化,
+// 不影响 Web/微信正常启动(开发态友好)。
+type FeishuConfig struct {
+	AppID     string `mapstructure:"app_id"`
+	AppSecret string `mapstructure:"app_secret"`
+	Enabled   bool   `mapstructure:"enabled"`
 }
 
 // LLMConfig 大模型配置

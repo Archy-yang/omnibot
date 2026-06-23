@@ -454,7 +454,17 @@ func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
 		return
 	}
 
-	if err := h.messageService.SaveAssistantMessage(c.Request.Context(), userID, result.FinalResponse); err != nil {
+	// v1.6: 同步端点也落 agent_steps,与流式端点行为对齐——RunStream 是唯一真实实现,
+	// 同步 Run 通过聚合产出 Records,handler 转 conversation.AgentStep 走同一个 service。
+	// segments 在同步路径不填(交错段是流式的展示语义,同步 IM 类入口拿不到 token 级时序)。
+	stepModel := ""
+	if hasCustomConfig && userConfig != nil {
+		stepModel = userConfig.Model
+	}
+	steps := recordsToAgentSteps(result.Records, userID, stepModel)
+	if err := h.messageService.SaveAssistantMessageWithSegments(
+		c.Request.Context(), userID, result.FinalResponse, nil, steps,
+	); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
@@ -661,6 +671,34 @@ func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
 	}
 	return items
+}
+
+// recordsToAgentSteps (v1.6) 把 agent 聚合产出的 StepRecord 链转成可落库的
+// conversation.AgentStep 链——同步 Run 路径用。Records 已是有序的(对应流式事件时序),
+// 这里只负责按序 stamp Seq 并补 Model(agent 包拿不到模型名)。MessageID 由
+// MessageService.SaveAssistantMessageWithSegments 在落消息后回写,本函数不管。
+//
+// 返回 nil 表示无运行链路(records 为空),上层 SaveAssistantMessageWithSegments 收到
+// 空切片会跳过写步骤,语义安全。
+func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model string) []*conversation.AgentStep {
+	if len(records) == 0 {
+		return nil
+	}
+	steps := make([]*conversation.AgentStep, 0, len(records))
+	for i, r := range records {
+		var step *conversation.AgentStep
+		switch r.Kind {
+		case agentpkg.StepKindLLMCall:
+			step = conversation.NewLLMStep(userID, r.Request, r.Response, model, r.Status, r.DurationMs)
+		case agentpkg.StepKindToolCall:
+			step = conversation.NewToolStep(userID, r.Tool, r.Request, r.Response, r.Status, r.DurationMs)
+		default:
+			continue // 未知 kind 跳过,防御未来扩展
+		}
+		step.Seq = i
+		steps = append(steps, step)
+	}
+	return steps
 }
 
 // ========== 长期记忆接口 ==========
