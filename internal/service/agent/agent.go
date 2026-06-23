@@ -21,10 +21,18 @@ type AgentStep struct {
 	Final      bool
 }
 
-// AgentResult Agent 执行结果
+// AgentResult Agent 执行结果。
+//
+// v1.6 起 `Records` 是同步 Run 路径的核心产出:Run 调 RunStream drain 事件后聚合成
+// 有序 StepRecord 链(llm_call + tool_call),供上层落 agent_steps 复盘——和流式 handler
+// 同款数据,做到「同步/流式两条返回形式,记录单一来源」。
+//
+// `Steps` 是 v1.5 ReActAgent.Run 老路径的产物(仅记 tool 调用,无 llm_call),保留只为
+// 兼容 ReActAgent.Run 既有测试;AgentService.Run 走聚合路径后不再填充该字段。
 type AgentResult struct {
 	FinalResponse string
-	Steps         []AgentStep
+	Records       []StepRecord // v1.6: 聚合自 RunStream 事件的有序运行链
+	Steps         []AgentStep  // Deprecated: 老 ReActAgent.Run 路径用,新代码看 Records
 	TotalSteps    int
 	Duration      time.Duration
 }
