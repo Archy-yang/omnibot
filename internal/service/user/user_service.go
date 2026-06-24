@@ -12,14 +12,6 @@ type UserRepository interface {
 	Update(u *user.User) error
 }
 
-// WechatAccountRepository 微信账号仓储接口
-type WechatAccountRepository interface {
-	Create(account *user.WechatAccount) error
-	GetByOpenID(openID string) (*user.WechatAccount, error)
-	GetByUnionID(unionID string) (*user.WechatAccount, error)
-	Update(account *user.WechatAccount) error
-}
-
 // UserChannelRepository 用户渠道仓储接口
 type UserChannelRepository interface {
 	Create(uc *user.UserChannel) error
@@ -28,57 +20,28 @@ type UserChannelRepository interface {
 }
 
 // UserService 用户服务
+//
+// v1.8 起 UserChannels 是唯一身份解析模型——微信 / Web / 飞书都走
+// GetOrCreateByChannel(channelType, channelUserID)。原 WechatAccount 双轨
+// 已删除。
 type UserService struct {
 	userRepo    UserRepository
-	wechatRepo  WechatAccountRepository
 	channelRepo UserChannelRepository
 }
 
 // NewUserService 创建用户服务
-func NewUserService(userRepo UserRepository, wechatRepo WechatAccountRepository, channelRepo UserChannelRepository) *UserService {
+func NewUserService(userRepo UserRepository, channelRepo UserChannelRepository) *UserService {
 	return &UserService{
 		userRepo:    userRepo,
-		wechatRepo:  wechatRepo,
 		channelRepo: channelRepo,
 	}
 }
 
-// GetOrCreateByOpenID 根据 OpenID 获取或创建用户
-// 返回: 用户, 是否新创建, 错误
-func (s *UserService) GetOrCreateByOpenID(openID string) (*user.User, bool, error) {
-	// 1. 查找微信账号
-	account, err := s.wechatRepo.GetByOpenID(openID)
-	if err == nil && account != nil {
-		// 找到微信账号，获取对应用户
-		u, err := s.userRepo.GetByID(account.UserID)
-		if err != nil {
-			return nil, false, err
-		}
-		return u, false, nil
-	}
-
-	// 2. 微信账号不存在，创建新用户和微信账号
-	if err != gorm.ErrRecordNotFound {
-		return nil, false, err
-	}
-
-	// 创建用户
-	u := user.NewUser()
-	if err := s.userRepo.Create(u); err != nil {
-		return nil, false, err
-	}
-
-	// 创建微信账号关联
-	account = user.NewWechatAccount(u.ID, openID)
-	if err := s.wechatRepo.Create(account); err != nil {
-		return nil, false, err
-	}
-
-	return u, true, nil
-}
-
 // GetOrCreateByChannel 根据渠道获取或创建用户
 // 返回: 用户, 渠道关联, 是否新创建, 错误
+//
+// 三入口(微信 channelType="wechat" / Web channelType="web" / 飞书 channelType="feishu")
+// 共用此方法,user_channels 唯一索引按 (channel_type, channel_user_id) 隔离。
 func (s *UserService) GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error) {
 	// 1. 查找渠道关联
 	uc, err := s.channelRepo.GetByChannel(channelType, channelUserID)

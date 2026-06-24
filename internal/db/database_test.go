@@ -37,11 +37,11 @@ func TestInitDB_SQLite(t *testing.T) {
 	assert.NotNil(t, db)
 	assert.Equal(t, "sqlite", db.Driver())
 
-	// 验证表已创建成功
+	// 验证表已创建成功:v1.8 起 wechat_accounts 表已删除,身份解析走 user_channels。
 	hasUserTable := db.GetGormDB().Migrator().HasTable(&user.User{})
 	assert.True(t, hasUserTable)
-	hasWechatAccountTable := db.GetGormDB().Migrator().HasTable(&user.WechatAccount{})
-	assert.True(t, hasWechatAccountTable)
+	hasUserChannelTable := db.GetGormDB().Migrator().HasTable(&user.UserChannel{})
+	assert.True(t, hasUserChannelTable)
 
 	// 清理
 	_ = db.Close()

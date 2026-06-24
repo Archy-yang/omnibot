@@ -4,6 +4,63 @@
 
 ---
 
+## [v1.8.0] - 2026-06-24
+
+### 🔧 架构改进
+
+- **UserChannels 统一身份解析**:微信端从 `GetOrCreateByOpenID` 切换到
+  `GetOrCreateByChannel("wechat", openID)`,与 Web/飞书完全对齐,三入口共用唯一身份解析模型。
+- **删除 WechatAccount 双轨**:删除 `WechatAccount` domain / repo / service 方法、
+  AutoMigrate 注册、装配逻辑;`NewUserService` 减参为 `(userRepo, channelRepo)`。
+- **背景**:v1.6 飞书接入时 `UserChannel` 模型已隐性引入,Web 和飞书早已走通道路径,只剩
+  微信端仍是 `WechatAccount` 双轨。v1.8 把这条捋齐——加新入口的实际改动从此只在 channel
+  层,身份解析模型从此唯一。
+
+### 🚀 用户可见
+
+- 无。用户无感知,所有功能与之前一模一样。微信回调首次解析时,会通过通道路径自动创建
+  `user_channels` 记录(channel_type=wechat,channel_user_id=OpenID),与之前的行为等价。
+
+### 📦 数据库
+
+- AutoMigrate 不再创建 `wechat_accounts` 表(新部署直接走 user_channels)
+- 现网/dev 库残留:`scripts/migrate_v1.8_drop_wechat_accounts.sql` 提供一次性
+  `DROP TABLE IF EXISTS wechat_accounts;`,可手动执行清理表残留(不执行也不影响功能,只是占点空间)
+- **现有微信用户在 v1.8 后首次回调时**:由于不做老数据迁移,会在 user_channels 里新建一条
+  记录,**关联到新的 user_id**——原 user_id 下的对话历史 / 长期记忆 / LLM 配置不再可见。
+  本项目仍处 MVP/dev 期,wechat_accounts 表无活跃用户依赖,影响为零。生产部署前如有真实
+  数据,需另写迁移脚本(把 wechat_accounts 表内容平移到 user_channels)。
+
+### 🛡️ 安全
+
+- 无新加密路径,无敏感数据流转变化
+- 删除的 `WechatAccount.UnionID` 在新模型中保留位置(`UserChannel.ChannelRawData.UnionID`),
+  本次未触达 UnionID 写入路径——当前微信回调流程未存 UnionID,等到 v2.x 真正需要时再补
+
+### ⚠️ 兼容性 / 范围
+
+- **不动**:RunStream / Agent 能力 / 长期记忆 / LLM 配置 / Web 流式端点 / 飞书入口 /
+  对外 HTTP/SSE 协议
+- 微信回调外部协议无变化(XML in / XML out)
+- v1.8 不做 WeChat Handler XML 解耦,不做异步任务抽象——留 v1.9 / v1.10+
+
+### 🧪 测试
+
+- `go test ./... -count=1` 全绿
+- `go build ./...` 通过
+- `grep -rn "WechatAccount\|GetOrCreateByOpenID" internal/` 仅余 3 处注释引用(v1.8 历史说明)
+- 新增 `TestUserService_GetOrCreateByChannel_WechatType`:验证 channelType="wechat" 路径行为
+- 新增 `MockUserService.lastChannelType` 字段 + handler 测试断言:验证 wechat handler 实际使用 channelType="wechat"
+
+### 📚 文档同步
+
+- 演进路线图 v3.0:v1.7 标已完成(指回 v1.3 实际落地节点),v1.8 章节重写为「微信切换 + 双轨删除」,
+  v1.9 章节调整为「WeChat XML 解耦 + 跨通道验证」
+- 现状表更新:UserChannels 统一 ✅,Web 长期记忆 UI ✅,Agent ✅,飞书 ✅
+- `docs/20-产品PRD/in_progress/Web端长期记忆管理PRD-v1.0.md` 标记「已在 v1.3 完成」
+
+---
+
 ## [v1.6.0] - 2026-06-22
 
 ### 🚀 用户可见

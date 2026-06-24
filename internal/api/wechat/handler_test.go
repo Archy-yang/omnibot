@@ -36,19 +36,26 @@ func (m *MockLLMClient) ChatCompletion(ctx context.Context, messages []llm.ChatM
 	return m.returnString, m.returnError
 }
 
-// MockUserService 用于单元测试的 Mock 用户服务
+// MockUserService 用于单元测试的 Mock 用户服务。
+//
+// v1.8:微信端切换到通道路径,UserService 接口改为 GetOrCreateByChannel,
+// 与 web/feishu 共用同一身份解析模型。lastOpenID 字段保留,记录的是
+// channelUserID(对微信通道而言就是 OpenID),测试用例无需修改。
 type MockUserService struct {
-	returnUser  *user.User
-	returnIsNew bool
-	returnError error
-	called      bool
-	lastOpenID  string
+	returnUser      *user.User
+	returnChannel   *user.UserChannel
+	returnIsNew     bool
+	returnError     error
+	called          bool
+	lastChannelType string
+	lastOpenID      string
 }
 
-func (m *MockUserService) GetOrCreateByOpenID(openID string) (*user.User, bool, error) {
+func (m *MockUserService) GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error) {
 	m.called = true
-	m.lastOpenID = openID
-	return m.returnUser, m.returnIsNew, m.returnError
+	m.lastChannelType = channelType
+	m.lastOpenID = channelUserID
+	return m.returnUser, m.returnChannel, m.returnIsNew, m.returnError
 }
 
 func TestHandler_Verify_ValidSignature(t *testing.T) {
@@ -193,6 +200,7 @@ func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, mockLLM.called, "应该调用 LLM")
 	assert.True(t, mockUser.called, "应该调用 UserService")
+	assert.Equal(t, "wechat", mockUser.lastChannelType, "微信端应使用 channelType=wechat")
 	assert.Equal(t, "openid_test", mockUser.lastOpenID, "应该使用正确的 openID")
 	assert.Contains(t, w.Body.String(), "<![CDATA[这是 LLM 生成的智能回复]]>")
 	assert.Contains(t, w.Body.String(), "<ToUserName><![CDATA[openid_test]]></ToUserName>")
@@ -328,6 +336,7 @@ func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, mockLLM.called, "应该调用 LLM")
 	assert.True(t, mockUser.called, "应该调用 UserService")
+	assert.Equal(t, "wechat", mockUser.lastChannelType, "微信端应使用 channelType=wechat")
 	assert.Equal(t, "openid_test", mockUser.lastOpenID, "应该使用正确的 openID")
 	assert.Equal(t, "用户刚刚关注了公众号，请生成友好的欢迎语", mockLLM.lastMessages[1].Content)
 	assert.Contains(t, w.Body.String(), "<![CDATA[欢迎关注我们的公众号！]]>")

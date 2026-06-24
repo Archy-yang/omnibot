@@ -1,5 +1,17 @@
 # Web 端长期记忆管理 PRD v1.0
 
+> **⚠️ 状态更新(2026-06-24)**:本 PRD 全部 P0/P1 验收项已在 **v1.3.0(2026-06-13)**
+> 提前落地完成。**且超额做了** PRD「本次 MVP 不做」清单里的:
+> - ✅ 单条删除(`DELETE /api/v1/memories/:id`)
+> - ✅ 单条编辑(`PUT /api/v1/memories/:id`)
+>
+> 实际代码位置:
+> - 后端:`internal/api/web/handler.go`(GET / POST / DELETE / DELETE :id / PUT :id)
+> - 前端:`frontend/src/components/functional/MemorySection.vue`
+> - 路由:`internal/api/routes.go:143-150`
+>
+> 本 PRD 保留作为路线图历史记录,待统一归档迭代时移到 `docs/20-产品PRD/archived/`。
+
 ## 一、文档信息
 
 | 项 | 内容 |
