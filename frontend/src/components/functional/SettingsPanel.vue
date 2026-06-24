@@ -6,12 +6,16 @@ import type { LLMConfig } from '@/types/api';
 import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
 import MemorySection from '@/components/functional/MemorySection.vue';
+import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
 
 const props = defineProps<SettingsPanelProps>();
 const emit = defineEmits<SettingsPanelEmits>();
 
 const settingsStore = useSettingsStore();
 const { success, error } = useToast();
+
+// v1.10:Tab 化重构,默认进模型 Tab
+const activeTab = ref<'llm' | 'memory' | 'about'>('llm');
 
 // Local form state
 const localConfig = ref<LLMConfig>({
@@ -45,6 +49,8 @@ watch(
     if (visible) {
       settingsStore.loadProviderOptions();
       settingsStore.loadConfig();
+      // 每次打开重置到模型 Tab——避免上次停留在「关于」给用户造成困惑
+      activeTab.value = 'llm';
     }
   },
   { immediate: false }
@@ -160,6 +166,10 @@ const handleCancel = () => {
   }
   emit('close');
 };
+
+const handleClose = () => {
+  emit('close');
+};
 </script>
 
 <template>
@@ -167,112 +177,167 @@ const handleCancel = () => {
     :show="visible"
     preset="card"
     title="设置"
-    style="width: 500px"
+    style="width: 640px"
     @update:show="(v: boolean) => !v && emit('close')"
     :mask-closable="false"
   >
-    <NForm label-placement="left" label-width="100px" :show-feedback="false" label-align="left">
-      <NFormItem label="主题">
-        <NSelect
-          v-model:value="settingsStore.theme"
-          :options="themeOptions"
-          @update:value="settingsStore.toggleTheme"
-        />
-      </NFormItem>
+    <NTabs v-model:value="activeTab" type="line" animated>
+      <!-- ============ Tab: 模型 ============ -->
+      <NTabPane name="llm" tab="模型">
+        <NForm label-placement="left" label-width="100px" :show-feedback="false" label-align="left">
+          <!-- 配置状态提示 -->
+          <NAlert
+            :type="settingsStore.hasUserConfig ? 'success' : 'info'"
+            :title="settingsStore.configStatus"
+            size="small"
+            class="mb-8"
+          />
 
-      <NDivider title-placement="left">LLM 配置</NDivider>
+          <div v-if="settingsStore.hasUserConfig" class="mb-6">
+            <NButton
+              type="error"
+              size="small"
+              @click="handleClearConfig"
+              :loading="isClearing"
+            >
+              清除自定义配置，恢复使用系统默认
+            </NButton>
+          </div>
 
-      <!-- 配置状态提示 -->
-      <NAlert
-        :type="settingsStore.hasUserConfig ? 'success' : 'info'"
-        :title="settingsStore.configStatus"
-        size="small"
-        class="mb-8"
-      />
+          <NFormItem label="服务商" style="margin-bottom: 4px !important;">
+            <NSelect
+              v-model:value="localConfig.provider"
+              :options="selectProviderOptions"
+              @update:value="handleProviderChange"
+            />
+          </NFormItem>
 
-      <div v-if="settingsStore.hasUserConfig" class="mb-6">
-        <NButton
-          type="error"
-          size="small"
-          @click="handleClearConfig"
-          :loading="isClearing"
-        >
-          清除自定义配置，恢复使用系统默认
-        </NButton>
-      </div>
+          <NFormItem v-if="providerHelpText" label=" " style="margin-bottom: 4px !important;">
+            <span class="text-sm text-gray-500">{{ providerHelpText }}</span>
+          </NFormItem>
 
-      <NFormItem label="服务商" style="margin-bottom: 4px !important;">
-        <NSelect
-          v-model:value="localConfig.provider"
-          :options="selectProviderOptions"
-          @update:value="handleProviderChange"
-        />
-      </NFormItem>
+          <NFormItem label="模型">
+            <NInput
+              v-model:value="localConfig.model"
+              placeholder="输入模型名称，如 gpt-4o-mini"
+            />
+          </NFormItem>
 
-      <NFormItem v-if="providerHelpText" label=" " style="margin-bottom: 4px !important;">
-        <span class="text-sm text-gray-500">{{ providerHelpText }}</span>
-      </NFormItem>
+          <NFormItem label="API Key">
+            <NInput
+              v-model:value="localConfig.apiKey"
+              type="password"
+              placeholder="输入 API Key"
+              show-password-on="click"
+            />
+          </NFormItem>
 
-      <NFormItem label="模型">
-        <NInput
-          v-model:value="localConfig.model"
-          placeholder="输入模型名称，如 gpt-4o-mini"
-        />
-      </NFormItem>
+          <NFormItem label="Base URL">
+            <NInput
+              v-model:value="localConfig.baseUrl"
+              placeholder="https://api.openai.com/v1"
+            />
+          </NFormItem>
 
-      <NFormItem label="API Key">
-        <NInput
-          v-model:value="localConfig.apiKey"
-          type="password"
-          placeholder="输入 API Key"
-          show-password-on="click"
-        />
-      </NFormItem>
+          <NFormItem label="Temperature" class="flex items-center">
+            <NSlider
+              v-model:value="localConfig.temperature"
+              :min="0"
+              :max="2"
+              :step="0.1"
+              class="mr-4 flex-1"
+            />
+            <span class="text-sm text-gray-500 w-10 text-right whitespace-nowrap">
+              {{ localConfig.temperature }}
+            </span>
+          </NFormItem>
 
-      <NFormItem label="Base URL">
-        <NInput
-          v-model:value="localConfig.baseUrl"
-          placeholder="https://api.openai.com/v1"
-        />
-      </NFormItem>
+          <NFormItem label="Max Tokens">
+            <NInputNumber
+              v-model:value="localConfig.maxTokens"
+              :min="1"
+              :max="32768"
+              style="width: 100%"
+            />
+          </NFormItem>
+        </NForm>
+      </NTabPane>
 
-      <NFormItem label="Temperature" class="flex items-center">
-        <NSlider
-          v-model:value="localConfig.temperature"
-          :min="0"
-          :max="2"
-          :step="0.1"
-          class="mr-4 flex-1"
-        />
-        <span class="text-sm text-gray-500 w-10 text-right whitespace-nowrap">
-          {{ localConfig.temperature }}
-        </span>
-      </NFormItem>
+      <!-- ============ Tab: 记忆 ============ -->
+      <NTabPane name="memory" tab="记忆">
+        <MemorySection />
+      </NTabPane>
 
-      <NFormItem label="Max Tokens">
-        <NInputNumber
-          v-model:value="localConfig.maxTokens"
-          :min="1"
-          :max="32768"
-          style="width: 100%"
-        />
-      </NFormItem>
-    </NForm>
+      <!-- ============ Tab: 关于 ============ -->
+      <NTabPane name="about" tab="关于">
+        <div class="space-y-6">
+          <!-- 应用信息 -->
+          <div>
+            <div class="text-xl font-semibold">{{ APP_NAME }} {{ APP_VERSION }}</div>
+            <div class="text-sm text-gray-500 mt-1">{{ APP_TAGLINE }}</div>
+          </div>
 
-    <NDivider title-placement="left">长期记忆</NDivider>
-    <MemorySection />
+          <!-- 主题(全局偏好) -->
+          <div>
+            <div class="text-sm font-medium mb-2">主题</div>
+            <NSelect
+              :value="settingsStore.theme"
+              :options="themeOptions"
+              @update:value="settingsStore.toggleTheme"
+              style="width: 200px"
+            />
+          </div>
+
+          <!-- 接入入口 -->
+          <div>
+            <div class="text-sm font-medium mb-2">已接入入口</div>
+            <NList bordered>
+              <NListItem v-for="channel in CHANNELS" :key="channel.type">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium">{{ channel.label }}</div>
+                    <div class="text-xs text-gray-500 mt-0.5">{{ channel.description }}</div>
+                  </div>
+                  <NTag :bordered="false" type="success" size="small">{{ channel.status }}</NTag>
+                </div>
+              </NListItem>
+            </NList>
+          </div>
+
+          <!-- 链接 -->
+          <div class="text-sm">
+            <span class="text-gray-500">源码仓库:</span>
+            <a
+              :href="ABOUT_LINKS.repo"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="ml-2 text-blue-500 hover:underline"
+            >
+              {{ ABOUT_LINKS.repo }}
+            </a>
+          </div>
+        </div>
+      </NTabPane>
+    </NTabs>
 
     <template #footer>
       <NSpace justify="end">
-        <NButton @click="handleCancel">取消</NButton>
-        <NButton
-          type="primary"
-          @click="handleSave"
-          :loading="isSaving"
-          :disabled="isNativeProviderSelected"
-        >
-          保存
-        </NButton>
+        <!-- 模型 Tab:保存 / 取消 -->
+        <template v-if="activeTab === 'llm'">
+          <NButton @click="handleCancel">取消</NButton>
+          <NButton
+            type="primary"
+            @click="handleSave"
+            :loading="isSaving"
+            :disabled="isNativeProviderSelected"
+          >
+            保存
+          </NButton>
+        </template>
+        <!-- 其他 Tab:仅关闭(记忆是即时保存,关于是只读) -->
+        <template v-else>
+          <NButton @click="handleClose">关闭</NButton>
+        </template>
       </NSpace>
     </template>
   </NModal>
@@ -284,5 +349,8 @@ const handleCancel = () => {
 }
 :deep(.n-form-item--no-label) {
   margin-bottom: 8px !important;
+}
+:deep(.n-tab-pane) {
+  padding-top: 12px;
 }
 </style>
