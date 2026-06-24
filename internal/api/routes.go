@@ -59,13 +59,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 初始化仓储层
 	userRepository := userRepo.NewUserRepository(dbConn.GetGormDB())
-	wechatAccountRepository := userRepo.NewWechatAccountRepository(dbConn.GetGormDB())
 	llmConfigRepository := userRepo.NewLLMConfigRepository(dbConn.GetGormDB())
 	userChannelRepository := userRepo.NewUserChannelRepository(dbConn.GetGormDB())
 	memoryRepository := memoryRepo.NewMemoryRepository(dbConn.GetGormDB())
 
 	// 初始化用户服务
-	userSvc := userService.NewUserService(userRepository, wechatAccountRepository, userChannelRepository)
+	// v1.8:WechatAccount 双轨已删除,身份解析统一走 user_channels。
+	userSvc := userService.NewUserService(userRepository, userChannelRepository)
 	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
 
 	// 初始化消息服务

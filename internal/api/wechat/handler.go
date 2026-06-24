@@ -140,8 +140,11 @@ type LLMClient interface {
 }
 
 // UserService 用户服务接口
+//
+// v1.8:微信端从 GetOrCreateByOpenID 切换到 GetOrCreateByChannel,与 Web/飞书共用
+// 唯一身份解析路径。channelType 固定为 "wechat",channelUserID 即原 OpenID。
 type UserService interface {
-	GetOrCreateByOpenID(openID string) (*user.User, bool, error)
+	GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error)
 }
 
 // Handler 微信公众号处理器
@@ -253,7 +256,7 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 
 	// 获取或创建用户（兜底机制）
 	if h.userService != nil {
-		_, _, err = h.userService.GetOrCreateByOpenID(msg.FromUserName)
+		_, _, _, err = h.userService.GetOrCreateByChannel("wechat", msg.FromUserName)
 		if err != nil {
 			// 记录错误，但不影响消息正常处理
 			logger.WarnWithFields("Failed to get or create user",
@@ -376,7 +379,7 @@ func (h *Handler) handleTextMessage(msg *Message) (string, error) {
 // getUserIDByOpenID 通过 OpenID 获取 userID
 func (h *Handler) getUserIDByOpenID(openID string) int64 {
 	if h.userService != nil {
-		user, _, err := h.userService.GetOrCreateByOpenID(openID)
+		user, _, _, err := h.userService.GetOrCreateByChannel("wechat", openID)
 		if err == nil && user != nil {
 			return user.ID
 		}
@@ -664,7 +667,7 @@ func (h *Handler) handleEventMessage(msg *Message) (string, error) {
 func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
 	// 关注事件 - 创建用户
 	if h.userService != nil {
-		_, isNew, err := h.userService.GetOrCreateByOpenID(msg.FromUserName)
+		_, _, isNew, err := h.userService.GetOrCreateByChannel("wechat", msg.FromUserName)
 		if err != nil {
 			logger.WarnWithFields("Failed to create user on subscribe",
 				zap.String("open_id", msg.FromUserName),
