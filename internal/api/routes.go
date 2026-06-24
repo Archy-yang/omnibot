@@ -13,6 +13,7 @@ import (
 	channelfactory "omnibot/internal/channel"
 	channelfeishu "omnibot/internal/channel/feishu"
 	channelweb "omnibot/internal/channel/web"
+	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
@@ -33,6 +34,7 @@ import (
 
 func init() {
 	channelfactory.Register(channelweb.NewChannel())
+	channelfactory.Register(channelwechat.NewChannel())
 }
 
 // SetupRouter 设置路由
@@ -74,14 +76,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
 	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
 
-	// 微信回调路由
+	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
+	wechatChan := channelwechat.NewChannel()
 	wechatHandler := wechat.NewHandler(wechat.Config{
 		AppID:          cfg.Wechat.AppID,
 		AppSecret:      cfg.Wechat.AppSecret,
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, userSvc, llmConfigSvc, msgSvc, memorySvc)
+	}, llmClient, userSvc, llmConfigSvc, msgSvc, memorySvc, wechatChan)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)

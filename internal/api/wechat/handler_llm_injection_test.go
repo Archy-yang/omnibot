@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	domain "omnibot/internal/domain/user"
 	repo "omnibot/internal/repository/user"
@@ -44,7 +45,7 @@ func TestHandler_LLMCall_WithUserConfig(t *testing.T) {
 	_, _ = handler.handleConfigCommand(1, "#设置Key sk-test-api-key-12345678901234567890")
 
 	// 发送对话消息
-	msg := &Message{
+	msg := &channelwechat.InboundMessage{
 		FromUserName: "user123",
 		MsgType:      "text",
 		Content:      "你好",
@@ -68,7 +69,7 @@ func TestHandler_LLMCall_WithoutUserConfig_UsesSystemDefault(t *testing.T) {
 	handler := NewHandler(Config{}, mockLLM, nil, llmConfigService)
 
 	// 用户没有设置配置，直接对话
-	msg := &Message{
+	msg := &channelwechat.InboundMessage{
 		FromUserName: "user456",
 		MsgType:      "text",
 		Content:      "你好",

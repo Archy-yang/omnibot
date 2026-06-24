@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/user"
@@ -24,31 +24,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
-
-// Message 微信消息结构体
-type Message struct {
-	XMLName      xml.Name `xml:"xml"`
-	ToUserName   string   `xml:"ToUserName"`
-	FromUserName string   `xml:"FromUserName"`
-	CreateTime   int64    `xml:"CreateTime"`
-	MsgType      string   `xml:"MsgType"`
-	Content      string   `xml:"Content,omitempty"`
-	MsgID        string   `xml:"MsgId,omitempty"`
-	PicURL       string   `xml:"PicUrl,omitempty"`
-	MediaID      string   `xml:"MediaId,omitempty"`
-	Format       string   `xml:"Format,omitempty"`
-	ThumbMediaID string   `xml:"ThumbMediaId,omitempty"`
-	LocationX    string   `xml:"Location_X,omitempty"`
-	LocationY    string   `xml:"Location_Y,omitempty"`
-	Scale        string   `xml:"Scale,omitempty"`
-	Label        string   `xml:"Label,omitempty"`
-	Title        string   `xml:"Title,omitempty"`
-	Description  string   `xml:"Description,omitempty"`
-	Url          string   `xml:"Url,omitempty"`
-	Event        string   `xml:"Event,omitempty"`
-	EventKey     string   `xml:"EventKey,omitempty"`
-	Ticket       string   `xml:"Ticket,omitempty"`
-}
 
 const systemPrompt = "你是一个友好的智能客服助手，请用简洁的中文回应用户的问题。"
 
@@ -125,15 +100,6 @@ func (h *Handler) callLLM(ctx context.Context, userID int64, userContent string,
 	return resp
 }
 
-// parseMessage 解析XML消息
-func parseMessage(xmlContent string) (*Message, error) {
-	var msg Message
-	if err := xml.Unmarshal([]byte(xmlContent), &msg); err != nil {
-		return nil, err
-	}
-	return &msg, nil
-}
-
 // LLMClient 大模型客户端接口
 type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
@@ -147,9 +113,14 @@ type UserService interface {
 	GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error)
 }
 
-// Handler 微信公众号处理器
+// Handler 微信公众号处理器。
+//
+// v1.9 起 Handler 业务路径只处理 channelwechat.InboundMessage 中性结构,
+// XML 解析/序列化在 HandleMessage 顶层通过 channelwechat.Parse / wechatChannel.BuildResponseXML
+// 完成,handler 本身与 XML 协议解耦——与 feishu / web handler 对齐。
 type Handler struct {
 	config           Config
+	wechatChannel    *channelwechat.Channel // v1.9 注入,负责出站 XML 序列化
 	llmClient        LLMClient
 	userService      UserService
 	llmConfigService userService.LLMConfigService
@@ -166,7 +137,11 @@ type Config struct {
 	CallbackURL    string `mapstructure:"callback_url"`
 }
 
-// NewHandler 创建微信处理器
+// NewHandler 创建微信处理器。
+//
+// v1.9 起 wechatChannel 由调用方注入(通常 routes.go 装配)——若调用方未传入,
+// HandleMessage 内部会用默认 channelwechat.NewChannel() 兜底,保证旧测试构造路径
+// (NewHandler(config, llmClient, userService, optionalServices...)) 不变。
 func NewHandler(
 	config Config,
 	llmClient LLMClient,
@@ -174,12 +149,13 @@ func NewHandler(
 	optionalServices ...interface{},
 ) *Handler {
 	handler := &Handler{
-		config:      config,
-		llmClient:   llmClient,
-		userService: userService,
+		config:        config,
+		llmClient:     llmClient,
+		userService:   userService,
+		wechatChannel: channelwechat.NewChannel(),
 	}
 
-	// 解析可选参数（支持 LLMConfigService 和 MessageService）
+	// 解析可选参数(支持 LLMConfigService / MessageService / MemoryService / *channelwechat.Channel)
 	for _, svc := range optionalServices {
 		switch s := svc.(type) {
 		case userLLMConfigService:
@@ -188,6 +164,8 @@ func NewHandler(
 			handler.msgService = s
 		case memoryService.MemoryService:
 			handler.memoryService = s
+		case *channelwechat.Channel:
+			handler.wechatChannel = s
 		}
 	}
 
@@ -226,7 +204,7 @@ func (h *Handler) Verify(c *gin.Context) {
 	c.String(http.StatusOK, echostr)
 }
 
-// HandleMessage 处理微信消息
+// HandleMessage 处理微信消息。XML 协议在此层进出,业务路径只看中性 InboundMessage。
 func (h *Handler) HandleMessage(c *gin.Context) {
 	// 读取请求体
 	body, err := io.ReadAll(c.Request.Body)
@@ -238,8 +216,8 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 
 	logger.InfoWithFields("Received wechat callback", zap.Int("body_length", len(body)))
 
-	// 解析XML消息
-	msg, err := parseMessage(string(body))
+	// 解析 XML 消息(协议层,channel 包负责)
+	in, err := channelwechat.Parse(body)
 	if err != nil {
 		logger.ErrorWithFields("Failed to parse message", zap.Error(err))
 		c.String(http.StatusBadRequest, "Failed to parse message")
@@ -248,35 +226,41 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 
 	// 记录收到的消息
 	logger.InfoWithFields("Received wechat message",
-		zap.String("type", msg.MsgType),
-		zap.String("from_user_name", msg.FromUserName),
-		zap.String("to_user_name", msg.ToUserName),
-		zap.String("msg_id", msg.MsgID),
+		zap.String("type", in.MsgType),
+		zap.String("from_user_name", in.FromUserName),
+		zap.String("to_user_name", in.ToUserName),
+		zap.String("msg_id", in.MsgID),
 	)
 
 	// 获取或创建用户（兜底机制）
 	if h.userService != nil {
-		_, _, _, err = h.userService.GetOrCreateByChannel("wechat", msg.FromUserName)
+		_, _, _, err = h.userService.GetOrCreateByChannel("wechat", in.FromUserName)
 		if err != nil {
 			// 记录错误，但不影响消息正常处理
 			logger.WarnWithFields("Failed to get or create user",
-				zap.String("open_id", msg.FromUserName),
+				zap.String("open_id", in.FromUserName),
 				zap.Error(err),
 			)
 		}
 	}
 
-	// 分发消息处理
-	response, err := h.dispatchMessage(msg)
+	// 分发消息处理(业务路径,只产纯文本)
+	content, err := h.dispatchMessage(in)
 	if err != nil {
 		logger.ErrorWithFields("Failed to dispatch message", zap.Error(err))
 		c.String(http.StatusInternalServerError, "Failed to dispatch message")
 		return
 	}
 
-	// 返回响应
+	// content 为空表示「不回复」(如 unsubscribe / view 事件),按微信协议直接空响应
+	if content == "" {
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	// 包装成 XML 响应(协议层,channel 包负责)
 	c.Header("Content-Type", "application/xml")
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, h.wechatChannel.BuildResponseXML(in.FromUserName, in.ToUserName, content))
 }
 
 // verifySignature 验证微信签名
@@ -295,85 +279,84 @@ func (h *Handler) verifySignature(signature, timestamp, nonce string) bool {
 	return hash == signature
 }
 
-// dispatchMessage 分发消息处理
-func (h *Handler) dispatchMessage(msg *Message) (string, error) {
+// dispatchMessage 分发消息处理。返回纯文本回复内容;空串表示「不回复」。
+func (h *Handler) dispatchMessage(in *channelwechat.InboundMessage) (string, error) {
 	// 根据消息类型分发处理
-	switch msg.MsgType {
+	switch in.MsgType {
 	case "text":
-		return h.handleTextMessage(msg)
+		return h.handleTextMessage(in)
 	case "image":
-		return h.handleImageMessage(msg)
+		return h.handleImageMessage(in)
 	case "voice":
-		return h.handleVoiceMessage(msg)
+		return h.handleVoiceMessage(in)
 	case "video":
-		return h.handleVideoMessage(msg)
+		return h.handleVideoMessage(in)
 	case "shortvideo":
-		return h.handleShortVideoMessage(msg)
+		return h.handleShortVideoMessage(in)
 	case "location":
-		return h.handleLocationMessage(msg)
+		return h.handleLocationMessage(in)
 	case "link":
-		return h.handleLinkMessage(msg)
+		return h.handleLinkMessage(in)
 	case "event":
-		return h.handleEventMessage(msg)
+		return h.handleEventMessage(in)
 	default:
-		logger.WarnWithFields("Unknown message type", zap.String("type", msg.MsgType))
-		content := h.callLLM(context.Background(), 0, "用户发送了未知类型的消息", "unknown")
-		return h.buildResponse(msg, content), nil
+		logger.WarnWithFields("Unknown message type", zap.String("type", in.MsgType))
+		return h.callLLM(context.Background(), 0, "用户发送了未知类型的消息", "unknown"), nil
 	}
 }
 
 // handleTextMessage 处理文本消息
-func (h *Handler) handleTextMessage(msg *Message) (string, error) {
+func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, error) {
 	// 获取 userID
-	userID := h.getUserIDByOpenID(msg.FromUserName)
+	userID := h.getUserIDByOpenID(in.FromUserName)
 
 	// 处理配置命令
 	if h.llmConfigService != nil {
-		if reply, handled := h.handleConfigCommand(userID, msg.Content); handled {
+		if reply, handled := h.handleConfigCommand(userID, in.Content); handled {
 			// 配置命令的回复也保存到上下文
 			if h.msgService != nil && userID > 0 {
 				// 先保存用户的命令消息
-				h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+				h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
 				// 再保存机器人的回复
 				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
 			}
-			return h.buildResponse(msg, reply), nil
+			return reply, nil
 		}
 	}
 
 	// 处理记忆命令
 	if h.memoryService != nil {
-		if reply, handled := h.handleMemoryCommand(userID, msg.Content); handled {
+		if reply, handled := h.handleMemoryCommand(userID, in.Content); handled {
 			if h.msgService != nil && userID > 0 {
-				h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+				h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
 				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
 			}
-			return h.buildResponse(msg, reply), nil
+			return reply, nil
 		}
 	}
 
 	// 保存用户消息（去重）
 	if h.msgService != nil && userID > 0 {
-		err := h.msgService.SaveUserMessage(context.Background(), userID, msg.Content, msg.MsgID)
+		err := h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
 		if err == chat.ErrDuplicateMessage {
 			// 重复消息，记录日志但继续执行
 			logger.InfoWithFields("Duplicate message ignored",
 				zap.Int64("user_id", userID),
-				zap.String("msg_id", msg.MsgID),
+				zap.String("msg_id", in.MsgID),
 			)
 		}
 		// 其他错误忽略，继续执行
 	}
 
 	// 调用 LLM（带上下文）
-	content := h.callLLM(context.Background(), userID, msg.Content, "text")
+	content := h.callLLM(context.Background(), userID, in.Content, "text")
 
 	// 保存机器人回复
 	if h.msgService != nil && userID > 0 {
 		h.msgService.SaveAssistantMessage(context.Background(), userID, content)
 	}
 
-	return h.buildResponse(msg, content), nil
+	return content, nil
 }
 
 // getUserIDByOpenID 通过 OpenID 获取 userID
@@ -609,116 +592,91 @@ func (h *Handler) handleClearConfig(userID int64) string {
 }
 
 // handleImageMessage 处理图片消息
-func (h *Handler) handleImageMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了一张图片", "image")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleImageMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了一张图片", "image"), nil
 }
 
 // handleVoiceMessage 处理语音消息
-func (h *Handler) handleVoiceMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了一条语音消息", "voice")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleVoiceMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了一条语音消息", "voice"), nil
 }
 
 // handleVideoMessage 处理视频消息
-func (h *Handler) handleVideoMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了一条视频消息", "video")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleVideoMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了一条视频消息", "video"), nil
 }
 
 // handleShortVideoMessage 处理小视频消息
-func (h *Handler) handleShortVideoMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了一条小视频消息", "shortvideo")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleShortVideoMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了一条小视频消息", "shortvideo"), nil
 }
 
 // handleLocationMessage 处理位置消息
-func (h *Handler) handleLocationMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了位置信息", "location")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleLocationMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了位置信息", "location"), nil
 }
 
 // handleLinkMessage 处理链接消息
-func (h *Handler) handleLinkMessage(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, "用户发送了一个链接", "link")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleLinkMessage(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, "用户发送了一个链接", "link"), nil
 }
 
 // handleEventMessage 处理事件消息
-func (h *Handler) handleEventMessage(msg *Message) (string, error) {
-	// 根据事件类型处理
-	switch msg.Event {
+func (h *Handler) handleEventMessage(in *channelwechat.InboundMessage) (string, error) {
+	switch in.Event {
 	case "subscribe":
-		return h.handleSubscribeEvent(msg)
+		return h.handleSubscribeEvent(in)
 	case "unsubscribe":
-		return h.handleUnsubscribeEvent(msg)
+		return h.handleUnsubscribeEvent(in)
 	case "CLICK":
-		return h.handleClickEvent(msg)
+		return h.handleClickEvent(in)
 	case "VIEW":
-		return h.handleViewEvent(msg)
+		return h.handleViewEvent(in)
 	default:
-		logger.WarnWithFields("Unknown event type", zap.String("event", msg.Event))
-		content := h.callLLM(context.Background(), 0, "用户触发了未知事件", "event_unknown")
-		return h.buildResponse(msg, content), nil
+		logger.WarnWithFields("Unknown event type", zap.String("event", in.Event))
+		return h.callLLM(context.Background(), 0, "用户触发了未知事件", "event_unknown"), nil
 	}
 }
 
 // handleSubscribeEvent 处理订阅事件
-func (h *Handler) handleSubscribeEvent(msg *Message) (string, error) {
+func (h *Handler) handleSubscribeEvent(in *channelwechat.InboundMessage) (string, error) {
 	// 关注事件 - 创建用户
 	if h.userService != nil {
-		_, _, isNew, err := h.userService.GetOrCreateByChannel("wechat", msg.FromUserName)
+		_, _, isNew, err := h.userService.GetOrCreateByChannel("wechat", in.FromUserName)
 		if err != nil {
 			logger.WarnWithFields("Failed to create user on subscribe",
-				zap.String("open_id", msg.FromUserName),
+				zap.String("open_id", in.FromUserName),
 				zap.Error(err),
 			)
 		}
 		if isNew {
 			logger.InfoWithFields("New user created on subscribe",
-				zap.String("open_id", msg.FromUserName),
+				zap.String("open_id", in.FromUserName),
 			)
 		}
 	}
 
-	content := h.callLLM(context.Background(), 0, "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe")
-	return h.buildResponse(msg, content), nil
-}
-
-// buildResponse 构建响应消息
-func (h *Handler) buildResponse(msg *Message, content string) string {
-	now := time.Now().Unix()
-	response := fmt.Sprintf(`<xml>
-	<ToUserName><![CDATA[%s]]></ToUserName>
-	<FromUserName><![CDATA[%s]]></FromUserName>
-	<CreateTime>%d</CreateTime>
-	<MsgType><![CDATA[text]]></MsgType>
-	<Content><![CDATA[%s]]></Content>
-	</xml>`, msg.FromUserName, msg.ToUserName, now, content)
-	return response
+	return h.callLLM(context.Background(), 0, "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe"), nil
 }
 
 // handleUnsubscribeEvent 处理取消订阅事件
-func (h *Handler) handleUnsubscribeEvent(msg *Message) (string, error) {
-	// 记录取消订阅事件
-	logger.InfoWithFields("User unsubscribe", zap.String("user_id", msg.FromUserName))
-	// 不需要回复消息
+func (h *Handler) handleUnsubscribeEvent(in *channelwechat.InboundMessage) (string, error) {
+	// 记录取消订阅事件,微信端不需要回复
+	logger.InfoWithFields("User unsubscribe", zap.String("user_id", in.FromUserName))
 	return "", nil
 }
 
 // handleClickEvent 处理点击事件
-func (h *Handler) handleClickEvent(msg *Message) (string, error) {
-	content := h.callLLM(context.Background(), 0, fmt.Sprintf("用户点击了菜单按钮：%s", msg.EventKey), "click")
-	return h.buildResponse(msg, content), nil
+func (h *Handler) handleClickEvent(in *channelwechat.InboundMessage) (string, error) {
+	return h.callLLM(context.Background(), 0, fmt.Sprintf("用户点击了菜单按钮：%s", in.EventKey), "click"), nil
 }
 
 // handleViewEvent 处理视图事件
-func (h *Handler) handleViewEvent(msg *Message) (string, error) {
-	// 记录视图事件
+func (h *Handler) handleViewEvent(in *channelwechat.InboundMessage) (string, error) {
+	// 记录视图事件,不需要回复消息
 	logger.InfoWithFields("User view menu",
-		zap.String("user_id", msg.FromUserName),
-		zap.String("event_key", msg.EventKey),
+		zap.String("user_id", in.FromUserName),
+		zap.String("event_key", in.EventKey),
 	)
-	// 不需要回复消息
 	return "", nil
 }

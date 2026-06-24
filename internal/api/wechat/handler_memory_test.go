@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	channelwechat "omnibot/internal/channel/wechat"
 	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/internal/domain/user"
 	memorysvc "omnibot/internal/service/memory"
@@ -250,7 +251,7 @@ func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
 	mockUser := &MockUserService{returnUser: &user.User{ID: 42}, returnIsNew: false}
 	handler := NewHandler(Config{Token: "testtoken"}, llmClient, mockUser, memoryService)
 
-	msg := &Message{
+	msg := &channelwechat.InboundMessage{
 		ToUserName:   "gh_test",
 		FromUserName: "openid_test",
 		MsgType:      "text",
