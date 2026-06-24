@@ -4,6 +4,54 @@
 
 ---
 
+## [v1.9.0] - 2026-06-24
+
+### 🔧 架构改进
+
+- **WeChat handler 与 XML 协议解耦**:微信入站 XML 解析 + 出站 XML 序列化全部下沉到
+  `internal/channel/wechat` 包,handler 业务路径只处理中性 `InboundMessage` 结构,
+  与 feishu / web handler 在「业务出纯文本,通道层负责承载格式」模式上完全对齐。
+- **新增 `channelwechat.Parse(body []byte) (*InboundMessage, error)`**:协议层入口,
+  XML → 中性 InboundMessage,失败返回 error(handler 顶层据此回 400)
+- **`channelwechat.Channel.BuildResponseXML(toOpenID, fromGhID, content)` 改纯函数**:
+  公众号微信号从入站请求的 `ToUserName` 字段取,channel 不再持 `toUserName` 状态。
+  也不再有 `SetToUserName` / `NewChannel(toUserName)` 这类有状态用法。
+- **`channelfactory.Register(channelwechat.NewChannel())`**:wechat channel 现在和
+  web channel 一样注册到 channel factory,后续通道相关操作有了统一入口。
+
+### 🚀 用户可见
+
+- 无。微信回调外部协议(签名校验 / XML in / XML out)完全不变。
+
+### 🧪 测试
+
+- 新增 5 个 Parse 单测(text / image / subscribe event / invalid xml / empty body)
+- `channel_test.go` BuildResponseXML 测试改为三参纯函数签名,删除 SetToUserName 测试
+- `handler_llm_injection_test.go` / `handler_memory_test.go` 直接构造 `Message` 的两处
+  改为构造 `channelwechat.InboundMessage`,语义不变
+- 现有 9 个 HTTP 端到端测试零改动,继续覆盖完整 XML 包装路径
+- `go test ./... -count=1` 全绿;`go build ./...` 通过
+
+### 📚 文档同步
+
+- 演进路线图 v3.0:v1.9 章节重写,标已完成;现状表 WeChat XML 解耦 ✅
+- 实际进度回顾表加 v1.9.0 节点
+
+### ⚠️ 兼容性 / 范围
+
+- **不动**:微信回调协议 / 业务命令处理 / Agent / 记忆 / LLM 配置 / 微信签名校验
+- 不做 `MessageChannel` 接口扩展(`BuildResponseXML` 是 wechat 特有方法,不入通用接口)
+- 不做跨通道记忆 e2e(v1.8 已让三入口共用 user_id,记忆已在 MemoryService 跨入口共享,
+  功能上已具备,真实运营 e2e 留 v1.10+/v2.0)
+- 不做真实公网回调 smoke(留待生产部署)
+
+### 🛡️ 安全
+
+- 无加密路径变化;XML 协议适配仅是结构搬运
+- `Parse` 失败返回 error,handler 顶层回 400 不暴露内部细节,与原行为一致
+
+---
+
 ## [v1.8.0] - 2026-06-24
 
 ### 🔧 架构改进
