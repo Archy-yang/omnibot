@@ -6,8 +6,8 @@
 
 | 项 | 内容 |
 |----|------|
-| 适用版本 | v1.3+ |
-| 最后更新 | 2026-06-13 |
+| 适用版本 | v1.3+(v1.8 切到 UserChannels 通道路径 / v1.9 XML 协议下沉) |
+| 最后更新 | 2026-06-24 |
 | 状态 | ✅ 已实现 |
 
 ---
@@ -55,24 +55,45 @@
 
 ## 3. 通道实现细节
 
+### 分层(v1.9):协议层在 channel 包,业务层在 handler 包
+
+```
+HTTP 入站 body
+    ↓
+channelwechat.Parse(body) → *InboundMessage      ← 协议层(channel 包)
+    ↓
+handler.dispatchMessage(in) → 纯文本 content       ← 业务层(api/wechat 包)
+    ↓
+wechatChannel.BuildResponseXML(toOpenID, fromGhID, content)  ← 协议层(channel 包)
+    ↓
+HTTP 出站 XML
+```
+
+handler 业务路径不感知 XML——所有 dispatch 函数签名 `(in *channelwechat.InboundMessage) (string, error)`,
+返回纯文本(空串表示「不回复」,如 unsubscribe / view 事件)。XML 解析与序列化都在 channel 包做。
+
+这种分层和 feishu / web 通道完全对齐——「业务出纯文本,通道层负责承载格式」。
+
 ### 核心数据结构
 
 ```go
-type Channel struct {
-    toUserName string  // 公众号微信号
-}
-
-// Message 微信消息结构体（XML 解析用）
-type Message struct {
-    XMLName      xml.Name `xml:"xml"`
-    ToUserName   string   `xml:"ToUserName"`
-    FromUserName string   `xml:"FromUserName"` // 用户 OpenID
-    CreateTime   int64    `xml:"CreateTime"`
-    MsgType      string   `xml:"MsgType"`
-    Content      string   `xml:"Content,omitempty"`
-    MsgID        string   `xml:"MsgId,omitempty"`
+// channelwechat.InboundMessage — 中性入站消息,handler 业务路径只看这个
+type InboundMessage struct {
+    ToUserName   string // 公众号微信号(响应时作为 FromUserName 回填)
+    FromUserName string // 用户 OpenID(响应时作为 ToUserName 回填)
+    CreateTime   int64
+    MsgType      string // text / image / voice / video / location / link / event / ...
+    Content      string // text 消息内容
+    MsgID        string
+    PicURL       string
+    MediaID      string
+    Event        string // subscribe / unsubscribe / CLICK / VIEW
+    EventKey     string
     // ... 其他字段
 }
+
+// channelwechat.Channel — 无状态,纯通道协议适配器
+type Channel struct{}
 ```
 
 ### MessageChannel 接口实现
@@ -80,24 +101,27 @@ type Message struct {
 | 方法 | 实现说明 |
 |------|---------|
 | `ChannelType()` | 返回 `"wechat"` |
-| `SendText()` | 空实现，因为微信必须同步返回，不需要主动发 |
-| `SendReply()` | 空实现，同上 |
-| `IsAsync()` | 返回 `false`，同步通道 |
+| `SendText()` | 空实现,因为微信必须同步返回,不需要主动发 |
+| `SendReply()` | 空实现,同上 |
+| `IsAsync()` | 返回 `false`,同步通道 |
 
 ### 微信特有方法
 
-因为微信是同步响应的特例，所以额外增加了通道独有的方法：
+因为微信是同步响应的特例,所以额外增加了通道独有的方法:
 
 ```go
-// BuildResponseXML 构建微信响应 XML
-func (c *Channel) BuildResponseXML(fromUserName string, content string) string
+// Parse 解析入站 XML body → 中性 InboundMessage
+func Parse(body []byte) (*InboundMessage, error)
+
+// BuildResponseXML 构建被动回复 XML(v1.9 纯函数化,无 channel 状态依赖)
+func (c *Channel) BuildResponseXML(toOpenID, fromGhID, content string) string
 ```
 
-返回格式：
+返回格式:
 ```xml
 <xml>
     <ToUserName><![CDATA[用户OpenID]]></ToUserName>
-    <FromUserName><![CDATA[公众号ID]]></FromUserName>
+    <FromUserName><![CDATA[公众号微信号]]></FromUserName>
     <CreateTime>123456789</CreateTime>
     <MsgType><![CDATA[text]]></MsgType>
     <Content><![CDATA[回复内容]]></Content>
@@ -154,13 +178,35 @@ func (c *Channel) BuildResponseXML(fromUserName string, content string) string
   - 文本命令可以在任何通道复用（飞书也可以用同样的命令格式）
   - 菜单有数量限制，命令可以无限扩展
 
-### 决策3：为什么 API Key 只显示前后3位？
-- **背景**：用户需要确认自己设置的 Key 对不对，但又不能泄露完整 Key
-- **决策**：脱敏显示，只显示前后各 3 位，中间用 ... 代替
-- **原因**：
+### 决策3:为什么 v1.9 把 XML 协议下沉到 channel 包?
+
+- **背景**:v1.6 飞书接入 + v1.8 UserChannels 统一后,三入口里唯独 wechat handler 还在
+  内联 XML 解析/序列化(`buildResponse` 调 11 处,XML 模板硬编码在业务函数里)
+- **决策**:
+  - 入站:`channelwechat.Parse(body)` → 中性 `InboundMessage`,handler 业务路径只看中性结构
+  - 出站:handler dispatch 返回纯文本,HTTP 顶层用 `wechatChannel.BuildResponseXML` 包装
+- **原因**:
+  - 业务逻辑和协议适配应该分层——和 feishu/web 通道对齐
+  - 测试更聚焦:dispatch 测纯文本(简单 string 比对),HTTP 端到端测 XML 包装(已有覆盖)
+  - 后续若加新通道协议(企业微信、Telegram),复用「中性 InboundMessage + 通道层翻译」模式
+
+### 决策4:为什么 `Channel.BuildResponseXML` 改为纯函数,删除 toUserName 字段?
+
+- **背景**:旧实现 `Channel.toUserName` 存公众号微信号,需要 `SetToUserName` 切换
+- **决策**:`BuildResponseXML(toOpenID, fromGhID, content)` 三参纯函数,channel 完全无状态
+- **原因**:
+  - 公众号微信号本来就在入站请求的 `<ToUserName>` 里——不需要预存
+  - 多公众号场景下不需要 channel 切换状态
+  - 纯函数测试更直接
+
+### 决策5:为什么 API Key 只显示前后3位?
+
+- **背景**:用户需要确认自己设置的 Key 对不对,但又不能泄露完整 Key
+- **决策**:脱敏显示,只显示前后各 3 位,中间用 ... 代替
+- **原因**:
   - 微信聊天记录可能被截图、转发
-  - 够用原则：用户只需要确认自己输的大概对不对
-  - 如果真的记错了，重新设置就行，不需要看完整的 Key
+  - 够用原则:用户只需要确认自己输的大概对不对
+  - 如果真的记错了,重新设置就行,不需要看完整的 Key
 
 ---
 
