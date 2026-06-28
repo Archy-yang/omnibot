@@ -1,6 +1,8 @@
 package user
 
 import (
+	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -10,6 +12,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	domain "omnibot/internal/domain/user"
+	"omnibot/internal/pkg/crypto"
 	repo "omnibot/internal/repository/user"
 )
 
@@ -481,4 +484,81 @@ func TestLLMConfigService_UpdateFullConfig_KeepExistingAPIKeyWhenEmpty(t *testin
 	assert.Equal(t, "sk-original-key-1234567890abcdefghijklm", config.APIKey)
 	assert.Equal(t, "aliyun_qwen", config.Provider)
 	assert.Equal(t, "qwen-plus", config.Model)
+}
+
+// ========== v1.11 smoke 边界:加密落库不留明文 ==========
+//
+// 等价于 v1.11-end-to-end-smoke.md Phase 2.2 的 SQL 验证项:
+//   SELECT length(api_key_encrypted) FROM user_llm_configs WHERE user_id = 1;
+// 一次性确认三件事:
+//   1. 入库的 api_key 列 length > 0(确实写入了)
+//   2. 入库列**不**包含明文 sk- 前缀及任何明文字符片段(确实加密了,不是明文落库)
+//   3. 用同一 master key 能解回明文(加密往返正确)
+//
+// 用 SetAPIKey 入口,因为它是 Web 设置面板「保存」最短路径的最后一步。
+func TestLLMConfigService_SetAPIKey_PersistsEncryptedNotPlaintext(t *testing.T) {
+	db := setupServiceDB(t)
+	llmRepo := repo.NewLLMConfigRepository(db)
+	service := NewLLMConfigService(llmRepo)
+
+	const plaintext = "sk-secret-plaintext-must-not-leak-1234567890"
+	require.NoError(t, service.SetAPIKey(1, plaintext))
+
+	// 裸 GORM 直接查表,模拟 SQL `SELECT api_key FROM user_llm_configs`
+	var raw domain.LLMConfig
+	require.NoError(t, db.Where("user_id = ?", int64(1)).Take(&raw).Error)
+
+	// 1. 列长度 > 0(有内容)
+	assert.NotEmpty(t, raw.APIKey, "encrypted column must be persisted (length > 0)")
+
+	// 2. 列**不**等于明文,且不包含明文任何可识别片段
+	assert.NotEqual(t, plaintext, raw.APIKey, "stored column must not equal plaintext")
+	assert.False(t, strings.Contains(raw.APIKey, plaintext),
+		"stored column must not contain plaintext substring")
+	assert.False(t, strings.HasPrefix(raw.APIKey, "sk-"),
+		"stored column must not start with sk- (would mean plaintext leak)")
+
+	// 3. 入库值必须是合法 base64(AES-256-GCM 输出)
+	decoded, err := base64.StdEncoding.DecodeString(raw.APIKey)
+	require.NoError(t, err, "stored column must be valid base64 (AES-GCM ciphertext)")
+	assert.False(t, strings.Contains(string(decoded), plaintext),
+		"base64-decoded ciphertext bytes must not contain plaintext")
+
+	// 4. 加密往返:用同一 master key 能解回原文
+	decrypted, err := crypto.Decrypt(raw.APIKey)
+	require.NoError(t, err, "ciphertext must be decryptable with master key")
+	assert.Equal(t, plaintext, decrypted)
+
+	// 5. service.GetConfigForUser 也能读回明文(等价于聊天路径取 key)
+	apiKey, _, _, hasCustom, err := service.GetConfigForUser(1)
+	require.NoError(t, err)
+	assert.True(t, hasCustom)
+	assert.Equal(t, plaintext, apiKey)
+}
+
+// UpdateFullConfig 路径(Web UI「保存」实际命中)也必须加密落库。
+// 与 SetAPIKey_PersistsEncryptedNotPlaintext 互补:一个走快捷设置入口,
+// 一个走完整保存入口——两条入口都不能让明文落库。
+func TestLLMConfigService_UpdateFullConfig_PersistsEncryptedAPIKey(t *testing.T) {
+	db := setupServiceDB(t)
+	llmRepo := repo.NewLLMConfigRepository(db)
+	service := NewLLMConfigService(llmRepo)
+
+	const plaintext = "sk-update-full-secret-1234567890abcdefghij"
+	require.NoError(t, service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:    "aliyun_qwen",
+		APIKey:      plaintext,
+		Temperature: 0.7,
+		MaxTokens:   2048,
+	}))
+
+	var raw domain.LLMConfig
+	require.NoError(t, db.Where("user_id = ?", int64(1)).Take(&raw).Error)
+
+	assert.NotEqual(t, plaintext, raw.APIKey)
+	assert.False(t, strings.Contains(raw.APIKey, plaintext))
+
+	decrypted, err := crypto.Decrypt(raw.APIKey)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
 }
