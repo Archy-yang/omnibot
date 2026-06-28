@@ -1,2 +1,6 @@
 bin/
 graphify-out/
+
+# 本地真实凭证(飞书/微信/LLM API Key、DB 密码等)——不入 git。
+# 团队成员复制 configs/config.example.yaml → configs/config.yaml,再填本地凭证。
+configs/config.yaml
