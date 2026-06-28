@@ -1,3 +1,10 @@
+# OmniBot 配置示例
+#
+# 用法:复制本文件为 configs/config.yaml,再填入本地真实凭证。
+# configs/config.yaml 已在 .gitignore,不会进 git。
+#
+# 本示例覆盖:Web / 微信公众号 / 飞书机器人 三入口 + LLM + DB。
+
 # 应用配置
 app:
   name: "omnibot"
@@ -5,12 +12,17 @@ app:
   port: 8080
 
 # 数据库配置
+# 开发可用 sqlite 内存库快速起步;生产推荐 Postgres。
 database:
   driver: "postgres"  # sqlite / postgres
-  dsn: "host=localhost user=omnibot password=omnibot123 dbname=omnibot port=5432 sslmode=disable"
+  dsn: "host=localhost port=5433 user=test password=test123 dbname=omnibot_test sslmode=disable"
   max_conns: 25
+  # 备选:sqlite 内存库
+  # driver: "sqlite"
+  # dsn: "file::memory:?cache=shared"
 
-# 微信公众号配置
+# 微信公众号配置(v1.9 已解耦 XML;测试号或正式号均可)
+# 不接入留占位即可,不影响其他入口
 wechat:
   app_id: "your_wechat_app_id"
   app_secret: "your_wechat_app_secret"
@@ -18,20 +30,29 @@ wechat:
   encoding_aes_key: "your_wechat_encoding_aes_key"
   callback_url: "https://your-domain.com/wechat/callback"
 
-# 大模型配置
+# 飞书机器人配置(v1.6 长连接接入)
+# 凭证从飞书开放平台「凭证与基础信息」获取:
+#   - app_id 形如 cli_xxx
+#   - app_secret 在凭证页点「显示」
+# enabled=false 时跳过初始化,不影响其他入口。
+feishu:
+  app_id: "cli_xxx"
+  app_secret: "your_feishu_app_secret"
+  enabled: false
+
+# 大模型配置(v1.4+ 用户可在 Web 设置面板自定义,覆盖此处 system default)
+# 推荐 DeepSeek / 豆包 / 千问等 OpenAI 兼容服务商,本地仅占位即可。
 llm:
   providers:
     openai:
-      api_key: "your_openai_api_key"
-      model: "gpt-4"
-      timeout: 30s
-    anthropic:
-      api_key: "your_anthropic_api_key"
-      model: "claude-3-sonnet"
+      api_key: ""  # 留空让用户走 Web UI 配自定义
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o-mini"
+      timeout: "30s"
 
   routing:
     default: "openai"
-    fallback_order: ["openai", "anthropic"]
+    fallback_order: []
 
 # 记忆系统配置
 memory:
@@ -48,13 +69,13 @@ memory:
       dsn: "your_postgres_dsn"
       max_conns: 20
 
-# Redis配置
+# Redis 配置(可选)
 redis:
   url: "redis://localhost:6379/0"
   pool_size: 10
 
 # 日志配置
 logger:
-  level: "info"
-  format: "json"
+  level: "debug"  # production 改 info
+  format: "text"  # production 改 json
   output: "stdout"
