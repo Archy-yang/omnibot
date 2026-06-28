@@ -9,6 +9,14 @@ const routes: RouteRecordRaw[] = [
       title: 'OmniBot - 智能助手',
     },
   },
+  {
+    path: '/memory',
+    name: 'Memory',
+    component: () => import('@/views/MemoryPage.vue'),
+    meta: {
+      title: 'OmniBot - 长期记忆',
+    },
+  },
 ];
 
 const router = createRouter({
