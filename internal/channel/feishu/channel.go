@@ -9,6 +9,7 @@ import (
 	domainchannel "omnibot/internal/domain/channel"
 	"omnibot/pkg/logger"
 
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
@@ -128,8 +129,51 @@ func newLarkWSStarter(cfg Config, h *MessageHandler) *larkWSStarter {
 			return dispatchInbound(ctx, h, event)
 		})
 
+	// 把已知但当前不处理的"杂音"事件 dump 到日志,避免 SDK 反复打
+	// ERROR `not found handler` 又看不到 payload。新事件类型继续走
+	// 原路径报 not found,提示开发者扩 chatterEventTypes 白名单。
+	registerUnhandledEventDumper(disp, chatterEventTypes)
+
 	c := larkws.NewClient(cfg.AppID, cfg.AppSecret, larkws.WithEventHandler(disp))
 	return &larkWSStarter{client: c}
+}
+
+// chatterEventTypes — 飞书会推送但我们当前不处理的事件类型清单。
+// 这些事件被 registerUnhandledEventDumper 显式注册成 dump-and-ignore
+// handler,payload 会写入 zap INFO 日志。
+//
+// 添加新条目的判断标准:
+//   1. 飞书推送的事件我们没注册业务 handler,SDK 打 `not found handler` ERROR
+//   2. 我们看完事件含义后,确认**不需要业务响应**(否则应该写业务 handler)
+//   3. 但希望保留可见性,以便未来需要时直接查 payload 实现
+//
+// 不要把"想做但还没做"的事件加进来——那应该写 TODO + 实际 handler。
+var chatterEventTypes = []string{
+	// 用户打开机器人单聊会话(只是会话进入,不是消息):
+	// 飞书在 v2026 之后默认推送,用于支持「机器人欢迎语」等场景。
+	// 我们当前不做欢迎语,纯静默忽略。
+	"im.chat.access_event.bot_p2p_chat_entered_v1",
+}
+
+// registerUnhandledEventDumper 把白名单事件类型注册成 dump-and-ignore handler。
+// 每条事件 payload 会写到 zap INFO 日志 `feishu: unhandled event dump`,
+// 便于排查飞书后台事件订阅配置(看日志就知道平台真的推了什么)。
+//
+// SDK API 限制:OnCustomizedEvent 只接受具体 eventType,没有通配符。所以
+// 白名单是显式行为——任何**白名单外**的新事件类型仍会走 SDK 默认路径打
+// ERROR `not found handler`,这正是我们想要的:新事件不会被无声吞掉。
+func registerUnhandledEventDumper(disp *dispatcher.EventDispatcher, eventTypes []string) {
+	for _, evType := range eventTypes {
+		evType := evType // capture for closure
+		disp.OnCustomizedEvent(evType, func(ctx context.Context, req *larkevent.EventReq) error {
+			logger.InfoWithFields(
+				"feishu: unhandled event dump",
+				zap.String("event_type", evType),
+				zap.String("payload", string(req.Body)),
+			)
+			return nil
+		})
+	}
 }
 
 // Start 启动长连接(SDK 内部循环阻塞)。

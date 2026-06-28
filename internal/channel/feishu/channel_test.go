@@ -11,6 +11,8 @@ import (
 	domainuser "omnibot/internal/domain/user"
 	agentpkg "omnibot/internal/service/agent"
 
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -194,4 +196,66 @@ func TestChannel_ChannelType(t *testing.T) {
 	ch := NewChannel(Config{Enabled: false}, nil, nil)
 	assert.Equal(t, "feishu", ch.ChannelType())
 	assert.True(t, ch.IsAsync())
+}
+
+// ===== 未识别事件 dump =====
+//
+// 飞书平台会推送一些我们当前不处理的事件(例如「用户进入机器人对话」
+// `im.chat.access_event.bot_p2p_chat_entered_v1`)。SDK 默认行为是打 ERROR
+// 日志 `event type: xxx, not found handler`,但**不打事件 payload**——排查
+// 时只能猜事件含义。
+//
+// 解决:维护一份"已知但不处理"事件白名单 chatterEventTypes,启动时全部注册
+// 一个 dump handler——把事件 type + 原始 payload 输出到 zap INFO 日志。
+// 收益:
+//   - SDK 不再打 ERROR(我们处理了)
+//   - 事件原文可见,后续若需新增业务逻辑,直接照着 payload 实现即可
+//   - 任何"新"的杂音事件依然走 SDK 原路径打 not found handler ERROR,
+//     提示开发者扩白名单(白名单是显式行为,不会无声吞掉新事件)
+func TestRegisterUnhandledEventDumper_RegistersAllListedTypes(t *testing.T) {
+	disp := dispatcher.NewEventDispatcher("", "")
+	types := []string{
+		"im.chat.access_event.bot_p2p_chat_entered_v1",
+		"im.chat.member.user.added_v1",
+	}
+	registerUnhandledEventDumper(disp, types)
+
+	// SDK 内部用 DoHandle 路由事件;没注册时返回 NotFoundEventHandlerErr,
+	// 注册成功时找得到 handler 并返回 success body。我们用 Do 接口投喂一个
+	// 模拟 payload,断言两件事:不报 not-found 错;响应 200。
+	for _, evType := range types {
+		t.Run(evType, func(t *testing.T) {
+			payload := []byte(`{"schema":"2.0","header":{"event_type":"` + evType + `","app_id":"cli_test"},"event":{"foo":"bar"}}`)
+			req := &larkevent.EventReq{
+				Header: map[string][]string{
+					"Content-Type": {"application/json"},
+				},
+				Body: payload,
+			}
+			resp := disp.Handle(context.Background(), req)
+			require.NotNil(t, resp)
+			assert.Equal(t, 200, resp.StatusCode)
+			// success body 含字符串 "success";若未注册 handler,body 含 "not found handler"
+			assert.NotContains(t, string(resp.Body), "not found handler",
+				"dispatcher should NOT report missing handler after registration")
+		})
+	}
+}
+
+// 反向验证:不在白名单的事件类型仍然会被 SDK 报 not found——
+// 保证白名单是显式行为,不会吞掉新事件。
+func TestRegisterUnhandledEventDumper_UnlistedEventStillReportsNotFound(t *testing.T) {
+	disp := dispatcher.NewEventDispatcher("", "")
+	registerUnhandledEventDumper(disp, []string{"im.chat.access_event.bot_p2p_chat_entered_v1"})
+
+	// 投喂一个白名单外的事件类型
+	payload := []byte(`{"schema":"2.0","header":{"event_type":"never.seen.before","app_id":"cli_test"},"event":{}}`)
+	req := &larkevent.EventReq{
+		Header: map[string][]string{"Content-Type": {"application/json"}},
+		Body:   payload,
+	}
+	resp := disp.Handle(context.Background(), req)
+	require.NotNil(t, resp)
+	assert.Contains(t, string(resp.Body), "not found handler",
+		"unlisted event types must still surface the SDK's not-found error so developers add them to the allowlist")
 }
