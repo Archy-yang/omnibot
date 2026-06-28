@@ -6,7 +6,7 @@
         <textarea
           ref="textareaRef"
           v-model="inputText"
-          placeholder="有问题，尽管问"
+          :placeholder="props.placeholder"
           :disabled="false"
           rows="1"
           class="chat-textarea"
@@ -64,6 +64,13 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
+
+const props = withDefaults(defineProps<{
+  /** 输入框占位符。v2.0 起空状态/有消息时由父组件切换文案。 */
+  placeholder?: string
+}>(), {
+  placeholder: '有问题，尽管问',
+})
 
 const chatStore = useChatStore()
 const { error, info } = useToast()
