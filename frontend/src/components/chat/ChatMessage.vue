@@ -42,7 +42,23 @@ function toggleExpand(seg: { expanded?: boolean }) {
 const { success, error: toastError } = useToast();
 const justCopied = ref(false);
 
-// 复制助手回复的原始 markdown 文本（不是渲染后的 HTML）。
+// v2.0:助手消息反馈(纯前端 UI 演示,不入库)。
+// up / down 状态在本组件内 toggle:再点同一个图标取消,点另一个互斥切换。
+// 后端持久化留 backlog(v2.x+ 反馈表设计)。
+const feedback = ref<'up' | 'down' | null>(null);
+const handleFeedback = (next: 'up' | 'down') => {
+  if (feedback.value === next) {
+    feedback.value = null;
+    return;
+  }
+  const isFirst = feedback.value === null;
+  feedback.value = next;
+  if (isFirst) {
+    success(next === 'up' ? '已记录反馈,谢谢' : '已记录反馈,我们会改进');
+  }
+};
+
+// 复制助手回复的原始 markdown 文本(不是渲染后的 HTML)。
 // 用 navigator.clipboard 优先，浏览器不支持时降级到 textarea + execCommand。
 async function handleCopy() {
   const text = props.message.content;
@@ -114,14 +130,15 @@ defineEmits<{
                   :aria-expanded="seg.expanded ? 'true' : 'false'"
                   @click="toggleExpand(seg)"
                 >
-                  <!-- result 未回来时显示旋转 spinner，回来后显示工具图标 -->
+                  <!-- result 未回来时显示旋转齿轮,回来后显示静态齿轮(v2 设计) -->
                   <svg
                     v-if="seg.result === undefined"
                     class="tool-segment-spinner"
                     width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                   >
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                    <circle cx="12" cy="12" r="3"/>
                   </svg>
                   <svg
                     v-else
@@ -129,12 +146,13 @@ defineEmits<{
                     width="14" height="14" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                   >
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                    <circle cx="12" cy="12" r="3"/>
                   </svg>
                   <span class="tool-segment-label">
                     {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
                   </span>
-                  <!-- result 回来后才显示展开箭头 -->
+                  <!-- result 回来后才显示展开图标:上下双箭头(v2 设计) -->
                   <svg
                     v-if="seg.result !== undefined"
                     class="tool-segment-chevron"
@@ -142,7 +160,8 @@ defineEmits<{
                     width="14" height="14" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                   >
-                    <polyline points="6 9 12 15 18 9"/>
+                    <path d="m7 15 5 5 5-5"/>
+                    <path d="m7 9 5-5 5 5"/>
                   </svg>
                 </button>
                 <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
@@ -169,6 +188,38 @@ defineEmits<{
               <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              class="action-btn"
+              :class="{ 'is-active': feedback === 'up' }"
+              :title="feedback === 'up' ? '已点赞' : '点赞'"
+              :aria-label="feedback === 'up' ? '已点赞' : '点赞'"
+              :aria-pressed="feedback === 'up' ? 'true' : 'false'"
+              @click="handleFeedback('up')"
+            >
+              <!-- lucide thumbs-up -->
+              <svg width="16" height="16" viewBox="0 0 24 24" :fill="feedback === 'up' ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 10v12"/>
+                <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L15 .5"/>
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              class="action-btn"
+              :class="{ 'is-active': feedback === 'down' }"
+              :title="feedback === 'down' ? '已踩' : '踩'"
+              :aria-label="feedback === 'down' ? '已踩' : '踩'"
+              :aria-pressed="feedback === 'down' ? 'true' : 'false'"
+              @click="handleFeedback('down')"
+            >
+              <!-- lucide thumbs-down -->
+              <svg width="16" height="16" viewBox="0 0 24 24" :fill="feedback === 'down' ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 14V2"/>
+                <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L9 23.5"/>
               </svg>
             </button>
           </div>
@@ -295,6 +346,16 @@ defineEmits<{
   background: rgba(0, 0, 0, 0.08);
 }
 
+/* v2.0:thumbs up/down 选中态——填充 + 主题蓝,再次点击取消 */
+.action-btn.is-active {
+  color: #2563eb;
+}
+
+.action-btn.is-active:hover {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
 /* ===== 工具思考段 (v1.5.3) =====
    按时序交错出现在文本之间，可点击展开看工具结果。
    ChatGPT / Claude 风格的低对比度「思考」条带，不打扰阅读。 */
@@ -347,11 +408,13 @@ defineEmits<{
 .tool-segment-chevron {
   flex-shrink: 0;
   color: #9ca3af;
-  transition: transform 0.2s ease;
+  transition: color 0.15s ease;
 }
 
+/* v2.0:展开图标是 chevrons-up-down(上下双 V),旋转 180° 视觉等价,
+   不旋转,改为加深颜色表示展开态 */
 .tool-segment-chevron.is-open {
-  transform: rotate(180deg);
+  color: #6b7280;
 }
 
 /* 展开区：限高滚动，长结果（RSS 全文 / 长 JSON）内部滚动，不撑乱对话 */
