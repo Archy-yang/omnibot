@@ -104,11 +104,20 @@ type mockSender struct {
 	sentContent string
 	sendErr     error
 	sendCount   int
+	// lastMode 记录最后一次发送使用的渠道:"text" or "markdown"。
+	// Agent 成功回复应走 "markdown"(飞书会渲染),fallback 兜底走 "text"。
+	lastMode string
 }
 
 func (m *mockSender) SendText(ctx context.Context, openID, content string) error {
 	m.sendCount++
-	m.sentOpenID, m.sentContent = openID, content
+	m.sentOpenID, m.sentContent, m.lastMode = openID, content, "text"
+	return m.sendErr
+}
+
+func (m *mockSender) SendMarkdown(ctx context.Context, openID, content string) error {
+	m.sendCount++
+	m.sentOpenID, m.sentContent, m.lastMode = openID, content, "markdown"
 	return m.sendErr
 }
 
@@ -159,10 +168,11 @@ func TestMessageHandler_P2PHappyPath(t *testing.T) {
 	require.Len(t, msg.savedSteps, 1)
 	assert.Equal(t, conversation.StepKindLLMCall, msg.savedSteps[0].Kind)
 	assert.Equal(t, 0, msg.savedSteps[0].Seq)
-	// 飞书送回最终文本
+	// 飞书送回最终文本 — Agent 成功回复走 markdown(让飞书渲染加粗/列表/链接)
 	assert.Equal(t, 1, sender.sendCount)
 	assert.Equal(t, "ou_xxx", sender.sentOpenID)
 	assert.Equal(t, "好的", sender.sentContent)
+	assert.Equal(t, "markdown", sender.lastMode, "Agent 成功回复应走 SendMarkdown,飞书才会渲染 markdown")
 }
 
 // 群聊消息(chat_type != p2p)忽略:不调 agent、不落库、不回复(v1.6 仅单聊)。
@@ -269,6 +279,7 @@ func TestMessageHandler_AgentError_FallbackReply(t *testing.T) {
 	assert.Equal(t, 0, msg.saveAsstCalled, "agent 失败时不落 assistant 消息")
 	assert.Equal(t, 1, sender.sendCount, "应给用户回兜底文案,避免无反馈")
 	assert.NotEmpty(t, sender.sentContent)
+	assert.Equal(t, "text", sender.lastMode, "fallback 兜底走纯文本即可,不需要 markdown 卡片")
 }
 
 // Sender 失败:不影响 handler 主流程返回(消息已落库,只是回复发送失败),不抛 panic。

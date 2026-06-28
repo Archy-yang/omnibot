@@ -45,6 +45,13 @@ type LLMConfigService interface {
 }
 
 // Sender 飞书发消息接口。隔离 SDK,测试 mock。
+//
+// SendText  — 纯文本消息(MsgType="text")。飞书客户端**不渲染 markdown**,
+//             适合 fallback 兜底("服务暂时不可用")等短文本。
+// SendMarkdown — interactive 卡片(MsgType="interactive",含 markdown element),
+//             飞书客户端**渲染 markdown**:加粗/列表/链接/代码块等。Agent 输出几乎
+//             总是 markdown,默认走这条路径。
 type Sender interface {
 	SendText(ctx context.Context, openID, content string) error
+	SendMarkdown(ctx context.Context, openID, content string) error
 }

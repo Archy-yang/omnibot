@@ -139,7 +139,11 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 	}
 
 	// 回复用户。发送失败仅记日志,不上抛——消息已落库,后续可通过历史查看。
-	if err := h.sender.SendText(ctx, in.OpenID, result.FinalResponse); err != nil {
+	// 用 SendMarkdown:Agent 输出几乎总是 markdown(加粗/列表/链接/代码块),
+	// 飞书纯文本消息不渲染,会让 `**bold**` 类符号在客户端原样显示——很丑;
+	// interactive 卡片含 markdown element 才会渲染。fallback 兜底走 SendText
+	// (短文本无需卡片包裹)。
+	if err := h.sender.SendMarkdown(ctx, in.OpenID, result.FinalResponse); err != nil {
 		logger.WarnWithFields("feishu: send text failed",
 			zap.Int64("user_id", userID),
 			zap.String("open_id", in.OpenID),
