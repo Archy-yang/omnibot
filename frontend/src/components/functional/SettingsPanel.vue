@@ -5,7 +5,6 @@ import type { SettingsPanelProps, SettingsPanelEmits } from '@/types/components'
 import type { LLMConfig } from '@/types/api';
 import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
-import MemorySection from '@/components/functional/MemorySection.vue';
 import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
 
 const props = defineProps<SettingsPanelProps>();
@@ -14,8 +13,8 @@ const emit = defineEmits<SettingsPanelEmits>();
 const settingsStore = useSettingsStore();
 const { success, error } = useToast();
 
-// v1.10:Tab 化重构,默认进模型 Tab
-const activeTab = ref<'llm' | 'memory' | 'about'>('llm');
+// v2.0:记忆已独立为 /memory 页面,SettingsPanel 仅保留模型 + 关于两个 Tab。
+const activeTab = ref<'llm' | 'about'>('llm');
 
 // Local form state
 const localConfig = ref<LLMConfig>({
@@ -261,11 +260,6 @@ const handleClose = () => {
             />
           </NFormItem>
         </NForm>
-      </NTabPane>
-
-      <!-- ============ Tab: 记忆 ============ -->
-      <NTabPane name="memory" tab="记忆">
-        <MemorySection />
       </NTabPane>
 
       <!-- ============ Tab: 关于 ============ -->
