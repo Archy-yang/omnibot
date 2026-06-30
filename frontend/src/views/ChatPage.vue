@@ -5,7 +5,8 @@ import AppNav from '@/components/layout/AppNav.vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ChatAvatar from '@/components/chat/ChatAvatar.vue';
-import SettingsPanel from '@/components/functional/SettingsPanel.vue';
+import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
+import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
@@ -19,10 +20,20 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
+// 记忆抽屉本地状态(设置抽屉走 settingsStore.showSettingsPanel)
+const showMemoryDrawer = ref(false);
+
 const isEmpty = computed(() => messages.value.length === 0);
 const inputPlaceholder = computed(() =>
   isEmpty.value ? '有什么可以帮你的？' : '继续对话...'
 );
+
+// AppNav 高亮:抽屉打开时高亮对应按钮,都没开时高亮 chat
+const navCurrent = computed<'chat' | 'memory' | 'settings'>(() => {
+  if (showMemoryDrawer.value) return 'memory';
+  if (showSettingsPanel.value) return 'settings';
+  return 'chat';
+});
 
 onMounted(async () => {
   try {
@@ -53,7 +64,11 @@ const handleSend = async (content: string) => {
 
 <template>
   <div class="chat-layout">
-    <AppNav current="chat" @open-settings="toggleSettingsPanel" />
+    <AppNav
+      :current="navCurrent"
+      @open-memory="showMemoryDrawer = true"
+      @open-settings="toggleSettingsPanel"
+    />
 
     <main class="main">
       <!-- 空状态:居中欢迎区 + 输入框 -->
@@ -99,10 +114,15 @@ const handleSend = async (content: string) => {
       </template>
     </main>
 
-    <SettingsPanel
+    <SettingsDrawer
       :visible="showSettingsPanel"
       @close="toggleSettingsPanel"
       @update-config="() => {}"
+    />
+
+    <MemoryDrawer
+      :visible="showMemoryDrawer"
+      @close="showMemoryDrawer = false"
     />
 
     <Toast :toasts="toasts" />
