@@ -2,39 +2,29 @@
 /**
  * AppNav — v2.0 顶部导航条(52px)
  *
- * ChatPage / MemoryPage 共用。左侧 brand 点击回首页,右侧两个文字+图标按钮:
- *   - 「记忆」→ 路由到 /memory
- *   - 「设置」→ emit 'open-settings',让父组件调 toggleSettingsPanel
+ * 左侧 brand,右侧两个文字+图标按钮。「记忆」「设置」都通过 emit 触发父组件
+ * 打开对应的右侧抽屉(MemoryDrawer / SettingsDrawer)——v2.0 设计稿统一交互:
+ * 主对话页面常驻,抽屉从右侧滑入,不切路由不丢上下文。
  *
  * 视觉照搬 docs/60-设计/omnibot-prototype/pages/v2-home-empty.html 的 .top-nav 段。
  */
-import { useRouter } from 'vue-router';
-
 defineProps<{
-  /** 当前页,用于高亮对应按钮(可选,本次先只做颜色区分,不做下划线) */
-  current?: 'chat' | 'memory';
+  /** 当前哪个抽屉打开:用于高亮对应按钮(可选) */
+  current?: 'chat' | 'memory' | 'settings';
 }>();
 
 defineEmits<{
-  /** 点击「设置」时触发,由父组件决定如何打开 SettingsPanel */
+  /** 点击「记忆」:打开记忆抽屉 */
+  'open-memory': [];
+  /** 点击「设置」:打开设置抽屉 */
   'open-settings': [];
 }>();
-
-const router = useRouter();
-
-const goHome = () => {
-  if (router.currentRoute.value.path !== '/') router.push('/');
-};
-
-const goMemory = () => {
-  if (router.currentRoute.value.path !== '/memory') router.push('/memory');
-};
 </script>
 
 <template>
   <nav class="top-nav">
-    <!-- 左:品牌标识(点击回首页) -->
-    <button class="brand" type="button" @click="goHome" aria-label="返回首页">
+    <!-- 左:品牌标识 -->
+    <div class="brand">
       <span class="brand-logo">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12 2C6.48 2 2 5.58 2 10c0 2.06 1.06 3.92 2.75 5.26L4 18l3.08-1.54C8.62 16.82 10.28 17 12 17c5.52 0 10-3.58 10-8s-4.48-7-10-7z" fill="#ffffff"/>
@@ -44,7 +34,7 @@ const goMemory = () => {
         </svg>
       </span>
       <span class="brand-name">OmniBot</span>
-    </button>
+    </div>
 
     <!-- 右:导航按钮 -->
     <div class="nav-actions">
@@ -52,7 +42,7 @@ const goMemory = () => {
         class="nav-btn"
         :class="{ 'is-active': current === 'memory' }"
         type="button"
-        @click="goMemory"
+        @click="$emit('open-memory')"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2 2 0 0 1-2-2V6.5a.5.5 0 0 0-.5-.5H4a2 2 0 0 1 0-4h5.5z"/>
@@ -62,6 +52,7 @@ const goMemory = () => {
       </button>
       <button
         class="nav-btn"
+        :class="{ 'is-active': current === 'settings' }"
         type="button"
         @click="$emit('open-settings')"
       >
@@ -88,16 +79,11 @@ const goMemory = () => {
   flex-shrink: 0;
 }
 
-/* 左侧品牌(可点击) */
+/* 左侧品牌 */
 .brand {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-family: inherit;
 }
 
 .brand-logo {
