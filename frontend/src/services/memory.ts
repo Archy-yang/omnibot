@@ -10,12 +10,11 @@ import type {
   UpdateMemoryResponse,
 } from '../types/api';
 
+// v2.1: 身份由 JWT 中间件解析,前端不再传 session_id
 export const memoryService = {
-  async getMemories(sessionId: string): Promise<GetMemoriesResponse> {
+  async getMemories(): Promise<GetMemoriesResponse> {
     try {
-      const response = await request.get<ApiResponse<GetMemoriesResponse>>('/memories', {
-        params: { session_id: sessionId },
-      });
+      const response = await request.get<ApiResponse<GetMemoriesResponse>>('/memories');
       return response.data.data;
     } catch (error) {
       console.error('Failed to get memories:', error);
@@ -33,11 +32,9 @@ export const memoryService = {
     }
   },
 
-  async clearMemories(sessionId: string): Promise<ClearMemoriesResponse> {
+  async clearMemories(): Promise<ClearMemoriesResponse> {
     try {
-      const response = await request.delete<ApiResponse<ClearMemoriesResponse>>('/memories', {
-        params: { session_id: sessionId },
-      });
+      const response = await request.delete<ApiResponse<ClearMemoriesResponse>>('/memories');
       return response.data.data;
     } catch (error) {
       console.error('Failed to clear memories:', error);
@@ -45,11 +42,9 @@ export const memoryService = {
     }
   },
 
-  async deleteMemory(id: number, sessionId: string): Promise<DeleteMemoryResponse> {
+  async deleteMemory(id: number): Promise<DeleteMemoryResponse> {
     try {
-      const response = await request.delete<ApiResponse<DeleteMemoryResponse>>(`/memories/${id}`, {
-        params: { session_id: sessionId },
-      });
+      const response = await request.delete<ApiResponse<DeleteMemoryResponse>>(`/memories/${id}`);
       return response.data.data;
     } catch (error) {
       console.error('Failed to delete memory:', error);

@@ -14,10 +14,12 @@
  * 业务逻辑与原 SettingsPanel 等价(provider 预设/校验/保存/清除/主题)。
  */
 import { ref, watch, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import type { LLMConfig } from '@/types/api';
 import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
+import { useAuthStore } from '@/stores/user';
 import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
 import DrawerShell from '@/components/layout/DrawerShell.vue';
 
@@ -31,6 +33,8 @@ const emit = defineEmits<{
 }>();
 
 const settingsStore = useSettingsStore();
+const authStore = useAuthStore();
+const router = useRouter();
 const { success, error } = useToast();
 
 // Local form state — 编辑时不直接改 store,取消时恢复
@@ -145,6 +149,13 @@ const handleClearConfig = async () => {
 const handleThemeChange = (e: Event) => {
   const next = (e.target as HTMLSelectElement).value as 'light' | 'dark';
   if (next !== settingsStore.theme) settingsStore.toggleTheme();
+};
+
+// v2.1 登出:清 token → 跳登录页
+const handleLogout = () => {
+  authStore.clearToken();
+  emit('close');
+  router.push('/login');
 };
 
 // Temperature 显示值:LLMConfig.temperature 是可选,默认 0.7
@@ -356,6 +367,9 @@ const handleMaxTokensInput = (e: Event) => {
       <div class="source-link">
         源码仓库 · <a :href="ABOUT_LINKS.repo" target="_blank" rel="noopener noreferrer">{{ ABOUT_LINKS.repo }}</a>
       </div>
+
+      <!-- v2.1 登出按钮 -->
+      <button type="button" class="logout-btn" @click="handleLogout">登出</button>
     </div>
 
     <div class="drawer-footer-spacer"></div>
@@ -665,6 +679,23 @@ const handleMaxTokensInput = (e: Event) => {
 }
 .source-link a:hover {
   opacity: 0.8;
+}
+
+/* v2.1 登出按钮 */
+.logout-btn {
+  margin-top: 20px;
+  padding: 10px 16px;
+  width: 100%;
+  background: #ffffff;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.logout-btn:hover {
+  background: #fef2f2;
 }
 
 .drawer-footer-spacer {

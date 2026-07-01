@@ -23,12 +23,11 @@ export const configService = {
   },
 
   // ========== 用户级 LLM 配置接口 ==========
+  // v2.1: 身份由 JWT 中间件解析,前端不再传 session_id
 
-  async getUserLLMConfig(sessionId: string): Promise<UserLLMConfigResponse> {
+  async getUserLLMConfig(): Promise<UserLLMConfigResponse> {
     try {
-      const response = await request.get<ApiResponse<UserLLMConfigResponse>>('/user/llm-config', {
-        params: { session_id: sessionId }
-      });
+      const response = await request.get<ApiResponse<UserLLMConfigResponse>>('/user/llm-config');
       return response.data.data;
     } catch (error) {
       console.error('Failed to get user LLM config:', error);
@@ -45,11 +44,9 @@ export const configService = {
     }
   },
 
-  async deleteUserLLMConfig(sessionId: string): Promise<void> {
+  async deleteUserLLMConfig(): Promise<void> {
     try {
-      await request.delete<ApiResponse<void>>('/user/llm-config', {
-        params: { session_id: sessionId }
-      });
+      await request.delete<ApiResponse<void>>('/user/llm-config');
     } catch (error) {
       console.error('Failed to delete user LLM config:', error);
       throw error;

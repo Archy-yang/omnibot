@@ -1,12 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { memoryService } from '../services/memory';
-import { useSession } from '../composables/useSession';
 import type { MemoryItem } from '../types/api';
 
+// v2.1: 身份由后端 JWT 中间件解析,前端不再传 session_id
 export const useMemoryStore = defineStore('memory', () => {
-  const { sessionId } = useSession();
-
   const memories = ref<MemoryItem[]>([]);
   const isLoading = ref<boolean>(false);
   const isCreating = ref<boolean>(false);
@@ -15,7 +13,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const loadMemories = async (): Promise<void> => {
     isLoading.value = true;
     try {
-      const response = await memoryService.getMemories(sessionId.value);
+      const response = await memoryService.getMemories();
       memories.value = response.memories;
     } finally {
       isLoading.value = false;
@@ -25,10 +23,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const createMemory = async (content: string): Promise<void> => {
     isCreating.value = true;
     try {
-      const response = await memoryService.createMemory({
-        session_id: sessionId.value,
-        content,
-      });
+      const response = await memoryService.createMemory({ content });
       memories.value = [...memories.value, response.memory];
     } finally {
       isCreating.value = false;
@@ -38,7 +33,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const clearMemories = async (): Promise<void> => {
     isClearing.value = true;
     try {
-      await memoryService.clearMemories(sessionId.value);
+      await memoryService.clearMemories();
       memories.value = [];
     } finally {
       isClearing.value = false;
@@ -46,15 +41,12 @@ export const useMemoryStore = defineStore('memory', () => {
   };
 
   const deleteMemory = async (id: number): Promise<void> => {
-    await memoryService.deleteMemory(id, sessionId.value);
+    await memoryService.deleteMemory(id);
     memories.value = memories.value.filter((m) => m.id !== id);
   };
 
   const updateMemory = async (id: number, content: string): Promise<void> => {
-    const response = await memoryService.updateMemory(id, {
-      session_id: sessionId.value,
-      content,
-    });
+    const response = await memoryService.updateMemory(id, { content });
     const index = memories.value.findIndex((m) => m.id === id);
     if (index !== -1) {
       memories.value[index] = response.memory;
