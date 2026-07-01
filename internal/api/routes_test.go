@@ -19,3 +19,15 @@ func TestSetupRouter_RegistersMemoryRoutes(t *testing.T) {
 	assert.Contains(t, content, "HandleCreateMemory")
 	assert.Contains(t, content, "HandleClearMemories")
 }
+
+// v2.1: 认证路由装配
+func TestSetupRouter_RegistersAuthRoutes(t *testing.T) {
+	source, err := os.ReadFile("routes.go")
+	require.NoError(t, err)
+	content := string(source)
+
+	assert.Contains(t, content, "web.NewAuthHandler(authSvc)")
+	assert.Contains(t, content, "r.Group(\"/api/v1/auth\")")
+	assert.Contains(t, content, "authHandler.HandleRegister")
+	assert.Contains(t, content, "authHandler.HandleLogin")
+}

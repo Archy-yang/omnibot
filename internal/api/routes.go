@@ -17,6 +17,7 @@ import (
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
+	"omnibot/internal/pkg/auth"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
@@ -128,6 +129,25 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
+
+	// v2.1: 邮箱密码认证装配
+	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
+	// credentialRepo 目前留给未来「改密码」等场景,不通过 repo 注入。
+	tokenTTL, err := time.ParseDuration(cfg.Auth.TokenTTL)
+	if err != nil || tokenTTL <= 0 {
+		tokenTTL = 720 * time.Hour // 30 天,PRD 5.3
+	}
+	jwtSvc := auth.NewJWTService(cfg.Auth.JWTSecret, tokenTTL)
+	authSvc := userService.NewAuthService(dbConn.GetGormDB(), jwtSvc)
+	authHandler := web.NewAuthHandler(authSvc)
+
+	// 认证接口(不挂 AuthRequired,注册/登录本身不能要求已登录)
+	authAPIGroup := r.Group("/api/v1/auth")
+	{
+		authAPIGroup.POST("/register", authHandler.HandleRegister)
+		authAPIGroup.POST("/login", authHandler.HandleLogin)
+	}
+
 	chatAPIGroup := r.Group("/api/v1/chat")
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
