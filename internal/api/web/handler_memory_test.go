@@ -109,6 +109,7 @@ func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserSe
 	)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.GET("/api/v1/memories", handler.HandleGetMemories)
 	router.POST("/api/v1/memories", handler.HandleCreateMemory)
 	router.DELETE("/api/v1/memories", handler.HandleClearMemories)
@@ -126,9 +127,9 @@ func TestHandleGetMemories_WithMemories(t *testing.T) {
 			CreatedAt: time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC),
 		},
 	}}
-	router, userSvc := newMemoryTestRouter(memorySvc)
+	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -137,7 +138,6 @@ func TestHandleGetMemories_WithMemories(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"memories"`)
 	assert.Contains(t, w.Body.String(), `"id":1`)
 	assert.Contains(t, w.Body.String(), "我偏好简洁直接的回答")
-	assert.Equal(t, "test-session", userSvc.channelID)
 	assert.Equal(t, int64(42), memorySvc.listUserID)
 }
 
@@ -145,7 +145,7 @@ func TestHandleGetMemories_Empty(t *testing.T) {
 	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{}}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -153,23 +153,11 @@ func TestHandleGetMemories_Empty(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"memories":[]`)
 }
 
-func TestHandleGetMemories_MissingSessionID(t *testing.T) {
-	memorySvc := &mockMemoryService{}
-	router, _ := newMemoryTestRouter(memorySvc)
-
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "缺少 session_id 参数")
-}
-
 func TestHandleGetMemories_ServiceError(t *testing.T) {
 	memorySvc := &mockMemoryService{listErr: errors.New("db down")}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/memories", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -183,7 +171,6 @@ func TestHandleCreateMemory_Success(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":" 我偏好简洁直接的回答 "
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -202,7 +189,6 @@ func TestHandleCreateMemory_EmptyContent(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"   "
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -218,7 +204,6 @@ func TestHandleCreateMemory_ContentTooLong(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"too long"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -234,7 +219,6 @@ func TestHandleCreateMemory_ServiceError(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"我偏好简洁回答"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -250,7 +234,7 @@ func TestHandleClearMemories_Success(t *testing.T) {
 	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{{ID: 1, UserID: 42, Content: "记忆"}}}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -260,24 +244,11 @@ func TestHandleClearMemories_Success(t *testing.T) {
 	assert.Equal(t, int64(42), memorySvc.clearUserID)
 }
 
-func TestHandleClearMemories_MissingSessionID(t *testing.T) {
-	memorySvc := &mockMemoryService{}
-	router, _ := newMemoryTestRouter(memorySvc)
-
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "缺少 session_id 参数")
-	assert.False(t, memorySvc.clearCalled)
-}
-
 func TestHandleClearMemories_ServiceError(t *testing.T) {
 	memorySvc := &mockMemoryService{clearErr: errors.New("delete failed")}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -293,7 +264,7 @@ func TestHandleDeleteMemory_Success(t *testing.T) {
 	}}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -306,7 +277,7 @@ func TestHandleDeleteMemory_NotFound(t *testing.T) {
 	memorySvc := &mockMemoryService{memories: []*memorydomain.Memory{}}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/999?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/999", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -318,7 +289,7 @@ func TestHandleDeleteMemory_InvalidID(t *testing.T) {
 	memorySvc := &mockMemoryService{}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/invalid?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/invalid", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -326,23 +297,11 @@ func TestHandleDeleteMemory_InvalidID(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "无效的记忆 ID。")
 }
 
-func TestHandleDeleteMemory_MissingSessionID(t *testing.T) {
-	memorySvc := &mockMemoryService{}
-	router, _ := newMemoryTestRouter(memorySvc)
-
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "缺少 session_id 参数")
-}
-
 func TestHandleDeleteMemory_ServiceError(t *testing.T) {
 	memorySvc := &mockMemoryService{deleteErr: errors.New("delete failed")}
 	router, _ := newMemoryTestRouter(memorySvc)
 
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1?session_id=test-session", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/memories/1", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -355,7 +314,6 @@ func TestHandleUpdateMemory_Success(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":" 新内容 "
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -373,7 +331,6 @@ func TestHandleUpdateMemory_NotFound(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/999", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"新内容"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -389,7 +346,6 @@ func TestHandleUpdateMemory_InvalidID(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/invalid", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"新内容"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -405,7 +361,6 @@ func TestHandleUpdateMemory_EmptyContent(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"   "
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -421,7 +376,6 @@ func TestHandleUpdateMemory_ServiceError(t *testing.T) {
 	router, _ := newMemoryTestRouter(memorySvc)
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/1", strings.NewReader(`{
-		"session_id":"test-session",
 		"content":"新内容"
 	}`))
 	req.Header.Set("Content-Type", "application/json")

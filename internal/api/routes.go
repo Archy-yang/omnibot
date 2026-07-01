@@ -148,7 +148,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		authAPIGroup.POST("/login", authHandler.HandleLogin)
 	}
 
+	// v2.1: 业务接口按路由组挂 JWT 鉴权;handler 从 c.GetInt64('user_id') 取身份
 	chatAPIGroup := r.Group("/api/v1/chat")
+	chatAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
@@ -164,6 +166,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
+	memoryAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		memoryAPIGroup.GET("", webHandler.HandleGetMemories)
 		memoryAPIGroup.POST("", webHandler.HandleCreateMemory)
@@ -174,6 +177,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 用户 LLM 配置路由
 	userAPIGroup := r.Group("/api/v1/user")
+	userAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		userAPIGroup.GET("/llm-providers", webHandler.HandleGetLLMProviders)
 		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)

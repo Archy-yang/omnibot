@@ -27,14 +27,22 @@ type LLMConfigView = serviceuser.LLMConfigView
 type FullLLMConfig = serviceuser.FullLLMConfig
 type UpdateConfigRequest = serviceuser.UpdateConfigRequest
 
+// injectUserID 是测试用的 middleware,替代真实 JWT 鉴权:
+// 直接把指定 user_id 塞进 gin.Context,让 handler 通过
+// c.GetInt64(middleware.AuthUserIDKey) 拿到测试身份。
+func injectUserID(uid int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("user_id", uid)
+		c.Next()
+	}
+}
+
 type mockUserService struct {
-	userID       int64
-	channelID    string
-	created      bool
+	userID  int64
+	created bool
 }
 
 func (m *mockUserService) GetOrCreateByChannel(channelType, channelUserID string) (*domainuser.User, *domainuser.UserChannel, bool, error) {
-	m.channelID = channelUserID
 	return &domainuser.User{ID: m.userID}, nil, m.created, nil
 }
 
@@ -175,12 +183,12 @@ func TestHandleSendMessage(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
 
 	// Test request
 	reqBody := map[string]string{
-		"session_id": "test-session-123",
-		"content":    "Hello OmniBot",
+		"content": "Hello OmniBot",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -192,7 +200,6 @@ func TestHandleSendMessage(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "AI response")
-	assert.Equal(t, "test-session-123", userSvc.channelID)
 	assert.Equal(t, "Hello OmniBot", msgSvc.savedUserContent)
 	assert.Equal(t, "AI response", msgSvc.savedAssistantContent)
 }
@@ -210,9 +217,10 @@ func TestHandleGetHistory(t *testing.T) {
 
 	// Test request
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
 
-	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=test-session-123", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -239,9 +247,10 @@ func TestHandleGetHistory_ReturnsStoredMessages(t *testing.T) {
 
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
 
-	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=test-session-123&limit=50", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?limit=50", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -284,8 +293,9 @@ func TestHandleGetHistory_HasMore(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, nil)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
-	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=s&limit=2", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?limit=2", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -302,24 +312,6 @@ func TestHandleGetHistory_HasMore(t *testing.T) {
 	// 多取的「最旧」(ID=100) 应该被去掉，只返回最近 2 条
 	assert.Equal(t, int64(101), resp.Data.Messages[0].ID)
 	assert.Equal(t, int64(102), resp.Data.Messages[1].ID)
-}
-
-// TestHandleGetHistory_NewUserReturnsEmpty 新用户没有历史，直接返回空数组。
-func TestHandleGetHistory_NewUserReturnsEmpty(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	userSvc := &mockUserService{userID: 42, created: true} // 新建用户
-	msgSvc := &mockMessageService{}
-	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, nil)
-
-	router := gin.New()
-	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
-	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=brand-new", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	// 新用户路径不应触碰消息服务
-	assert.Equal(t, 0, msgSvc.listCalledLimit)
 }
 
 // ========== LLM 配置接口测试 ==========
@@ -348,9 +340,10 @@ func TestHandleGetLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
 
-		req, _ := http.NewRequest("GET", "/api/v1/user/llm-config?session_id=test-session-123", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/user/llm-config", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -358,24 +351,6 @@ func TestHandleGetLLMConfig(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "has_config")
 		assert.Contains(t, w.Body.String(), "openai")
 		assert.Contains(t, w.Body.String(), "使用你的自定义模型")
-	})
-
-	t.Run("no session id", func(t *testing.T) {
-		userSvc := &mockUserService{userID: 42, created: false}
-		msgSvc := &mockMessageService{}
-		llmClient := &mockLLMClient{}
-		configSvc := &mockLLMConfigService{hasConfig: false}
-
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
-
-		router := gin.New()
-		router.GET("/api/v1/user/llm-config", handler.HandleGetLLMConfig)
-
-		req, _ := http.NewRequest("GET", "/api/v1/user/llm-config", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
 
@@ -391,10 +366,10 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
-			"session_id":  "test-session-123",
 			"provider":    "qwen",
 			"model":       "qwen-turbo",
 			"api_key":     "sk-test-key-1234567890abcdefghijk",
@@ -427,13 +402,13 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
-			"session_id": "test-session-123",
-			"provider":   "qwen",
-			"model":      "qwen-turbo",
-			"api_key":    "short",
+			"provider": "qwen",
+			"model":    "qwen-turbo",
+			"api_key":  "short",
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -454,11 +429,12 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
 			"api_key": "sk-test-key",
-			// missing session_id, provider, model
+			// missing provider, model
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -479,10 +455,10 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
-			"session_id":  "test-session-123",
 			"provider":    "aliyun_qwen",
 			"model":       "qwen-plus",
 			"api_key":     "sk-test-key-1234567890abcdefghijk",
@@ -515,10 +491,10 @@ func TestHandleUpdateLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
+		router.Use(injectUserID(42))
 		router.PUT("/api/v1/user/llm-config", handler.HandleUpdateLLMConfig)
 
 		reqBody := map[string]interface{}{
-			"session_id":  "test-session-123",
 			"provider":    "qwen_native",
 			"model":       "qwen-plus",
 			"api_key":     "sk-test-key-1234567890abcdefghijk",
@@ -550,32 +526,15 @@ func TestHandleDeleteLLMConfig(t *testing.T) {
 		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 		router := gin.New()
-		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
-
-		req, _ := http.NewRequest("DELETE", "/api/v1/user/llm-config?session_id=test-session-123", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "配置已清除")
-	})
-
-	t.Run("delete without session id", func(t *testing.T) {
-		userSvc := &mockUserService{userID: 42, created: false}
-		msgSvc := &mockMessageService{}
-		llmClient := &mockLLMClient{}
-		configSvc := &mockLLMConfigService{hasConfig: true}
-
-		handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
-
-		router := gin.New()
+		router.Use(injectUserID(42))
 		router.DELETE("/api/v1/user/llm-config", handler.HandleDeleteLLMConfig)
 
 		req, _ := http.NewRequest("DELETE", "/api/v1/user/llm-config", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Body.String(), "配置已清除")
 	})
 }
 
@@ -664,11 +623,11 @@ func TestHandleSendMessage_WithoutCustomLLMConfig(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages", handler.HandleSendMessage)
 
 	reqBody := map[string]string{
-		"session_id": "test-session-123",
-		"content":    "Hello with default config",
+		"content": "Hello with default config",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -680,7 +639,6 @@ func TestHandleSendMessage_WithoutCustomLLMConfig(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "AI response")
-	assert.Equal(t, "test-session-123", userSvc.channelID)
 }
 
 type ValidationError struct {
@@ -704,11 +662,11 @@ func TestHandleSendMessageStream_Success(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)
 
 	reqBody := map[string]string{
-		"session_id": "test-session-123",
-		"content":    "你好",
+		"content": "你好",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -737,6 +695,7 @@ func TestHandleSendMessageStream_InvalidBody(t *testing.T) {
 	handler := NewHandler(userSvc, msgSvc, llmClient, configSvc, &mockMemoryService{}, nil)
 
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/stream", handler.HandleSendMessageStream)
 
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/stream", bytes.NewBuffer([]byte("not json")))
@@ -813,9 +772,10 @@ func TestHandleSendMessageAgentStream_TokenAndDone(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "你好"})
+	body, _ := json.Marshal(map[string]string{"content": "你好"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -852,9 +812,10 @@ func TestHandleSendMessageAgentStream_ToolCallEvent(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点了"})
+	body, _ := json.Marshal(map[string]string{"content": "几点了"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -898,9 +859,10 @@ func TestHandleSendMessageAgentStream_ToolResultSanitized(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "读 rss"})
+	body, _ := json.Marshal(map[string]string{"content": "读 rss"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -935,9 +897,10 @@ func TestHandleSendMessageAgentStream_EventOrdering(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点"})
+	body, _ := json.Marshal(map[string]string{"content": "几点"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -977,9 +940,10 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点"})
+	body, _ := json.Marshal(map[string]string{"content": "几点"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1034,9 +998,10 @@ func TestHandleSendMessageAgentStream_PersistsSanitizedSegments(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "读 rss"})
+	body, _ := json.Marshal(map[string]string{"content": "读 rss"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1076,9 +1041,10 @@ func TestHandleGetHistory_IncludesSegments(t *testing.T) {
 	msgSvc := &mockMessageService{listMessages: msgs}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, &mockAgentService{})
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.GET("/api/v1/chat/messages", handler.HandleGetHistory)
 
-	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?session_id=s&limit=50", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/chat/messages?limit=50", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -1104,9 +1070,10 @@ func TestHandleSendMessageAgentStream_StreamOpenError(t *testing.T) {
 	agentSvc := &mockAgentService{streamErr: errors.New("streaming client not configured")}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "x"})
+	body, _ := json.Marshal(map[string]string{"content": "x"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1145,9 +1112,10 @@ func TestHandleSendMessageAgent_PersistsRecordsAsAgentSteps(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, llmCfgSvc, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent", handler.HandleSendMessageAgent)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "几点了"})
+	body, _ := json.Marshal(map[string]string{"content": "几点了"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1186,9 +1154,10 @@ func TestHandleSendMessageAgent_NoCustomConfig_ModelEmpty(t *testing.T) {
 	}
 	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
 	router := gin.New()
+	router.Use(injectUserID(42))
 	router.POST("/api/v1/chat/messages/agent", handler.HandleSendMessageAgent)
 
-	body, _ := json.Marshal(map[string]string{"session_id": "s", "content": "你好"})
+	body, _ := json.Marshal(map[string]string{"content": "你好"})
 	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
