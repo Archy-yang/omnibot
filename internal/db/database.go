@@ -57,6 +57,7 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 	gormConfig := &gorm.Config{
 		SkipDefaultTransaction: false,
 		PrepareStmt:            true, // 启用预编译语句缓存
+		TranslateError:         true, // 将驱动错误翻译为 GORM 通用错误(如唯一约束冲突 → ErrDuplicatedKey)
 	}
 
 	// 应用选项
