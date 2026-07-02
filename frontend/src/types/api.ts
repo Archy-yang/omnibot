@@ -14,7 +14,6 @@ export interface ApiResponse<T = void> {
  */
 export interface SendMessageRequest {
   content: string;
-  session_id: string;
 }
 
 /**
@@ -122,7 +121,6 @@ export interface UserLLMConfigResponse {
  * 更新用户 LLM 配置请求类型
  */
 export interface UpdateUserLLMConfigRequest {
-  session_id: string;
   provider: string;
   api_key?: string;
   base_url?: string;
@@ -151,7 +149,6 @@ export interface GetMemoriesResponse {
  * 新增长期记忆请求类型
  */
 export interface CreateMemoryRequest {
-  session_id: string;
   content: string;
 }
 
@@ -181,7 +178,6 @@ export interface DeleteMemoryResponse {
  * 更新长期记忆请求类型
  */
 export interface UpdateMemoryRequest {
-  session_id: string;
   content: string;
 }
 

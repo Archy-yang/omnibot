@@ -3,13 +3,13 @@ import { ref, computed, reactive } from 'vue';
 import type { Message } from '../types/chat';
 import { chatService } from '../services/chat';
 
+// v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId
 export const useChatStore = defineStore(
   'chat',
   () => {
     // State
     const messages = ref<Message[]>([]);
     const isLoading = ref<boolean>(false);
-    const sessionId = ref<string>('');
 
     // Getters
     const messageCount = computed<number>(() => messages.value.length);
@@ -52,11 +52,11 @@ export const useChatStore = defineStore(
 
       isLoading.value = true;
       try {
-        await chatService.sendMessageStream(content, sessionId.value, {
+        await chatService.sendMessageStream(content, {
           onChunk: (chunk: string) => {
-            // content 始终累加（复制按钮 / 落库用纯文本）
+            // content 始终累加(复制按钮 / 落库用纯文本)
             assistantMessage.content += chunk;
-            // segments 按时序维护：末尾是 text 段就追加，否则新建一段 text
+            // segments 按时序维护:末尾是 text 段就追加,否则新建一段 text
             const segs = assistantMessage.segments!;
             const last = segs[segs.length - 1];
             if (last && last.type === 'text') {
@@ -66,7 +66,7 @@ export const useChatStore = defineStore(
             }
           },
           onToolCall: (event) => {
-            // push 一个 tool 段，自然封口上一段文本；result 待 onToolResult 回填
+            // push 一个 tool 段,自然封口上一段文本;result 待 onToolResult 回填
             assistantMessage.segments!.push({
               type: 'tool',
               tool: event.tool,
@@ -105,13 +105,9 @@ export const useChatStore = defineStore(
     };
 
     const loadHistory = async (): Promise<void> => {
-      if (!sessionId.value) {
-        return;
-      }
-
       isLoading.value = true;
       try {
-        const history = await chatService.getHistory(sessionId.value);
+        const history = await chatService.getHistory();
         messages.value = history;
       } catch (error) {
         console.error('Failed to load chat history:', error);
@@ -121,15 +117,10 @@ export const useChatStore = defineStore(
       }
     };
 
-    const setSessionId = (id: string): void => {
-      sessionId.value = id;
-    };
-
     return {
       // State
       messages,
       isLoading,
-      sessionId,
       // Getters
       messageCount,
       lastMessage,
@@ -138,14 +129,13 @@ export const useChatStore = defineStore(
       loadHistory,
       addMessage,
       clearMessages,
-      setSessionId,
     };
   },
   {
     persist: {
       key: 'chat-store',
       storage: localStorage,
-      pick: ['sessionId', 'messages'],
+      pick: ['messages'],
     },
   }
 );

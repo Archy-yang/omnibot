@@ -7,11 +7,12 @@ import (
 
 // UserChannel 用户通道关联
 // 一个 User 可以关联多个不同通道的身份
+// (channel_type, channel_user_id) 复合唯一索引:保证同一渠道下同一外部身份只对应一个 user
 type UserChannel struct {
 	ID            int64           `gorm:"primaryKey;autoIncrement"`
 	UserID        int64         `gorm:"not null;index:idx_user_channel_user_id"`
-	ChannelType   string        `gorm:"size:32;not null;index:idx_user_channel_type"` // "wechat", "feishu", "web"
-	ChannelUserID string        `gorm:"size:128;not null;column:channel_user_id"`  // 通道内的用户 ID（OpenID、飞书 UserID 等）
+	ChannelType   string        `gorm:"size:32;not null;uniqueIndex:idx_channel_type_user_id,priority:1"` // "wechat", "feishu", "web", "email"
+	ChannelUserID string        `gorm:"size:128;not null;column:channel_user_id;uniqueIndex:idx_channel_type_user_id,priority:2"` // 通道内的用户 ID(OpenID / 飞书 UserID / 邮箱)
 	ChannelRawData *ChannelData `gorm:"type:json;serializer:json"` // 通道特定的额外数据
 
 	CreatedAt time.Time `gorm:"not null"`

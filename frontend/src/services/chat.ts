@@ -12,12 +12,17 @@ interface StreamCallbacks {
   onError: (error: Error) => void;
 }
 
+// v2.1: 401 集中处理(裸 fetch 不经 axios 拦截器,需手动兜底)
+function handle401AndRedirect(): void {
+  localStorage.removeItem('token');
+  window.location.href = '/login';
+}
+
 export const chatService = {
-  async sendMessage(content: string, sessionId: string): Promise<Message> {
+  async sendMessage(content: string): Promise<Message> {
     try {
       const requestData: SendMessageRequest = {
         content,
-        session_id: sessionId,
       };
 
       const response = await request.post<ApiResponse<Message>>('/chat/messages', requestData);
@@ -29,31 +34,41 @@ export const chatService = {
   },
 
   /**
-   * 默认全 Agent 模式的流式对话（v1.5.2）。
+   * 默认全 Agent 模式的流式对话(v1.5.2)。
    *
-   * 后端协议：
+   * 后端协议:
    *   event: token       data: {"content": "..."}    -- LLM token 增量
    *   event: tool_call   data: {"tool": "...", "label": "..."}  -- 工具调用
-   *   event: tool_result data: {"tool": "...", "result": "..."} -- 工具结果（错误已脱敏）
+   *   event: tool_result data: {"tool": "...", "result": "..."} -- 工具结果(错误已脱敏)
    *   event: error       data: {"error": "..."}      -- 错误
    *   data: [DONE]                                    -- 完成
    *
-   * 简单提问（无工具）只会产生 token + [DONE]，体验等同 v1.5.1 之前的「普通流式」。
-   * 工具调用问题会先收到 tool_call 事件，前端可立即渲染状态条。
+   * v2.1: 走 JWT 鉴权,fetch 手动加 Authorization header;401 手动跳 /login
+   * (裸 fetch 不经 axios 拦截器,需与 request.ts 行为对齐)。
    */
   async sendMessageStream(
     content: string,
-    sessionId: string,
     callbacks: StreamCallbacks
   ): Promise<void> {
     const { onChunk, onToolCall, onToolResult, onDone, onError } = callbacks;
 
     try {
+      const token = localStorage.getItem('token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${BASE_URL}/chat/messages/agent/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, session_id: sessionId }),
+        headers,
+        body: JSON.stringify({ content }),
       });
+
+      if (response.status === 401) {
+        handle401AndRedirect();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -67,8 +82,8 @@ export const chatService = {
       const decoder = new TextDecoder();
       let fullContent = '';
       let buffer = '';
-      // SSE 事件类型按 OpenAI 同款规则：单条事件由 event:/data: 多行组成、用空行分隔。
-      // 当前事件类型保持到下一次 event: 行覆盖；data: [DONE] 视为终止信号。
+      // SSE 事件类型按 OpenAI 同款规则:单条事件由 event:/data: 多行组成、用空行分隔。
+      // 当前事件类型保持到下一次 event: 行覆盖;data: [DONE] 视为终止信号。
       let currentEvent = 'message';
 
       while (true) {
@@ -111,7 +126,7 @@ export const chatService = {
               currentEvent = 'message';
               continue;
             }
-            // 默认事件或 event: token 都按 token 处理（后端 [DONE] 之外的所有 data 都带 content 字段）
+            // 默认事件或 event: token 都按 token 处理(后端 [DONE] 之外的所有 data 都带 content 字段)
             if (parsed.content !== undefined) {
               fullContent += parsed.content;
               onChunk(parsed.content);
@@ -129,14 +144,10 @@ export const chatService = {
     }
   },
 
-  async getHistory(
-    sessionId: string,
-    params?: PaginationParams
-  ): Promise<Message[]> {
+  async getHistory(params?: PaginationParams): Promise<Message[]> {
     try {
       const response = await request.get<ApiResponse<GetHistoryResponse>>('/chat/messages', {
         params: {
-          session_id: sessionId,
           limit: params?.limit || 50,
           before: params?.before,
         },

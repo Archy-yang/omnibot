@@ -17,6 +17,16 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	Database DatabaseConfig `mapstructure:"database"`
+	Auth     AuthConfig     `mapstructure:"auth"`
+}
+
+// AuthConfig 邮箱密码认证配置(v2.1)。
+//
+// JWTSecret 必须在生产环境改为强随机值,不入 git;
+// TokenTTL 使用 time.ParseDuration 语法(如 "720h" = 30 天,PRD 5.3)。
+type AuthConfig struct {
+	JWTSecret string `mapstructure:"jwt_secret"`
+	TokenTTL  string `mapstructure:"token_ttl"`
 }
 
 // AppConfig 应用基本配置

@@ -3,13 +3,11 @@ import { ref } from 'vue';
 import type { LLMConfig } from '../types/api';
 import type { LLMProviderOption } from '../types/llmProvider';
 import { configService } from '../services/config';
-import { useSession } from '../composables/useSession';
 
+// v2.1: 身份由后端 JWT 中间件解析,前端不再传 session_id
 export const useSettingsStore = defineStore(
   'settings',
   () => {
-    const { sessionId } = useSession();
-
     // State
     const theme = ref<'light' | 'dark'>('light');
     const llmConfig = ref<LLMConfig | null>(null);
@@ -32,7 +30,6 @@ export const useSettingsStore = defineStore(
         const fullConfig = llmConfig.value ? { ...llmConfig.value, ...config } : config as LLMConfig;
 
         await configService.updateUserLLMConfig({
-          session_id: sessionId.value,
           provider: fullConfig.provider,
           api_key: fullConfig.apiKey,
           base_url: fullConfig.baseUrl,
@@ -52,7 +49,7 @@ export const useSettingsStore = defineStore(
 
     const loadConfig = async (): Promise<void> => {
       try {
-        const userConfig = await configService.getUserLLMConfig(sessionId.value);
+        const userConfig = await configService.getUserLLMConfig();
         hasUserConfig.value = userConfig.has_config;
         configStatus.value = userConfig.status_text;
 
@@ -105,7 +102,7 @@ export const useSettingsStore = defineStore(
 
     const clearUserConfig = async (): Promise<void> => {
       try {
-        await configService.deleteUserLLMConfig(sessionId.value);
+        await configService.deleteUserLLMConfig();
         hasUserConfig.value = false;
         configStatus.value = '使用系统默认模型';
         // 清除本地配置但保留默认值

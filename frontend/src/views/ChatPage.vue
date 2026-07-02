@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue';
-import { useChat, useSession, useSettings, useToast } from '@/composables';
+import { ref, onMounted, computed } from 'vue';
+import { useChat, useSettings, useToast } from '@/composables';
 import AppNav from '@/components/layout/AppNav.vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
@@ -10,10 +10,8 @@ import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
-// useSession 保留(后端 API 仍需 session_id),但 v2.0 不再暴露任何
-// 「新建会话」入口——单一长期对话模型。
+// v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId(单一长期对话模型)
 const { messages, isLoading, sendMessage, loadHistory } = useChat();
-const { initSession, sessionId } = useSession();
 const { showSettingsPanel, toggleSettingsPanel, loadConfig } = useSettings();
 const { toasts, error } = useToast();
 
@@ -37,7 +35,6 @@ const navCurrent = computed<'chat' | 'memory' | 'settings'>(() => {
 
 onMounted(async () => {
   try {
-    initSession();
     await loadConfig();
     await loadHistory();
   } catch (err) {
@@ -46,10 +43,6 @@ onMounted(async () => {
   } finally {
     isInitializing.value = false;
   }
-});
-
-watch(() => sessionId.value, () => {
-  loadHistory().catch(() => {});
 });
 
 const handleSend = async (content: string) => {

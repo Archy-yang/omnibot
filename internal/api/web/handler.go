@@ -14,6 +14,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	domainuser "omnibot/internal/domain/user"
+	"omnibot/internal/middleware"
 	agentpkg "omnibot/internal/service/agent"
 	memorysvc "omnibot/internal/service/memory"
 	userLLM "omnibot/internal/service/user"
@@ -100,8 +101,7 @@ func NewHandler(
 
 // SendMessageRequest 发送消息请求体
 type SendMessageRequest struct {
-	SessionID string `json:"session_id" binding:"required"`
-	Content   string `json:"content" binding:"required"`
+	Content string `json:"content" binding:"required"`
 }
 
 // SendMessageResponse 响应体
@@ -117,9 +117,8 @@ type SendMessageResponse struct {
 
 // GetHistoryRequest represents the query params
 type GetHistoryRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
-	Limit     int    `form:"limit,default=50"`
-	Before    int64  `form:"before,default=0"`
+	Limit  int   `form:"limit,default=50"`
+	Before int64 `form:"before,default=0"`
 }
 
 // GetHistoryResponse is the response for history
@@ -140,7 +139,7 @@ type MessageDTO struct {
 	CreatedAt string                         `json:"created_at"`
 }
 
-// HandleGetHistory gets message history for a session
+// HandleGetHistory gets message history for the current user
 func (h *Handler) HandleGetHistory(c *gin.Context) {
 	var req GetHistoryRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
@@ -151,25 +150,8 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 		return
 	}
 
-	// 获取或创建用户
-	user, _, isNew, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "Failed to get user",
-		})
-		return
-	}
-
-	// 新用户没有历史，直接返回空
-	if isNew {
-		resp := GetHistoryResponse{}
-		resp.Success = true
-		resp.Data.Messages = []MessageDTO{}
-		resp.Data.HasMore = false
-		c.JSON(http.StatusOK, resp)
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入,不再走 GetOrCreateByChannel
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	// 多取一条用于判断是否还有更多历史，前端按需翻页
 	limit := req.Limit
@@ -178,10 +160,10 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 	}
 	fetchLimit := limit + 1
 
-	messages, err := h.messageService.ListByUser(c.Request.Context(), user.GetID(), fetchLimit, req.Before)
+	messages, err := h.messageService.ListByUser(c.Request.Context(), userID, fetchLimit, req.Before)
 	if err != nil {
 		logger.ErrorWithFields("Failed to load chat history",
-			zap.Int64("user_id", user.GetID()),
+			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -226,17 +208,8 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 		return
 	}
 
-	// 获取或创建用户（通过 web 会话 ID）
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "Failed to get or create user",
-		})
-		return
-	}
-
-	userID := user.GetID()
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	// 保存用户消息
 	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
@@ -313,16 +286,8 @@ func (h *Handler) HandleSendMessageStream(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "Failed to get or create user",
-		})
-		return
-	}
-
-	userID := user.GetID()
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
 		logger.ErrorWithFields("Failed to save user message",
@@ -415,12 +380,8 @@ func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to get or create user"})
-		return
-	}
-	userID := user.GetID()
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
 		logger.ErrorWithFields("Failed to save user message",
@@ -513,12 +474,8 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to get or create user"})
-		return
-	}
-	userID := user.GetID()
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
 		logger.ErrorWithFields("Failed to save user message",
@@ -709,17 +666,12 @@ type MemoryDTO struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type GetMemoriesRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
-}
-
 type GetMemoriesResponse struct {
 	Memories []MemoryDTO `json:"memories"`
 }
 
 type CreateMemoryRequest struct {
-	SessionID string `json:"session_id" binding:"required"`
-	Content   string `json:"content" binding:"required"`
+	Content string `json:"content" binding:"required"`
 }
 
 type CreateMemoryResponse struct {
@@ -727,16 +679,8 @@ type CreateMemoryResponse struct {
 	Memory  MemoryDTO `json:"memory"`
 }
 
-type ClearMemoriesRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
-}
-
 type ClearMemoriesResponse struct {
 	Message string `json:"message"`
-}
-
-type DeleteMemoryQueryRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
 }
 
 type DeleteMemoryURIRequest struct {
@@ -752,8 +696,7 @@ type UpdateMemoryURIRequest struct {
 }
 
 type UpdateMemoryRequest struct {
-	SessionID string `json:"session_id" binding:"required"`
-	Content   string `json:"content" binding:"required"`
+	Content string `json:"content" binding:"required"`
 }
 
 type UpdateMemoryResponse struct {
@@ -771,25 +714,10 @@ func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
 
 // HandleGetMemories 获取用户的全部长期记忆
 func (h *Handler) HandleGetMemories(c *gin.Context) {
-	var req GetMemoriesRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "缺少 session_id 参数",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "服务暂时不可用，请稍后再试。",
-		})
-		return
-	}
-
-	memories, err := h.memoryService.List(c.Request.Context(), user.ID)
+	memories, err := h.memoryService.List(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -822,16 +750,10 @@ func (h *Handler) HandleCreateMemory(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "服务暂时不可用，请稍后再试。",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	memory, err := h.memoryService.Remember(c.Request.Context(), user.ID, req.Content)
+	memory, err := h.memoryService.Remember(c.Request.Context(), userID, req.Content)
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "服务暂时不可用，请稍后再试。"
@@ -861,25 +783,10 @@ func (h *Handler) HandleCreateMemory(c *gin.Context) {
 
 // HandleClearMemories 清空用户的全部长期记忆
 func (h *Handler) HandleClearMemories(c *gin.Context) {
-	var req ClearMemoriesRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "缺少 session_id 参数",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "服务暂时不可用，请稍后再试。",
-		})
-		return
-	}
-
-	if err := h.memoryService.Clear(c.Request.Context(), user.ID); err != nil {
+	if err := h.memoryService.Clear(c.Request.Context(), userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   "服务暂时不可用，请稍后再试。",
@@ -897,15 +804,6 @@ func (h *Handler) HandleClearMemories(c *gin.Context) {
 
 // HandleDeleteMemory 删除单条长期记忆
 func (h *Handler) HandleDeleteMemory(c *gin.Context) {
-	var queryReq DeleteMemoryQueryRequest
-	if err := c.ShouldBindQuery(&queryReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "缺少 session_id 参数",
-		})
-		return
-	}
-
 	var uriReq DeleteMemoryURIRequest
 	if err := c.ShouldBindUri(&uriReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -915,16 +813,10 @@ func (h *Handler) HandleDeleteMemory(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", queryReq.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "服务暂时不可用，请稍后再试。",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	deleted, err := h.memoryService.Delete(c.Request.Context(), user.ID, uriReq.MemoryID)
+	deleted, err := h.memoryService.Delete(c.Request.Context(), userID, uriReq.MemoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -969,16 +861,10 @@ func (h *Handler) HandleUpdateMemory(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "服务暂时不可用，请稍后再试。",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	memory, err := h.memoryService.Update(c.Request.Context(), user.ID, uriReq.MemoryID, req.Content)
+	memory, err := h.memoryService.Update(c.Request.Context(), userID, uriReq.MemoryID, req.Content)
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "服务暂时不可用，请稍后再试。"
@@ -1063,11 +949,6 @@ func (h *Handler) HandleGetLLMProviders(c *gin.Context) {
 	})
 }
 
-// GetLLMConfigRequest 获取配置请求
-type GetLLMConfigRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
-}
-
 // GetLLMConfigResponse 获取配置响应
 type GetLLMConfigResponse struct {
 	HasConfig   bool    `json:"has_config"`
@@ -1082,25 +963,10 @@ type GetLLMConfigResponse struct {
 
 // HandleGetLLMConfig 获取用户 LLM 配置
 func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
-	var req GetLLMConfigRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "缺少 session_id 参数",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "获取用户信息失败",
-		})
-		return
-	}
-
-	configView, err := h.llmConfigService.GetConfigView(user.ID)
+	configView, err := h.llmConfigService.GetConfigView(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -1128,7 +994,6 @@ func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
 
 // UpdateLLMConfigRequest 更新配置请求
 type UpdateLLMConfigRequest struct {
-	SessionID   string  `json:"session_id" binding:"required"`
 	Provider    string  `json:"provider" binding:"required"`
 	APIKey      string  `json:"api_key"`
 	BaseURL     string  `json:"base_url"`
@@ -1148,14 +1013,8 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 		return
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "获取用户信息失败",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	updateReq := userLLM.UpdateConfigRequest{
 		Provider:    req.Provider,
@@ -1166,7 +1025,7 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 		MaxTokens:   req.MaxTokens,
 	}
 
-	if err := h.llmConfigService.UpdateFullConfig(user.ID, updateReq); err != nil {
+	if err := h.llmConfigService.UpdateFullConfig(userID, updateReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -1180,32 +1039,12 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 	})
 }
 
-// DeleteLLMConfigRequest 删除配置请求
-type DeleteLLMConfigRequest struct {
-	SessionID string `form:"session_id" binding:"required"`
-}
-
 // HandleDeleteLLMConfig 删除用户 LLM 配置
 func (h *Handler) HandleDeleteLLMConfig(c *gin.Context) {
-	var req DeleteLLMConfigRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "缺少 session_id 参数",
-		})
-		return
-	}
+	// v2.1: 身份由 AuthRequired 中间件注入
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("web", req.SessionID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "获取用户信息失败",
-		})
-		return
-	}
-
-	if err := h.llmConfigService.ClearConfig(user.ID); err != nil {
+	if err := h.llmConfigService.ClearConfig(userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   "清除配置失败",

@@ -1,61 +1,30 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
-import type { User } from '../types/user';
+import { computed, ref } from 'vue';
 
-const SESSION_ID_KEY = 'session-id';
+const TOKEN_KEY = 'token';
 
-export const useUserStore = defineStore(
-  'user',
-  () => {
-    // State
-    const user = ref<User | null>(null);
-    const isAuthenticated = ref<boolean>(false);
-    const sessionId = ref<string>('');
+// v2.1: 基于 JWT 的认证 store。
+// token 是唯一权威身份来源:存在且未过期即视为已登录。
+// 后端在 401 时会由 axios 拦截器 / chat.ts 手动兜底清 token + 跳 /login。
+export const useAuthStore = defineStore('auth', () => {
+  const token = ref<string>(localStorage.getItem(TOKEN_KEY) || '');
 
-    // Getters
+  const isAuthenticated = computed<boolean>(() => !!token.value);
 
-    // Actions
-    const initSession = (): void => {
-      const savedSessionId = localStorage.getItem(SESSION_ID_KEY);
-      if (savedSessionId) {
-        sessionId.value = savedSessionId;
-        isAuthenticated.value = true;
-      } else {
-        // Generate a new session ID if none exists
-        sessionId.value = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        localStorage.setItem(SESSION_ID_KEY, sessionId.value);
-        isAuthenticated.value = true;
-      }
-    };
+  const setToken = (newToken: string): void => {
+    token.value = newToken;
+    localStorage.setItem(TOKEN_KEY, newToken);
+  };
 
-    const logout = (): void => {
-      user.value = null;
-      isAuthenticated.value = false;
-      sessionId.value = '';
-      localStorage.removeItem(SESSION_ID_KEY);
-    };
+  const clearToken = (): void => {
+    token.value = '';
+    localStorage.removeItem(TOKEN_KEY);
+  };
 
-    const setUser = (userData: User): void => {
-      user.value = userData;
-      isAuthenticated.value = true;
-    };
-
-    return {
-      // State
-      user,
-      isAuthenticated,
-      sessionId,
-      // Actions
-      initSession,
-      logout,
-      setUser,
-    };
-  },
-  {
-    persist: {
-      key: 'user-store',
-      storage: localStorage,
-      pick: ['sessionId', 'isAuthenticated'],
-    },
-  }
-);
+  return {
+    token,
+    isAuthenticated,
+    setToken,
+    clearToken,
+  };
+});

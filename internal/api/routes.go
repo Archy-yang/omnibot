@@ -17,6 +17,7 @@ import (
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
+	"omnibot/internal/pkg/auth"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
@@ -128,7 +129,28 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
+
+	// v2.1: 邮箱密码认证装配
+	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
+	// credentialRepo 目前留给未来「改密码」等场景,不通过 repo 注入。
+	tokenTTL, err := time.ParseDuration(cfg.Auth.TokenTTL)
+	if err != nil || tokenTTL <= 0 {
+		tokenTTL = 720 * time.Hour // 30 天,PRD 5.3
+	}
+	jwtSvc := auth.NewJWTService(cfg.Auth.JWTSecret, tokenTTL)
+	authSvc := userService.NewAuthService(dbConn.GetGormDB(), jwtSvc)
+	authHandler := web.NewAuthHandler(authSvc)
+
+	// 认证接口(不挂 AuthRequired,注册/登录本身不能要求已登录)
+	authAPIGroup := r.Group("/api/v1/auth")
+	{
+		authAPIGroup.POST("/register", authHandler.HandleRegister)
+		authAPIGroup.POST("/login", authHandler.HandleLogin)
+	}
+
+	// v2.1: 业务接口按路由组挂 JWT 鉴权;handler 从 c.GetInt64('user_id') 取身份
 	chatAPIGroup := r.Group("/api/v1/chat")
+	chatAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		chatAPIGroup.GET("/messages", webHandler.HandleGetHistory)
 		chatAPIGroup.POST("/messages", webHandler.HandleSendMessage)
@@ -144,6 +166,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
+	memoryAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		memoryAPIGroup.GET("", webHandler.HandleGetMemories)
 		memoryAPIGroup.POST("", webHandler.HandleCreateMemory)
@@ -154,6 +177,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 用户 LLM 配置路由
 	userAPIGroup := r.Group("/api/v1/user")
+	userAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		userAPIGroup.GET("/llm-providers", webHandler.HandleGetLLMProviders)
 		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)
