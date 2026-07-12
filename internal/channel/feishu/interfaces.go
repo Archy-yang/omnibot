@@ -19,15 +19,15 @@ import (
 	userservice "omnibot/internal/service/user"
 )
 
-// BindingService 飞书账号绑定服务接口(v2.2)。
-// 飞书消息不再自动建号:先解析绑定码格式 -> 走 BindFeishu;
-// 否则 ResolveFeishuUserID 查已绑定身份,未绑定回引导不建号(PRD 5.4)。
+// BindingService 账号绑定服务接口(v2.2 飞书引入,v2.3 泛化为渠道通用)。
+// 飞书消息不再自动建号:先解析绑定码格式 -> 走 BindChannel;
+// 否则 ResolveUserID 查已绑定身份,未绑定回引导不建号(PRD 5.4)。
 type BindingService interface {
-	// BindFeishu 提交绑定码完成飞书号与 web 账号绑定。
-	// 返回 nil 成功;ErrCodeInvalid/ErrFeishuAlreadyBound/ErrAccountAlreadyBound 对应 PRD 5.2。
-	BindFeishu(code, openID string) error
-	// ResolveFeishuUserID 解析飞书身份:已绑返 (userID,true);未绑返 (0,false)。
-	ResolveFeishuUserID(openID string) (userID int64, bound bool, err error)
+	// BindChannel 提交绑定码完成渠道号与 web 账号绑定(channelType 由调用方传)。
+	// 返回 nil 成功;ErrCodeInvalid/ErrChannelAlreadyBound/ErrAccountAlreadyBound 对应 PRD 5.2。
+	BindChannel(channelType, code, openID string) error
+	// ResolveUserID 解析渠道身份:已绑返 (userID,true);未绑返 (0,false)。
+	ResolveUserID(channelType, openID string) (userID int64, bound bool, err error)
 }
 
 // MessageService 消息服务接口。SaveUserMessage 用飞书 message_id 做去重。
