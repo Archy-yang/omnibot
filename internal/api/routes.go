@@ -186,6 +186,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)
 		userAPIGroup.PUT("/llm-config", webHandler.HandleUpdateLLMConfig)
 		userAPIGroup.DELETE("/llm-config", webHandler.HandleDeleteLLMConfig)
+
+		// v2.2: 飞书账号绑定(状态查询 + 出码)
+		feishuBindHandler := web.NewFeishuBindHandler(bindingSvc)
+		userAPIGroup.GET("/feishu/binding", feishuBindHandler.HandleGetBindingStatus)
+		userAPIGroup.POST("/feishu/bind-code", feishuBindHandler.HandleGenerateBindCode)
 	}
 
 	// 前端静态资源路由 - 嵌入到二进制中
