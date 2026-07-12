@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	domainuser "omnibot/internal/domain/user"
 	agentpkg "omnibot/internal/service/agent"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -88,11 +87,11 @@ func ptr(s string) *string { return &s }
 
 // 正常 text 单聊事件应转出完整 InboundMessage 并被 handler 处理。
 func TestDispatchInbound_TextP2P_TranslatesAndDispatches(t *testing.T) {
-	user := &mockUserService{user: &domainuser.User{ID: 7}}
+	binding := &mockBindingService{resolveUserID: 7, resolveBound: true}
 	msg := &mockMessageService{}
 	agent := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "好的"}}
 	sender := &mockSender{}
-	h := NewMessageHandler(user, msg, agent, &mockLLMConfigService{}, sender)
+	h := NewMessageHandler(binding, msg, agent, &mockLLMConfigService{}, sender)
 
 	event := &larkim.P2MessageReceiveV1{
 		Event: &larkim.P2MessageReceiveV1Data{
@@ -110,7 +109,7 @@ func TestDispatchInbound_TextP2P_TranslatesAndDispatches(t *testing.T) {
 	err := dispatchInbound(context.Background(), h, event)
 	require.NoError(t, err)
 
-	assert.Equal(t, "ou_abc", user.gotOpenID, "openID 应正确解析并传给 user service")
+	// v2.2: binding 不再记录 openID,断言改为 msg/sender 落点
 	assert.Equal(t, "你好", msg.savedUserContent, "text 应从 JSON content 提取")
 	assert.Equal(t, "om_1", msg.savedUserMsgID, "message_id 应作 SaveUserMessage 的 msgID")
 	assert.Equal(t, "ou_abc", sender.sentOpenID, "回复应发回原 openID")
@@ -118,10 +117,10 @@ func TestDispatchInbound_TextP2P_TranslatesAndDispatches(t *testing.T) {
 
 // 非 text 消息(如 image)应被静默忽略。
 func TestDispatchInbound_NonTextMessage_Ignored(t *testing.T) {
-	user := &mockUserService{user: &domainuser.User{ID: 7}}
+	binding := &mockBindingService{resolveUserID: 7, resolveBound: true}
 	msg := &mockMessageService{}
 	agent := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "ok"}}
-	h := NewMessageHandler(user, msg, agent, &mockLLMConfigService{}, &mockSender{})
+	h := NewMessageHandler(binding, msg, agent, &mockLLMConfigService{}, &mockSender{})
 
 	event := &larkim.P2MessageReceiveV1{
 		Event: &larkim.P2MessageReceiveV1Data{
@@ -131,16 +130,16 @@ func TestDispatchInbound_NonTextMessage_Ignored(t *testing.T) {
 	}
 	err := dispatchInbound(context.Background(), h, event)
 	require.NoError(t, err)
-	assert.Equal(t, "", user.gotOpenID, "非 text 消息不应触发 user 创建")
+	assert.Equal(t, "", msg.savedUserContent, "非 text 消息不应触发对话")
 }
 
 // 群聊事件 chat_type=group 应被 handler 过滤(handler 测试已覆盖,这里再断翻译层透传 ChatType)。
 func TestDispatchInbound_GroupChat_PassesChatTypeForFiltering(t *testing.T) {
-	user := &mockUserService{user: &domainuser.User{ID: 7}}
+	binding := &mockBindingService{resolveUserID: 7, resolveBound: true}
 	msg := &mockMessageService{}
 	agent := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "ok"}}
 	sender := &mockSender{}
-	h := NewMessageHandler(user, msg, agent, &mockLLMConfigService{}, sender)
+	h := NewMessageHandler(binding, msg, agent, &mockLLMConfigService{}, sender)
 
 	event := &larkim.P2MessageReceiveV1{
 		Event: &larkim.P2MessageReceiveV1Data{
@@ -156,7 +155,7 @@ func TestDispatchInbound_GroupChat_PassesChatTypeForFiltering(t *testing.T) {
 
 // 缺字段的事件应被安全忽略不 panic。
 func TestDispatchInbound_NilOrMissingFields_NoPanic(t *testing.T) {
-	h := NewMessageHandler(&mockUserService{}, &mockMessageService{}, &mockAgentService{}, &mockLLMConfigService{}, &mockSender{})
+	h := NewMessageHandler(&mockBindingService{resolveBound: true, resolveUserID: 7}, &mockMessageService{}, &mockAgentService{}, &mockLLMConfigService{}, &mockSender{})
 
 	// 完全空事件
 	require.NoError(t, dispatchInbound(context.Background(), h, nil))
