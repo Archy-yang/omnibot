@@ -160,9 +160,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
-	// channel 复用现有 userSvc/msgSvc/agentSvc/llmConfigSvc——同步 Run 路径,所有
+	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
-	startFeishuChannel(cfg, userSvc, msgSvc, agentSvc, llmConfigSvc)
+	// v2.2: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
+	bindCodeRepo := userRepo.NewFeishuBindCodeRepository(dbConn.GetGormDB())
+	bindingSvc := userService.NewBindingService(userChannelRepository, bindCodeRepo, 5*time.Minute)
+	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -183,6 +186,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		userAPIGroup.GET("/llm-config", webHandler.HandleGetLLMConfig)
 		userAPIGroup.PUT("/llm-config", webHandler.HandleUpdateLLMConfig)
 		userAPIGroup.DELETE("/llm-config", webHandler.HandleDeleteLLMConfig)
+
+		// v2.2: 飞书账号绑定(状态查询 + 出码)
+		feishuBindHandler := web.NewFeishuBindHandler(bindingSvc)
+		userAPIGroup.GET("/feishu/binding", feishuBindHandler.HandleGetBindingStatus)
+		userAPIGroup.POST("/feishu/bind-code", feishuBindHandler.HandleGenerateBindCode)
 	}
 
 	// 前端静态资源路由 - 嵌入到二进制中
@@ -221,7 +229,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 // 程序退出时由进程结束统一回收(SDK ws client 没有显式 Stop 接口)。
 func startFeishuChannel(
 	cfg *config.Config,
-	userSvc *userService.UserService,
+	bindingSvc *userService.BindingService,
 	msgSvc chatService.MessageService,
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
@@ -243,7 +251,7 @@ func startFeishuChannel(
 	larkClient := lark.NewClient(feishuCfg.AppID, feishuCfg.AppSecret)
 	sender := channelfeishu.NewLarkSender(larkClient)
 
-	handler := channelfeishu.NewMessageHandler(userSvc, msgSvc, agentSvc, llmConfigSvc, sender)
+	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)

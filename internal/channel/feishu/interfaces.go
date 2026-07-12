@@ -14,16 +14,20 @@ import (
 	"context"
 
 	"omnibot/internal/domain/conversation"
-	"omnibot/internal/domain/user"
 	"omnibot/internal/client/llm"
 	agentpkg "omnibot/internal/service/agent"
 	userservice "omnibot/internal/service/user"
 )
 
-// UserService 用户服务接口(取 web handler 同款契约的子集)。
-// 飞书消息走 GetOrCreateByChannel("feishu", openID) → user_id 复用全部跨入口能力。
-type UserService interface {
-	GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error)
+// BindingService 飞书账号绑定服务接口(v2.2)。
+// 飞书消息不再自动建号:先解析绑定码格式 -> 走 BindFeishu;
+// 否则 ResolveFeishuUserID 查已绑定身份,未绑定回引导不建号(PRD 5.4)。
+type BindingService interface {
+	// BindFeishu 提交绑定码完成飞书号与 web 账号绑定。
+	// 返回 nil 成功;ErrCodeInvalid/ErrFeishuAlreadyBound/ErrAccountAlreadyBound 对应 PRD 5.2。
+	BindFeishu(code, openID string) error
+	// ResolveFeishuUserID 解析飞书身份:已绑返 (userID,true);未绑返 (0,false)。
+	ResolveFeishuUserID(openID string) (userID int64, bound bool, err error)
 }
 
 // MessageService 消息服务接口。SaveUserMessage 用飞书 message_id 做去重。

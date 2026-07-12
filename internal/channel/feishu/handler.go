@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	agentpkg "omnibot/internal/service/agent"
 	chatsvc "omnibot/internal/service/chat"
+	usersvc "omnibot/internal/service/user"
 	"omnibot/pkg/logger"
 )
 
@@ -26,7 +28,7 @@ type InboundMessage struct {
 
 // MessageHandler 飞书消息处理器。所有依赖走接口,无 SDK 依赖,完全可单测。
 type MessageHandler struct {
-	userService      UserService
+	bindingService  BindingService
 	messageService   MessageService
 	agentService     AgentService
 	llmConfigService LLMConfigService
@@ -35,14 +37,14 @@ type MessageHandler struct {
 
 // NewMessageHandler 创建飞书消息处理器。
 func NewMessageHandler(
-	user UserService,
+	binding BindingService,
 	msg MessageService,
 	agent AgentService,
 	cfg LLMConfigService,
 	sender Sender,
 ) *MessageHandler {
 	return &MessageHandler{
-		userService:      user,
+		bindingService:  binding,
 		messageService:   msg,
 		agentService:     agent,
 		llmConfigService: cfg,
@@ -72,15 +74,24 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		return nil
 	}
 
-	user, _, _, err := h.userService.GetOrCreateByChannel("feishu", in.OpenID)
+	// v2.2: 身份解析。先看是否绑定码格式,再看是否已绑定,最后未绑定回引导(不建号)。
+	text := strings.TrimSpace(in.Text)
+	if code, ok := parseBindCode(text); ok {
+		return h.handleBindCode(ctx, in.OpenID, code)
+	}
+	userID, bound, err := h.bindingService.ResolveFeishuUserID(in.OpenID)
 	if err != nil {
-		logger.ErrorWithFields("feishu: get or create user failed",
+		logger.ErrorWithFields("feishu: resolve user failed",
 			zap.String("open_id", in.OpenID),
 			zap.Error(err),
 		)
 		return err
 	}
-	userID := user.GetID()
+	if !bound {
+		// 未绑定:不建号、不进对话,回绑定引导(PRD 5.4)
+		_ = h.sender.SendText(ctx, in.OpenID, unboundGuide)
+		return nil
+	}
 
 	// 保存用户消息(飞书 message_id 做幂等)
 	if err := h.messageService.SaveUserMessage(ctx, userID, in.Text, in.MsgID); err != nil {
@@ -189,3 +200,53 @@ func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model stri
 	}
 	return steps
 }
+
+
+// 绑定码格式:「绑定」+ 空格 + 6 位数字(PRD 4.3)。TrimSpace 后匹配。
+var bindCodeRe = regexp.MustCompile(`^绑定 (\d{6})$`)
+
+func parseBindCode(text string) (string, bool) {
+	m := bindCodeRe.FindStringSubmatch(text)
+	if len(m) != 2 {
+		return "", false
+	}
+	return m[1], true
+}
+
+// handleBindCode 处理绑定码提交,按 PRD 5.2 映射回复文案。
+func (h *MessageHandler) handleBindCode(ctx context.Context, openID, code string) error {
+	err := h.bindingService.BindFeishu(code, openID)
+	reply := bindSuccessReply
+	switch {
+	case err == nil:
+		// 成功
+	case errors.Is(err, usersvc.ErrCodeInvalid):
+		reply = bindCodeInvalidReply
+	case errors.Is(err, usersvc.ErrFeishuAlreadyBound):
+		reply = feishuAlreadyBoundReply
+	case errors.Is(err, usersvc.ErrAccountAlreadyBound):
+		reply = accountAlreadyBoundReply
+	default:
+		logger.ErrorWithFields("feishu: bind failed",
+			zap.String("open_id", openID),
+			zap.Error(err),
+		)
+		reply = fallbackReply
+	}
+	if sendErr := h.sender.SendText(ctx, openID, reply); sendErr != nil {
+		logger.WarnWithFields("feishu: send bind reply failed",
+			zap.String("open_id", openID),
+			zap.Error(sendErr),
+		)
+	}
+	return nil
+}
+
+// 绑定相关回复文案(PRD 5.2 / 5.4)
+const (
+	bindSuccessReply       = "绑定成功!现在可以在飞书跟我聊了"
+	bindCodeInvalidReply   = "绑定码无效或已过期,请在 web 端重新获取"
+	feishuAlreadyBoundReply = "该飞书号已绑定其他账号"
+	accountAlreadyBoundReply = "你的账号已绑定飞书,如需更换请稍后(暂不支持)"
+	unboundGuide           = `你还没有绑定 OmniBot 账号。请先在 web 端登录,在设置里获取绑定码,然后在这里发送「绑定 + 空格 + 绑定码」(例如 绑定 123456)完成绑定。`
+)
