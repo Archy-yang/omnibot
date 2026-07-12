@@ -13,7 +13,7 @@
  *
  * 业务逻辑与原 SettingsPanel 等价(provider 预设/校验/保存/清除/主题)。
  */
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import type { LLMConfig } from '@/types/api';
@@ -21,6 +21,7 @@ import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/user';
 import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
+import { feishuService } from '@/services/feishu';
 import DrawerShell from '@/components/layout/DrawerShell.vue';
 
 const props = defineProps<{
@@ -51,6 +52,66 @@ const isSaving = ref(false);
 const isClearing = ref(false);
 const showApiKey = ref(false);
 
+// ===== v2.2 飞书绑定 =====
+const feishuBound = ref<boolean>(false);
+const feishuCode = ref<string>('');
+const feishuCodeExpiresIn = ref<number>(0);
+const feishuCodeLoading = ref<boolean>(false);
+let feishuTimer: ReturnType<typeof setInterval> | null = null;
+
+const clearFeishuTimer = () => {
+  if (feishuTimer) {
+    clearInterval(feishuTimer);
+    feishuTimer = null;
+  }
+};
+
+const startFeishuCountdown = (seconds: number) => {
+  clearFeishuTimer();
+  feishuCodeExpiresIn.value = seconds;
+  feishuTimer = setInterval(() => {
+    feishuCodeExpiresIn.value -= 1;
+    if (feishuCodeExpiresIn.value <= 0) {
+      clearFeishuTimer();
+      feishuCode.value = ''; // 过期清空
+    }
+  }, 1000);
+};
+
+const loadFeishuBinding = async () => {
+  try {
+    const status = await feishuService.getBindingStatus();
+    feishuBound.value = status.bound;
+  } catch (err) {
+    // 静默失败,不阻断抽屉
+    console.error('Failed to load feishu binding:', err);
+  }
+};
+
+const handleGenerateFeishuCode = async () => {
+  feishuCodeLoading.value = true;
+  try {
+    const data = await feishuService.generateBindCode();
+    feishuCode.value = data.code;
+    startFeishuCountdown(data.expires_in || 300);
+    success('绑定码已生成,5 分钟内有效');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '生成绑定码失败');
+  } finally {
+    feishuCodeLoading.value = false;
+  }
+};
+
+const feishuCountdownText = computed(() => {
+  const s = feishuCodeExpiresIn.value;
+  if (s <= 0) return '已过期';
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+});
+
+onUnmounted(() => clearFeishuTimer());
+
 // Sync local from store
 watch(
   () => settingsStore.llmConfig,
@@ -60,7 +121,7 @@ watch(
   { immediate: true, deep: true }
 );
 
-// 抽屉打开时拉 provider 列表 + 当前配置
+// 抽屉打开时拉 provider 列表 + 当前配置 + 飞书绑定状态
 watch(
   () => props.visible,
   (visible) => {
@@ -68,6 +129,7 @@ watch(
       settingsStore.loadProviderOptions();
       settingsStore.loadConfig();
       showApiKey.value = false; // 每次打开重置密码显示态(安全)
+      loadFeishuBinding();
     }
   }
 );
@@ -351,6 +413,51 @@ const handleMaxTokensInput = (e: Event) => {
           <option value="light">浅色</option>
           <option value="dark">深色</option>
         </select>
+      </div>
+
+      <!-- v2.2 飞书账号绑定 -->
+      <div class="feishu-bind-block">
+        <div class="entry-label">飞书账号绑定</div>
+
+        <!-- 已绑定 -->
+        <div v-if="feishuBound" class="feishu-bound-status">
+          <span class="feishu-bound-dot"></span>
+          <span>已绑定飞书</span>
+        </div>
+
+        <!-- 未绑定:获取绑定码 -->
+        <template v-else>
+          <button
+            v-if="!feishuCode"
+            type="button"
+            class="feishu-code-btn"
+            :disabled="feishuCodeLoading"
+            @click="handleGenerateFeishuCode"
+          >
+            {{ feishuCodeLoading ? '生成中...' : '获取飞书绑定码' }}
+          </button>
+
+          <!-- 绑定码已生成 -->
+          <div v-else class="feishu-code-display">
+            <div class="feishu-code-text">{{ feishuCode }}</div>
+            <div class="feishu-code-meta">
+              <span class="feishu-countdown" :class="{ expired: feishuCodeExpiresIn <= 0 }">
+                {{ feishuCountdownText }}
+              </span>
+              <button
+                type="button"
+                class="feishu-regen-btn"
+                :disabled="feishuCodeLoading"
+                @click="handleGenerateFeishuCode"
+              >
+                重新获取
+              </button>
+            </div>
+            <p class="feishu-code-tip">
+              在飞书向机器人发送：<code>绑定 {{ feishuCode }}</code>
+            </p>
+          </div>
+        </template>
       </div>
 
       <!-- 已接入入口 -->
@@ -696,6 +803,105 @@ const handleMaxTokensInput = (e: Event) => {
 }
 .logout-btn:hover {
   background: #fef2f2;
+}
+
+/* v2.2 飞书绑定区块 */
+.feishu-bind-block {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+.feishu-bound-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #15803d;
+}
+.feishu-bound-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+.feishu-code-btn {
+  width: 100%;
+  padding: 10px 16px;
+  background: #10a37f;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.feishu-code-btn:hover:not(:disabled) {
+  background: #0d8f6f;
+}
+.feishu-code-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.feishu-code-display {
+  padding: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.feishu-code-text {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  color: #10a37f;
+  text-align: center;
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+.feishu-code-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.feishu-countdown {
+  font-size: 12px;
+  color: #6b7280;
+}
+.feishu-countdown.expired {
+  color: #b91c1c;
+}
+.feishu-regen-btn {
+  padding: 4px 12px;
+  background: #ffffff;
+  color: #10a37f;
+  border: 1px solid #10a37f;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.feishu-regen-btn:hover:not(:disabled) {
+  background: #f0fdf4;
+}
+.feishu-regen-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.feishu-code-tip {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+.feishu-code-tip code {
+  padding: 2px 6px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: #171717;
 }
 
 .drawer-footer-spacer {
