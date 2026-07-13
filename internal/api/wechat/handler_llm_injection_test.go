@@ -39,7 +39,7 @@ func TestHandler_LLMCall_WithUserConfig(t *testing.T) {
 	llmConfigService := userService.NewLLMConfigService(llmRepo)
 	mockLLM := &MockLLMClientWithConfigCapture{}
 
-	handler := NewHandler(Config{}, mockLLM, nil, llmConfigService)
+	handler := NewHandler(Config{}, mockLLM, &MockBindingService{resolveUserID: 1, resolveBound: true}, llmConfigService)
 
 	// 先设置用户配置（使用 userID = 1）
 	_, _ = handler.handleConfigCommand(1, "#设置Key sk-test-api-key-12345678901234567890")
@@ -66,7 +66,7 @@ func TestHandler_LLMCall_WithoutUserConfig_UsesSystemDefault(t *testing.T) {
 	llmConfigService := userService.NewLLMConfigService(llmRepo)
 	mockLLM := &MockLLMClientWithConfigCapture{}
 
-	handler := NewHandler(Config{}, mockLLM, nil, llmConfigService)
+	handler := NewHandler(Config{}, mockLLM, &MockBindingService{resolveUserID: 1, resolveBound: true}, llmConfigService)
 
 	// 用户没有设置配置，直接对话
 	msg := &channelwechat.InboundMessage{

@@ -145,7 +145,7 @@ func autoMigrate(db *gorm.DB) error {
 		&user.UserChannel{},
 		&user.LLMConfig{},
 		&user.UserCredential{},
-		&user.FeishuBindCode{},
+		&user.BindCode{},
 		&conversation.Message{},
 		&conversation.AgentStep{},
 		&memory.Memory{},

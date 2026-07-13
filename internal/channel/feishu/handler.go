@@ -79,7 +79,7 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 	if code, ok := parseBindCode(text); ok {
 		return h.handleBindCode(ctx, in.OpenID, code)
 	}
-	userID, bound, err := h.bindingService.ResolveFeishuUserID(in.OpenID)
+	userID, bound, err := h.bindingService.ResolveUserID("feishu", in.OpenID)
 	if err != nil {
 		logger.ErrorWithFields("feishu: resolve user failed",
 			zap.String("open_id", in.OpenID),
@@ -215,14 +215,14 @@ func parseBindCode(text string) (string, bool) {
 
 // handleBindCode 处理绑定码提交,按 PRD 5.2 映射回复文案。
 func (h *MessageHandler) handleBindCode(ctx context.Context, openID, code string) error {
-	err := h.bindingService.BindFeishu(code, openID)
+	err := h.bindingService.BindChannel("feishu", code, openID)
 	reply := bindSuccessReply
 	switch {
 	case err == nil:
 		// 成功
 	case errors.Is(err, usersvc.ErrCodeInvalid):
 		reply = bindCodeInvalidReply
-	case errors.Is(err, usersvc.ErrFeishuAlreadyBound):
+	case errors.Is(err, usersvc.ErrChannelAlreadyBound):
 		reply = feishuAlreadyBoundReply
 	case errors.Is(err, usersvc.ErrAccountAlreadyBound):
 		reply = accountAlreadyBoundReply

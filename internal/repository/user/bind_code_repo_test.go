@@ -19,17 +19,17 @@ func setupBindCodeTestDB(t *testing.T) *gorm.DB {
 		TranslateError: true,
 	})
 	require.NoError(t, err)
-	err = db.AutoMigrate(&domain.FeishuBindCode{})
+	err = db.AutoMigrate(&domain.BindCode{})
 	require.NoError(t, err)
 	return db
 }
 
-func TestFeishuBindCodeRepository_UpsertAndGetByCode(t *testing.T) {
+func TestBindCodeRepository_UpsertAndGetByCode(t *testing.T) {
 	db := setupBindCodeTestDB(t)
-	repo := NewFeishuBindCodeRepository(db)
+	repo := NewBindCodeRepository(db)
 
 	expires := time.Now().Add(5 * time.Minute)
-	code := &domain.FeishuBindCode{
+	code := &domain.BindCode{
 		UserID:    1,
 		Code:      "123456",
 		ExpiresAt: expires,
@@ -45,14 +45,14 @@ func TestFeishuBindCodeRepository_UpsertAndGetByCode(t *testing.T) {
 	assert.Equal(t, "123456", found.Code)
 }
 
-func TestFeishuBindCodeRepository_UpsertOverwritesOldCode(t *testing.T) {
+func TestBindCodeRepository_UpsertOverwritesOldCode(t *testing.T) {
 	// PRD 4.1: 重新生成码,旧码作废。同 user_id upsert 覆盖。
 	db := setupBindCodeTestDB(t)
-	repo := NewFeishuBindCodeRepository(db)
+	repo := NewBindCodeRepository(db)
 
-	_ = repo.Upsert(&domain.FeishuBindCode{UserID: 1, Code: "111111", ExpiresAt: time.Now().Add(5 * time.Minute)})
+	_ = repo.Upsert(&domain.BindCode{UserID: 1, Code: "111111", ExpiresAt: time.Now().Add(5 * time.Minute)})
 	// 重新生成 -> 旧码 111111 应不再可查
-	err := repo.Upsert(&domain.FeishuBindCode{UserID: 1, Code: "222222", ExpiresAt: time.Now().Add(5 * time.Minute)})
+	err := repo.Upsert(&domain.BindCode{UserID: 1, Code: "222222", ExpiresAt: time.Now().Add(5 * time.Minute)})
 	require.NoError(t, err)
 
 	_, err = repo.GetByCode("111111")
@@ -63,19 +63,19 @@ func TestFeishuBindCodeRepository_UpsertOverwritesOldCode(t *testing.T) {
 	assert.Equal(t, int64(1), found.UserID)
 }
 
-func TestFeishuBindCodeRepository_GetByCodeNotFound(t *testing.T) {
+func TestBindCodeRepository_GetByCodeNotFound(t *testing.T) {
 	db := setupBindCodeTestDB(t)
-	repo := NewFeishuBindCodeRepository(db)
+	repo := NewBindCodeRepository(db)
 
 	_, err := repo.GetByCode("999999")
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-func TestFeishuBindCodeRepository_GetByUserID(t *testing.T) {
+func TestBindCodeRepository_GetByUserID(t *testing.T) {
 	db := setupBindCodeTestDB(t)
-	repo := NewFeishuBindCodeRepository(db)
+	repo := NewBindCodeRepository(db)
 
-	_ = repo.Upsert(&domain.FeishuBindCode{UserID: 42, Code: "654321", ExpiresAt: time.Now().Add(5 * time.Minute)})
+	_ = repo.Upsert(&domain.BindCode{UserID: 42, Code: "654321", ExpiresAt: time.Now().Add(5 * time.Minute)})
 
 	found, err := repo.GetByUserID(42)
 	require.NoError(t, err)
@@ -85,11 +85,11 @@ func TestFeishuBindCodeRepository_GetByUserID(t *testing.T) {
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-func TestFeishuBindCodeRepository_DeleteByUserID(t *testing.T) {
+func TestBindCodeRepository_DeleteByUserID(t *testing.T) {
 	db := setupBindCodeTestDB(t)
-	repo := NewFeishuBindCodeRepository(db)
+	repo := NewBindCodeRepository(db)
 
-	_ = repo.Upsert(&domain.FeishuBindCode{UserID: 1, Code: "123456", ExpiresAt: time.Now().Add(5 * time.Minute)})
+	_ = repo.Upsert(&domain.BindCode{UserID: 1, Code: "123456", ExpiresAt: time.Now().Add(5 * time.Minute)})
 
 	err := repo.DeleteByUserID(1)
 	require.NoError(t, err)

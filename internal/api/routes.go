@@ -70,6 +70,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// v1.8:WechatAccount 双轨已删除,身份解析统一走 user_channels。
 	userSvc := userService.NewUserService(userRepository, userChannelRepository)
 	llmConfigSvc := userService.NewLLMConfigService(llmConfigRepository)
+	// v2.3: 账号绑定服务(渠道通用,飞书+微信共用;绑定码走 bind_codes 表)
+	bindCodeRepo := userRepo.NewBindCodeRepository(dbConn.GetGormDB())
+	bindingSvc := userService.NewBindingService(userChannelRepository, bindCodeRepo, 5*time.Minute)
 
 	// 初始化消息服务
 	memorySvc := memoryService.NewMemoryService(memoryRepository)
@@ -78,6 +81,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
+	// v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
 	wechatChan := channelwechat.NewChannel()
 	wechatHandler := wechat.NewHandler(wechat.Config{
 		AppID:          cfg.Wechat.AppID,
@@ -85,7 +89,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, userSvc, llmConfigSvc, msgSvc, memorySvc, wechatChan)
+	}, llmClient, bindingSvc, llmConfigSvc, msgSvc, memorySvc, wechatChan)
 	wechatGroup := r.Group("/wechat")
 	{
 		wechatGroup.GET("/callback", wechatHandler.Verify)
@@ -162,9 +166,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
-	// v2.2: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	bindCodeRepo := userRepo.NewFeishuBindCodeRepository(dbConn.GetGormDB())
-	bindingSvc := userService.NewBindingService(userChannelRepository, bindCodeRepo, 5*time.Minute)
+	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
 	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc)
 
 	// 长期记忆路由
@@ -187,10 +189,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		userAPIGroup.PUT("/llm-config", webHandler.HandleUpdateLLMConfig)
 		userAPIGroup.DELETE("/llm-config", webHandler.HandleDeleteLLMConfig)
 
-		// v2.2: 飞书账号绑定(状态查询 + 出码)
-		feishuBindHandler := web.NewFeishuBindHandler(bindingSvc)
-		userAPIGroup.GET("/feishu/binding", feishuBindHandler.HandleGetBindingStatus)
-		userAPIGroup.POST("/feishu/bind-code", feishuBindHandler.HandleGenerateBindCode)
+		// v2.3: 渠道绑定(状态查询 + 出码,通用码服务飞书+微信)
+		channelBindHandler := web.NewChannelBindHandler(bindingSvc)
+		userAPIGroup.GET("/channel-binding", channelBindHandler.HandleGetBindingStatus)
+		userAPIGroup.POST("/channel-binding/bind-code", channelBindHandler.HandleGenerateBindCode)
 	}
 
 	// 前端静态资源路由 - 嵌入到二进制中

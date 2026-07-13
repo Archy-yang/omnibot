@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,10 +17,9 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
-	"omnibot/internal/domain/user"
 	chat "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
-	userService "omnibot/internal/service/user"
+	userSvc "omnibot/internal/service/user"
 	"omnibot/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,22 @@ import (
 )
 
 const systemPrompt = "你是一个友好的智能客服助手，请用简洁的中文回应用户的问题。"
+
+// v2.3: 微信绑定相关常量
+var weChatBindCodeRe = regexp.MustCompile(`^绑定 (\d{6})$`)
+
+const (
+	// 绑定结果回复(PRD 5.1)
+	bindSuccessReplyWeChat       = "绑定成功!现在可以在微信跟我聊了"
+	bindCodeInvalidReply         = "绑定码无效或已过期,请在 web 端重新获取"
+	weChatAlreadyBoundReply      = "该微信号已绑定其他账号"
+	accountWeChatAlreadyBoundReply = "你的账号已绑定微信,如需更换请稍后(暂不支持)"
+	fallbackReplyWeChat          = "服务暂时不可用,请稍后再试"
+	// 未绑定引导(PRD 5.4)
+	unboundGuideWeChat = "你还没有绑定 OmniBot 账号。请先在 web 端登录,在设置里获取绑定码,然后在这里发送「绑定 + 空格 + 绑定码」(例如 绑定 123456)完成绑定。"
+	// 关注欢迎语 + 绑定引导(PRD 5.4)
+	subscribeGuideWeChat = "欢迎关注 OmniBot!你还没有绑定账号,请先在 web 端登录并获取绑定码,然后发送「绑定 + 空格 + 绑定码」完成绑定,绑定后我们就可以聊天啦。"
+)
 
 // callLLM 调用大模型生成回复（支持用户自定义配置和上下文）
 func (h *Handler) callLLM(ctx context.Context, userID int64, userContent string, msgType string) string {
@@ -105,12 +122,12 @@ type LLMClient interface {
 	ChatCompletion(ctx context.Context, messages []llm.ChatMessage) (string, error)
 }
 
-// UserService 用户服务接口
-//
-// v1.8:微信端从 GetOrCreateByOpenID 切换到 GetOrCreateByChannel,与 Web/飞书共用
-// 唯一身份解析路径。channelType 固定为 "wechat",channelUserID 即原 OpenID。
-type UserService interface {
-	GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error)
+// BindingService 账号绑定服务接口(v2.3)。
+// 微信入口从自动建号改为绑定模型:先解析绑定码 -> BindChannel;
+// 否则 ResolveUserID 查已绑身份,未绑回引导不建号(PRD 5.4)。
+type BindingService interface {
+	BindChannel(channelType, code, openID string) error
+	ResolveUserID(channelType, openID string) (userID int64, bound bool, err error)
 }
 
 // Handler 微信公众号处理器。
@@ -122,8 +139,8 @@ type Handler struct {
 	config           Config
 	wechatChannel    *channelwechat.Channel // v1.9 注入,负责出站 XML 序列化
 	llmClient        LLMClient
-	userService      UserService
-	llmConfigService userService.LLMConfigService
+	bindingService  BindingService
+	llmConfigService userSvc.LLMConfigService
 	msgService       chat.MessageService
 	memoryService    memoryService.MemoryService
 }
@@ -145,13 +162,13 @@ type Config struct {
 func NewHandler(
 	config Config,
 	llmClient LLMClient,
-	userService UserService,
+	bindingSvc BindingService,
 	optionalServices ...interface{},
 ) *Handler {
 	handler := &Handler{
 		config:        config,
 		llmClient:     llmClient,
-		userService:   userService,
+		bindingService: bindingSvc,
 		wechatChannel: channelwechat.NewChannel(),
 	}
 
@@ -173,7 +190,7 @@ func NewHandler(
 }
 
 // userLLMConfigService 是为了避免 type switch 中的包名冲突
-type userLLMConfigService = userService.LLMConfigService
+type userLLMConfigService = userSvc.LLMConfigService
 
 // Verify 微信服务器验证
 func (h *Handler) Verify(c *gin.Context) {
@@ -232,17 +249,8 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 		zap.String("msg_id", in.MsgID),
 	)
 
-	// 获取或创建用户（兜底机制）
-	if h.userService != nil {
-		_, _, _, err = h.userService.GetOrCreateByChannel("wechat", in.FromUserName)
-		if err != nil {
-			// 记录错误，但不影响消息正常处理
-			logger.WarnWithFields("Failed to get or create user",
-				zap.String("open_id", in.FromUserName),
-				zap.Error(err),
-			)
-		}
-	}
+	// v2.3: 身份解析下沉到 handleTextMessage(绑定码解析 + 已绑解析 + 未绑引导),
+	// 不再在顶层兜底建号。
 
 	// 分发消息处理(业务路径,只产纯文本)
 	content, err := h.dispatchMessage(in)
@@ -307,10 +315,19 @@ func (h *Handler) dispatchMessage(in *channelwechat.InboundMessage) (string, err
 
 // handleTextMessage 处理文本消息
 func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, error) {
-	// 获取 userID
-	userID := h.getUserIDByOpenID(in.FromUserName)
+	// v2.3: 先看是否绑定码格式
+	if code, ok := parseWeChatBindCode(in.Content); ok {
+		return h.handleBindCode(in.FromUserName, code), nil
+	}
 
-	// 处理配置命令
+	// 解析已绑定身份(未绑不建号)
+	userID, bound := h.getUserIDByOpenID(in.FromUserName)
+	if !bound {
+		// 未绑定:回引导,不进对话/命令(PRD 5.4)
+		return unboundGuideWeChat, nil
+	}
+
+	// 处理配置命令(仅已绑定用户可用)
 	if h.llmConfigService != nil {
 		if reply, handled := h.handleConfigCommand(userID, in.Content); handled {
 			// 配置命令的回复也保存到上下文
@@ -359,15 +376,48 @@ func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, e
 	return content, nil
 }
 
-// getUserIDByOpenID 通过 OpenID 获取 userID
-func (h *Handler) getUserIDByOpenID(openID string) int64 {
-	if h.userService != nil {
-		user, _, _, err := h.userService.GetOrCreateByChannel("wechat", openID)
-		if err == nil && user != nil {
-			return user.ID
+// getUserIDByOpenID 解析已绑定的微信身份。
+// v2.3: 未绑定不再建号,返回 (0, false),由调用方决定回引导。
+func (h *Handler) getUserIDByOpenID(openID string) (int64, bool) {
+	if h.bindingService != nil {
+		uid, bound, err := h.bindingService.ResolveUserID("wechat", openID)
+		if err == nil && bound {
+			return uid, true
 		}
 	}
-	return 0
+	return 0, false
+}
+
+// parseWeChatBindCode 解析「绑定 <6位数字>」格式(PRD 4.3,与飞书同款)。
+func parseWeChatBindCode(text string) (string, bool) {
+	m := weChatBindCodeRe.FindStringSubmatch(strings.TrimSpace(text))
+	if len(m) != 2 {
+		return "", false
+	}
+	return m[1], true
+}
+
+// handleBindCode 处理微信端绑定码提交,按 PRD 5.1 映射回复文案。
+func (h *Handler) handleBindCode(openID, code string) string {
+	err := h.bindingService.BindChannel("wechat", code, openID)
+	reply := bindSuccessReplyWeChat
+	switch {
+	case err == nil:
+		// 成功
+	case errors.Is(err, userSvc.ErrCodeInvalid):
+		reply = bindCodeInvalidReply
+	case errors.Is(err, userSvc.ErrChannelAlreadyBound):
+		reply = weChatAlreadyBoundReply
+	case errors.Is(err, userSvc.ErrAccountAlreadyBound):
+		reply = accountWeChatAlreadyBoundReply
+	default:
+		logger.ErrorWithFields("wechat: bind failed",
+			zap.String("open_id", openID),
+			zap.Error(err),
+		)
+		reply = fallbackReplyWeChat
+	}
+	return reply
 }
 
 // handleConfigCommand 处理配置命令
@@ -639,24 +689,9 @@ func (h *Handler) handleEventMessage(in *channelwechat.InboundMessage) (string, 
 }
 
 // handleSubscribeEvent 处理订阅事件
+// v2.3: 关注不再自动建号,回欢迎语 + 绑定引导(PRD 5.4)。
 func (h *Handler) handleSubscribeEvent(in *channelwechat.InboundMessage) (string, error) {
-	// 关注事件 - 创建用户
-	if h.userService != nil {
-		_, _, isNew, err := h.userService.GetOrCreateByChannel("wechat", in.FromUserName)
-		if err != nil {
-			logger.WarnWithFields("Failed to create user on subscribe",
-				zap.String("open_id", in.FromUserName),
-				zap.Error(err),
-			)
-		}
-		if isNew {
-			logger.InfoWithFields("New user created on subscribe",
-				zap.String("open_id", in.FromUserName),
-			)
-		}
-	}
-
-	return h.callLLM(context.Background(), 0, "用户刚刚关注了公众号，请生成友好的欢迎语", "subscribe"), nil
+	return subscribeGuideWeChat, nil
 }
 
 // handleUnsubscribeEvent 处理取消订阅事件

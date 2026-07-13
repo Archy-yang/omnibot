@@ -30,13 +30,13 @@ type mockBindingService struct {
 	bindGotOpenID string
 }
 
-func (m *mockBindingService) BindFeishu(code, openID string) error {
+func (m *mockBindingService) BindChannel(channelType, code, openID string) error {
 	m.bindCalled = true
 	m.bindGotCode, m.bindGotOpenID = code, openID
 	return m.bindErr
 }
 
-func (m *mockBindingService) ResolveFeishuUserID(openID string) (int64, bool, error) {
+func (m *mockBindingService) ResolveUserID(channelType, openID string) (int64, bool, error) {
 	return m.resolveUserID, m.resolveBound, m.resolveErr
 }
 
@@ -332,7 +332,7 @@ var (
 
 // ===== v2.2 绑定码 / 未绑引导 测试 =====
 
-// 绑定码格式「绑定 123456」-> 走 BindFeishu,成功回复对应文案,不进对话。
+// 绑定码格式「绑定 123456」-> 走 BindChannel,成功回复对应文案,不进对话。
 func TestMessageHandler_BindCode_Success(t *testing.T) {
 	binding := &mockBindingService{resolveBound: true, resolveUserID: 42} // 不会走到 resolve
 	msg := &mockMessageService{}
@@ -382,7 +382,7 @@ func TestMessageHandler_BindCode_Invalid(t *testing.T) {
 }
 
 func TestMessageHandler_BindCode_FeishuAlreadyBound(t *testing.T) {
-	binding := &mockBindingService{bindErr: userservice.ErrFeishuAlreadyBound}
+	binding := &mockBindingService{bindErr: userservice.ErrChannelAlreadyBound}
 	sender := &mockSender{}
 	h := newHandler(binding, &mockMessageService{}, &mockAgentService{result: okResult()}, &mockLLMConfigService{}, sender)
 
@@ -418,7 +418,7 @@ func TestMessageHandler_UnboundUser_GuidedNotCreated(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.False(t, binding.bindCalled, "非绑定码不应触发 BindFeishu")
+	assert.False(t, binding.bindCalled, "非绑定码不应触发 BindChannel")
 	assert.Equal(t, 0, agent.callCount, "未绑定不应进对话")
 	assert.Equal(t, 0, msg.saveAsstCalled, "未绑定不落消息")
 	assert.Equal(t, 1, sender.sendCount)
@@ -440,7 +440,7 @@ func TestMessageHandler_BindCode_FormatMismatch_NotTreatedAsBind(t *testing.T) {
 			OpenID: "ou_x", Text: text, MsgID: "om_f", ChatType: "p2p",
 		})
 		require.NoError(t, err)
-		assert.False(t, binding.bindCalled, "格式不匹配 %q 不应触发 BindFeishu", text)
+		assert.False(t, binding.bindCalled, "格式不匹配 %q 不应触发 BindChannel", text)
 	}
 }
 
