@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"omnibot/internal/client/llm"
-	"omnibot/internal/domain/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
 
@@ -36,26 +35,26 @@ func (m *MockLLMClient) ChatCompletion(ctx context.Context, messages []llm.ChatM
 	return m.returnString, m.returnError
 }
 
-// MockUserService 用于单元测试的 Mock 用户服务。
-//
-// v1.8:微信端切换到通道路径,UserService 接口改为 GetOrCreateByChannel,
-// 与 web/feishu 共用同一身份解析模型。lastOpenID 字段保留,记录的是
-// channelUserID(对微信通道而言就是 OpenID),测试用例无需修改。
-type MockUserService struct {
-	returnUser      *user.User
-	returnChannel   *user.UserChannel
-	returnIsNew     bool
-	returnError     error
-	called          bool
-	lastChannelType string
-	lastOpenID      string
+// MockBindingService 用于单元测试的 Mock 绑定服务(v2.3)。
+// ResolveUserID 返回预设的 (userID, bound);BindChannel 返回预设 err。
+type MockBindingService struct {
+	resolveUserID int64
+	resolveBound  bool
+	resolveErr    error
+	bindErr       error
+	bindCalled    bool
+	bindGotCode   string
+	bindGotOpenID string
 }
 
-func (m *MockUserService) GetOrCreateByChannel(channelType, channelUserID string) (*user.User, *user.UserChannel, bool, error) {
-	m.called = true
-	m.lastChannelType = channelType
-	m.lastOpenID = channelUserID
-	return m.returnUser, m.returnChannel, m.returnIsNew, m.returnError
+func (m *MockBindingService) BindChannel(channelType, code, openID string) error {
+	m.bindCalled = true
+	m.bindGotCode, m.bindGotOpenID = code, openID
+	return m.bindErr
+}
+
+func (m *MockBindingService) ResolveUserID(channelType, openID string) (int64, bool, error) {
+	return m.resolveUserID, m.resolveBound, m.resolveErr
 }
 
 func TestHandler_Verify_ValidSignature(t *testing.T) {
@@ -66,7 +65,7 @@ func TestHandler_Verify_ValidSignature(t *testing.T) {
 
 	// 安排
 	mockLLM := &MockLLMClient{}
-	mockUser := &MockUserService{}
+	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -94,7 +93,7 @@ func TestHandler_Verify_InvalidSignature(t *testing.T) {
 
 	// 安排
 	mockLLM := &MockLLMClient{}
-	mockUser := &MockUserService{}
+	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -121,10 +120,7 @@ func TestHandler_HandleMessage_DoesNotRequireRawBodyLogging(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnString: "这是 LLM 生成的智能回复",
 	}
-	mockUser := &MockUserService{
-		returnUser:  user.NewUser(),
-		returnIsNew: false,
-	}
+	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -170,10 +166,7 @@ func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnString: "这是 LLM 生成的智能回复",
 	}
-	mockUser := &MockUserService{
-		returnUser:  user.NewUser(),
-		returnIsNew: false,
-	}
+	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -199,9 +192,6 @@ func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 	// 断言
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, mockLLM.called, "应该调用 LLM")
-	assert.True(t, mockUser.called, "应该调用 UserService")
-	assert.Equal(t, "wechat", mockUser.lastChannelType, "微信端应使用 channelType=wechat")
-	assert.Equal(t, "openid_test", mockUser.lastOpenID, "应该使用正确的 openID")
 	assert.Contains(t, w.Body.String(), "<![CDATA[这是 LLM 生成的智能回复]]>")
 	assert.Contains(t, w.Body.String(), "<ToUserName><![CDATA[openid_test]]></ToUserName>")
 	assert.Contains(t, w.Body.String(), "<FromUserName><![CDATA[gh_test]]></FromUserName>")
@@ -217,10 +207,7 @@ func TestHandler_HandleMessage_TextMessage_LLMFails(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnError: assert.AnError,
 	}
-	mockUser := &MockUserService{
-		returnUser:  user.NewUser(),
-		returnIsNew: false,
-	}
+	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -259,10 +246,7 @@ func TestHandler_HandleMessage_ImageMessage(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnString: "好的，我收到了您的图片",
 	}
-	mockUser := &MockUserService{
-		returnUser:  user.NewUser(),
-		returnIsNew: false,
-	}
+	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -297,6 +281,7 @@ func TestHandler_HandleMessage_ImageMessage(t *testing.T) {
 }
 
 func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
+	// v2.3: 关注事件不再建号/调 LLM,回固定欢迎语 + 绑定引导
 	// 初始化日志
 	logger.Init(config.LoggerConfig{
 		Level: "info",
@@ -306,10 +291,7 @@ func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnString: "欢迎关注我们的公众号！",
 	}
-	mockUser := &MockUserService{
-		returnUser:  user.NewUser(),
-		returnIsNew: true,
-	}
+	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -332,14 +314,11 @@ func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
 	// 执行
 	r.ServeHTTP(w, req)
 
-	// 断言
+	// 断言:回欢迎语 + 绑定引导,不调 LLM
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.True(t, mockLLM.called, "应该调用 LLM")
-	assert.True(t, mockUser.called, "应该调用 UserService")
-	assert.Equal(t, "wechat", mockUser.lastChannelType, "微信端应使用 channelType=wechat")
-	assert.Equal(t, "openid_test", mockUser.lastOpenID, "应该使用正确的 openID")
-	assert.Equal(t, "用户刚刚关注了公众号，请生成友好的欢迎语", mockLLM.lastMessages[1].Content)
-	assert.Contains(t, w.Body.String(), "<![CDATA[欢迎关注我们的公众号！]]>")
+	assert.False(t, mockLLM.called, "v2.3 关注事件不调 LLM,回固定引导文案")
+	assert.Contains(t, w.Body.String(), "欢迎关注 OmniBot")
+	assert.Contains(t, w.Body.String(), "绑定")
 }
 
 func TestHandler_HandleMessage_SubscribeEvent_UserServiceError(t *testing.T) {
@@ -352,9 +331,7 @@ func TestHandler_HandleMessage_SubscribeEvent_UserServiceError(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		returnString: "欢迎关注我们的公众号！",
 	}
-	mockUser := &MockUserService{
-		returnError: assert.AnError,
-	}
+	mockUser := &MockBindingService{resolveErr: assert.AnError}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)
@@ -377,11 +354,10 @@ func TestHandler_HandleMessage_SubscribeEvent_UserServiceError(t *testing.T) {
 	// 执行
 	r.ServeHTTP(w, req)
 
-	// 断言
+	// 断言:v2.3 订阅事件不依赖 bindingService,直接回固定引导文案
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.True(t, mockUser.called, "应该调用 UserService")
-	assert.True(t, mockLLM.called, "UserService 出错时仍应调用 LLM")
-	assert.Contains(t, w.Body.String(), "<![CDATA[欢迎关注我们的公众号！]]>")
+	assert.False(t, mockLLM.called, "v2.3 关注事件不调 LLM")
+	assert.Contains(t, w.Body.String(), "欢迎关注 OmniBot")
 }
 
 func TestHandler_HandleMessage_Unsubscribe_NoResponse(t *testing.T) {
@@ -392,7 +368,7 @@ func TestHandler_HandleMessage_Unsubscribe_NoResponse(t *testing.T) {
 
 	// 安排
 	mockLLM := &MockLLMClient{}
-	mockUser := &MockUserService{}
+	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
 	}, mockLLM, mockUser)

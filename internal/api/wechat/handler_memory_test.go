@@ -8,7 +8,6 @@ import (
 
 	channelwechat "omnibot/internal/channel/wechat"
 	memorydomain "omnibot/internal/domain/memory"
-	"omnibot/internal/domain/user"
 	memorysvc "omnibot/internal/service/memory"
 
 	"github.com/stretchr/testify/assert"
@@ -240,7 +239,7 @@ func TestHandler_HandleMemoryCommand_WithoutMemoryServiceDoesNotHandle(t *testin
 
 func TestNewHandler_AcceptsMemoryService(t *testing.T) {
 	memoryService := &mockMemoryService{}
-	handler := NewHandler(Config{Token: "testtoken"}, &MockLLMClient{}, &MockUserService{}, memoryService)
+	handler := NewHandler(Config{Token: "testtoken"}, &MockLLMClient{}, &MockBindingService{}, memoryService)
 
 	assert.Same(t, memoryService, handler.memoryService)
 }
@@ -248,7 +247,7 @@ func TestNewHandler_AcceptsMemoryService(t *testing.T) {
 func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
 	memoryService := &mockMemoryService{}
 	llmClient := &MockLLMClient{returnString: "LLM reply"}
-	mockUser := &MockUserService{returnUser: &user.User{ID: 42}, returnIsNew: false}
+	mockUser := &MockBindingService{resolveUserID: 42, resolveBound: true}
 	handler := NewHandler(Config{Token: "testtoken"}, llmClient, mockUser, memoryService)
 
 	msg := &channelwechat.InboundMessage{

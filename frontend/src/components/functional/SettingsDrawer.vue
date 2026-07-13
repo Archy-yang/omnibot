@@ -21,7 +21,7 @@ import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/user';
 import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
-import { feishuService } from '@/services/feishu';
+import { channelBindingService } from '@/services/channelBinding';
 import DrawerShell from '@/components/layout/DrawerShell.vue';
 
 const props = defineProps<{
@@ -54,6 +54,7 @@ const showApiKey = ref(false);
 
 // ===== v2.2 飞书绑定 =====
 const feishuBound = ref<boolean>(false);
+const wechatBound = ref<boolean>(false);
 const feishuCode = ref<string>('');
 const feishuCodeExpiresIn = ref<number>(0);
 const feishuCodeLoading = ref<boolean>(false);
@@ -78,20 +79,21 @@ const startFeishuCountdown = (seconds: number) => {
   }, 1000);
 };
 
-const loadFeishuBinding = async () => {
+const loadChannelBinding = async () => {
   try {
-    const status = await feishuService.getBindingStatus();
-    feishuBound.value = status.bound;
+    const status = await channelBindingService.getBindingStatus();
+    feishuBound.value = status.feishu_bound;
+    wechatBound.value = status.wechat_bound;
   } catch (err) {
     // 静默失败,不阻断抽屉
-    console.error('Failed to load feishu binding:', err);
+    console.error('Failed to load channel binding:', err);
   }
 };
 
-const handleGenerateFeishuCode = async () => {
+const handleGenerateBindCode = async () => {
   feishuCodeLoading.value = true;
   try {
-    const data = await feishuService.generateBindCode();
+    const data = await channelBindingService.generateBindCode();
     feishuCode.value = data.code;
     startFeishuCountdown(data.expires_in || 300);
     success('绑定码已生成,5 分钟内有效');
@@ -129,7 +131,7 @@ watch(
       settingsStore.loadProviderOptions();
       settingsStore.loadConfig();
       showApiKey.value = false; // 每次打开重置密码显示态(安全)
-      loadFeishuBinding();
+      loadChannelBinding();
     }
   }
 );
@@ -415,26 +417,35 @@ const handleMaxTokensInput = (e: Event) => {
         </select>
       </div>
 
-      <!-- v2.2 飞书账号绑定 -->
+      <!-- v2.3 渠道绑定(飞书 + 微信,通用绑定码) -->
       <div class="feishu-bind-block">
-        <div class="entry-label">飞书账号绑定</div>
+        <div class="entry-label">渠道绑定</div>
 
-        <!-- 已绑定 -->
-        <div v-if="feishuBound" class="feishu-bound-status">
-          <span class="feishu-bound-dot"></span>
-          <span>已绑定飞书</span>
+        <!-- 各渠道绑定状态 -->
+        <div class="channel-status-row">
+          <div class="channel-status-item" :class="{ bound: feishuBound }">
+            <span class="channel-dot"></span>
+            <span class="channel-name">飞书</span>
+            <span class="channel-state">{{ feishuBound ? '已绑定' : '未绑定' }}</span>
+          </div>
+          <div class="channel-status-item" :class="{ bound: wechatBound }">
+            <span class="channel-dot"></span>
+            <span class="channel-name">微信</span>
+            <span class="channel-state">{{ wechatBound ? '已绑定' : '未绑定' }}</span>
+          </div>
         </div>
 
-        <!-- 未绑定:获取绑定码 -->
-        <template v-else>
+        <!-- 全部已绑:不展示出码区 -->
+        <template v-if="!(feishuBound && wechatBound)">
+          <!-- 未生成码:获取按钮 -->
           <button
             v-if="!feishuCode"
             type="button"
             class="feishu-code-btn"
             :disabled="feishuCodeLoading"
-            @click="handleGenerateFeishuCode"
+            @click="handleGenerateBindCode"
           >
-            {{ feishuCodeLoading ? '生成中...' : '获取飞书绑定码' }}
+            {{ feishuCodeLoading ? '生成中...' : '获取绑定码' }}
           </button>
 
           <!-- 绑定码已生成 -->
@@ -448,13 +459,13 @@ const handleMaxTokensInput = (e: Event) => {
                 type="button"
                 class="feishu-regen-btn"
                 :disabled="feishuCodeLoading"
-                @click="handleGenerateFeishuCode"
+                @click="handleGenerateBindCode"
               >
                 重新获取
               </button>
             </div>
             <p class="feishu-code-tip">
-              在飞书向机器人发送：<code>绑定 {{ feishuCode }}</code>
+              在你要绑定的渠道(飞书或微信)向机器人发送：<code>绑定 {{ feishuCode }}</code>
             </p>
           </div>
         </template>
@@ -805,29 +816,53 @@ const handleMaxTokensInput = (e: Event) => {
   background: #fef2f2;
 }
 
-/* v2.2 飞书绑定区块 */
+/* v2.3 渠道绑定区块 */
 .feishu-bind-block {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid #f0f0f0;
 }
-.feishu-bound-status {
+.channel-status-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.channel-status-item {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   font-size: 13px;
-  color: #15803d;
 }
-.feishu-bound-dot {
+.channel-status-item.bound {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.channel-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  background: #d1d5db;
+}
+.channel-status-item.bound .channel-dot {
   background: #22c55e;
 }
+.channel-name {
+  font-weight: 500;
+  color: #171717;
+}
+.channel-state {
+  margin-left: auto;
+  color: #6b7280;
+}
+.channel-status-item.bound .channel-state {
+  color: #15803d;
+}
+
 .feishu-code-btn {
   width: 100%;
   padding: 10px 16px;
