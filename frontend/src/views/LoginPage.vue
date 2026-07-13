@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { authService } from '@/services/auth';
 import { useAuthStore } from '@/stores/user';
+import { APP_NAME, APP_VERSION } from '@/constants/about';
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -11,6 +12,7 @@ const email = ref('');
 const password = ref('');
 const errorMsg = ref('');
 const isSubmitting = ref(false);
+const showPassword = ref(false);
 
 const submit = async () => {
   if (!email.value || !password.value) {
@@ -29,38 +31,75 @@ const submit = async () => {
     isSubmitting.value = false;
   }
 };
+
+const togglePassword = () => {
+  showPassword.value = !showPassword.value;
+};
 </script>
 
 <template>
   <div class="auth-page">
+    <!-- 品牌标识 -->
+    <div class="brand-icon">
+      <span>O</span>
+    </div>
+
+    <!-- 登录卡片 -->
     <div class="auth-card">
-      <h1 class="auth-title">登录 OmniBot</h1>
+      <!-- 标题区 -->
+      <div class="card-title">登录 OmniBot</div>
+      <div class="card-subtitle">登录以继续使用你的私人助理</div>
 
       <form class="auth-form" @submit.prevent="submit">
-        <label class="field">
-          <span class="field-label">邮箱</span>
+        <!-- 邮箱 -->
+        <div class="form-group">
+          <div class="form-label">邮箱地址</div>
           <input
             v-model.trim="email"
+            class="form-input"
             type="email"
             autocomplete="email"
             placeholder="you@example.com"
             :disabled="isSubmitting"
           />
-        </label>
+        </div>
 
-        <label class="field">
-          <span class="field-label">密码</span>
-          <input
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            placeholder="8~64 位"
-            :disabled="isSubmitting"
-          />
-        </label>
+        <!-- 密码 -->
+        <div class="form-group">
+          <div class="form-label">密码</div>
+          <div class="password-wrapper">
+            <input
+              v-model="password"
+              class="form-input"
+              :type="showPassword ? 'text' : 'password'"
+              autocomplete="current-password"
+              placeholder="输入密码"
+              :disabled="isSubmitting"
+            />
+            <button
+              type="button"
+              class="password-toggle"
+              title="显示/隐藏密码"
+              @click="togglePassword"
+            >
+              <!-- 睁眼图标(showPassword=true 时显示) -->
+              <svg v-if="showPassword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+              <!-- 闭眼图标(默认) -->
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+        </div>
 
+        <!-- 错误提示 -->
         <p v-if="errorMsg" class="error-text">{{ errorMsg }}</p>
 
+        <!-- 登录按钮 -->
         <button
           type="submit"
           class="submit-btn"
@@ -70,80 +109,147 @@ const submit = async () => {
         </button>
       </form>
 
+      <!-- 注册引导 -->
       <div class="auth-footer">
-        <span>还没有账号?</span>
-        <router-link to="/register" class="link">去注册</router-link>
+        还没有账号？<router-link to="/register" class="link">注册</router-link>
       </div>
+    </div>
+
+    <!-- 底部信息 -->
+    <div class="footer">
+      <div class="footer-version">{{ APP_NAME }} {{ APP_VERSION }}</div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .auth-page {
+  width: 100%;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #f9fafb;
+  background: #fafafa;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
   padding: 24px;
 }
 
-.auth-card {
-  width: 100%;
-  max-width: 400px;
-  padding: 40px 32px;
-  background: #ffffff;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+/* 品牌图标 */
+.brand-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #10a37f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+.brand-icon span {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1;
 }
 
-.auth-title {
-  font-size: 22px;
+/* 登录卡片 */
+.auth-card {
+  background: #ffffff;
+  border-radius: 12px;
+  width: 380px;
+  max-width: 100%;
+  padding: 32px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.card-title {
+  font-size: 20px;
   font-weight: 600;
   color: #171717;
-  text-align: center;
-  margin: 0 0 32px;
+  margin-bottom: 4px;
+}
+.card-subtitle {
+  font-size: 13px;
+  color: #999;
+  margin-bottom: 24px;
 }
 
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* 表单字段 */
+.form-group + .form-group {
+  margin-top: 16px;
 }
-
-.field-label {
+.form-label {
   font-size: 13px;
+  color: #666;
   font-weight: 500;
-  color: #4b5563;
+  margin-bottom: 6px;
 }
-
-.field input {
+.form-input {
+  width: 100%;
   padding: 10px 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
   font-size: 14px;
   color: #171717;
+  background: #ffffff;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  font-family: inherit;
+  box-sizing: border-box;
 }
-
-.field input:focus {
+.form-input::placeholder {
+  color: #bbb;
+}
+.form-input:focus {
   border-color: #10a37f;
+  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
 }
-
-.field input:disabled {
-  background: #f3f4f6;
+.form-input:disabled {
+  background: #f9f9f9;
   cursor: not-allowed;
 }
 
+/* 密码框 */
+.password-wrapper {
+  position: relative;
+}
+.password-wrapper .form-input {
+  padding-right: 40px;
+}
+.password-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.password-toggle:hover {
+  background: #f5f5f5;
+}
+.password-toggle svg {
+  width: 16px;
+  height: 16px;
+  color: #999;
+}
+
+/* 错误提示 */
 .error-text {
-  margin: -4px 0 0;
+  margin: 12px 0 0;
   padding: 8px 12px;
   font-size: 13px;
   color: #b91c1c;
@@ -152,43 +258,52 @@ const submit = async () => {
   border-radius: 4px;
 }
 
+/* 登录按钮(黑色,对齐设计稿) */
 .submit-btn {
-  margin-top: 8px;
-  padding: 11px 16px;
-  background: #10a37f;
+  width: 100%;
+  padding: 10px;
+  background: #171717;
   color: #ffffff;
-  font-size: 14px;
-  font-weight: 500;
   border: none;
   border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 150ms ease;
+  font-family: inherit;
+  margin-top: 24px;
 }
-
 .submit-btn:hover:not(:disabled) {
-  background: #0d8f6f;
+  background: #333;
 }
-
 .submit-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
+/* 注册引导 */
 .auth-footer {
-  margin-top: 24px;
-  font-size: 13px;
-  color: #6b7280;
   text-align: center;
+  font-size: 13px;
+  color: #999;
+  margin-top: 20px;
 }
-
 .link {
-  margin-left: 6px;
   color: #10a37f;
   text-decoration: none;
-  font-weight: 500;
+  cursor: pointer;
 }
-
 .link:hover {
   text-decoration: underline;
+}
+
+/* 底部信息 */
+.footer {
+  margin-top: 32px;
+  text-align: center;
+}
+.footer-version {
+  font-size: 12px;
+  color: #ccc;
 }
 </style>
