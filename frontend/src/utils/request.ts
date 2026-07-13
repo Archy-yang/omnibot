@@ -38,8 +38,12 @@ instance.interceptors.response.use(
       const { status, data } = error.response;
       switch (status) {
         case 401:
-          localStorage.removeItem('token');
-          window.location.href = '/login';
+          // /auth/* 的 401 是登录/注册失败,用户已在登录页,不跳转避免死循环;
+          // 其他端点 401 = token 失效,清 token 跳登录
+          if (!error.config?.url?.startsWith('/auth/')) {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+          }
           break;
         case 403:
           console.error('Permission denied');
@@ -53,7 +57,8 @@ instance.interceptors.response.use(
         default:
           console.error('Unknown error');
       }
-      const errorMessage = (data as { message?: string })?.message || error.message;
+      // 后端统一响应:{success, error?};错误文案在 data.error
+      const errorMessage = (data as { error?: string })?.error || (data as { message?: string })?.message || error.message;
       return Promise.reject(new Error(errorMessage));
     }
     if (error.request) {

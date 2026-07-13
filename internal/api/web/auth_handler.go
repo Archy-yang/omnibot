@@ -49,11 +49,11 @@ type authResponse struct {
 func (h *AuthHandler) HandleRegister(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入邮箱和密码"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请输入邮箱和密码"})
 		return
 	}
 	if req.Password != req.ConfirmPassword {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "两次输入的密码不一致"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "两次输入的密码不一致"})
 		return
 	}
 	token, err := h.authService.Register(req.Email, req.Password)
@@ -62,7 +62,7 @@ func (h *AuthHandler) HandleRegister(c *gin.Context) {
 		c.JSON(status, body)
 		return
 	}
-	c.JSON(http.StatusOK, authResponse{Token: token})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": authResponse{Token: token}})
 }
 
 // HandleLogin POST /api/v1/auth/login
@@ -71,7 +71,7 @@ func (h *AuthHandler) HandleRegister(c *gin.Context) {
 func (h *AuthHandler) HandleLogin(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入邮箱和密码"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请输入邮箱和密码"})
 		return
 	}
 	token, err := h.authService.Login(req.Email, req.Password)
@@ -80,20 +80,20 @@ func (h *AuthHandler) HandleLogin(c *gin.Context) {
 		c.JSON(status, body)
 		return
 	}
-	c.JSON(http.StatusOK, authResponse{Token: token})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": authResponse{Token: token}})
 }
 
 // mapRegisterError 把 service sentinel error 映射为 HTTP status + PRD 定稿的用户提示
 func mapRegisterError(err error) (int, gin.H) {
 	switch {
 	case errors.Is(err, userLLM.ErrEmailInvalid):
-		return http.StatusBadRequest, gin.H{"error": "请输入有效的邮箱地址"}
+		return http.StatusBadRequest, gin.H{"success": false, "error": "请输入有效的邮箱地址"}
 	case errors.Is(err, userLLM.ErrPasswordInvalid):
-		return http.StatusBadRequest, gin.H{"error": "密码长度需为 8~64 位"}
+		return http.StatusBadRequest, gin.H{"success": false, "error": "密码长度需为 8~64 位"}
 	case errors.Is(err, userLLM.ErrEmailAlreadyExists):
-		return http.StatusConflict, gin.H{"error": "该邮箱已注册,请直接登录"}
+		return http.StatusConflict, gin.H{"success": false, "error": "该邮箱已注册,请直接登录"}
 	default:
-		return http.StatusInternalServerError, gin.H{"error": "注册失败,请稍后重试"}
+		return http.StatusInternalServerError, gin.H{"success": false, "error": "注册失败,请稍后重试"}
 	}
 }
 
@@ -101,10 +101,10 @@ func mapRegisterError(err error) (int, gin.H) {
 func mapLoginError(err error) (int, gin.H) {
 	switch {
 	case errors.Is(err, userLLM.ErrInvalidCredentials):
-		return http.StatusUnauthorized, gin.H{"error": "邮箱或密码错误"}
+		return http.StatusUnauthorized, gin.H{"success": false, "error": "邮箱或密码错误"}
 	case errors.Is(err, userLLM.ErrAccountUnavailable):
-		return http.StatusForbidden, gin.H{"error": "该账号不可用"}
+		return http.StatusForbidden, gin.H{"success": false, "error": "该账号不可用"}
 	default:
-		return http.StatusInternalServerError, gin.H{"error": "登录失败,请稍后重试"}
+		return http.StatusInternalServerError, gin.H{"success": false, "error": "登录失败,请稍后重试"}
 	}
 }

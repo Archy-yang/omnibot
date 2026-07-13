@@ -51,7 +51,7 @@ func (h *ChannelBindHandler) HandleGetBindingStatus(c *gin.Context) {
 	for _, ch := range supportedChannels {
 		bound, err := h.svc.IsChannelBound(userID, ch)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询绑定状态失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "查询绑定状态失败"})
 			return
 		}
 		switch ch {
@@ -61,7 +61,7 @@ func (h *ChannelBindHandler) HandleGetBindingStatus(c *gin.Context) {
 			resp.WeChatBound = bound
 		}
 	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }
 
 // HandleGenerateBindCode POST /api/v1/user/channel-binding/bind-code
@@ -75,7 +75,7 @@ func (h *ChannelBindHandler) HandleGenerateBindCode(c *gin.Context) {
 	for _, ch := range supportedChannels {
 		bound, err := h.svc.IsChannelBound(userID, ch)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成绑定码失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "生成绑定码失败"})
 			return
 		}
 		if !bound {
@@ -84,22 +84,22 @@ func (h *ChannelBindHandler) HandleGenerateBindCode(c *gin.Context) {
 		}
 	}
 	if allBound {
-		c.JSON(http.StatusConflict, gin.H{"error": "你的账号已绑定全部渠道"})
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "你的账号已绑定全部渠道"})
 		return
 	}
 
 	code, expires, err := h.svc.GenerateCode(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成绑定码失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "生成绑定码失败"})
 		return
 	}
 	expiresIn := int(time.Until(expires).Seconds())
 	if expiresIn < 0 {
 		expiresIn = 0
 	}
-	c.JSON(http.StatusOK, bindCodeResponse{
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": bindCodeResponse{
 		Code:      code,
 		ExpiresAt: expires.Format(time.RFC3339),
 		ExpiresIn: expiresIn,
-	})
+	}})
 }
