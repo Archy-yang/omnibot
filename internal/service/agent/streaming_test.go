@@ -92,8 +92,8 @@ func TestReActAgent_RunStream_NoToolCall(t *testing.T) {
 
 	events := drainEvents(t, ch)
 
-	// 预期：3 个 Token + 1 个 LLMCall（v1.5.5 运行链路记录）+ 1 个 Done
-	require.Len(t, events, 5)
+	// 预期：3 个 Token + 1 个 LLMCall + 1 个 Final(C5 回复轮标记) + 1 个 Done
+	require.Len(t, events, 6)
 	assert.Equal(t, AgentEventToken, events[0].Type)
 	assert.Equal(t, "你", events[0].Content)
 	assert.Equal(t, "好", events[1].Content)
@@ -103,8 +103,11 @@ func TestReActAgent_RunStream_NoToolCall(t *testing.T) {
 	assert.Equal(t, StepStatusSuccess, events[3].StepStatus)
 	assert.NotEmpty(t, events[3].LLMRequest)
 	assert.Contains(t, events[3].LLMResponse, "你好！")
-	assert.Equal(t, AgentEventDone, events[4].Type)
+	// C5:回复轮发 Final,携带完整回复文本
+	assert.Equal(t, AgentEventFinal, events[4].Type)
 	assert.Equal(t, "你好！", events[4].Content)
+	assert.Equal(t, AgentEventDone, events[5].Type)
+	assert.Equal(t, "你好！", events[5].Content)
 }
 
 // TestReActAgent_RunStream_SingleToolCall：LLM 第一轮决定调用一个工具，第二轮输出文本回答。
@@ -171,14 +174,16 @@ func TestReActAgent_RunStream_SingleToolCall(t *testing.T) {
 	assert.Equal(t, "{}", events[2].ToolArguments)
 	assert.GreaterOrEqual(t, events[2].StepDurationMs, int64(0))
 
-	// 后续是 token 流、round2 的 llm_call、done
+	// 后续是 token 流、round2 的 llm_call、Final(C5)、done
 	assert.Equal(t, AgentEventToken, events[3].Type)
 	assert.Equal(t, "现在是 ", events[3].Content)
 	assert.Equal(t, AgentEventToken, events[4].Type)
 	assert.Equal(t, "10:30", events[4].Content)
 	assert.Equal(t, AgentEventLLMCall, events[5].Type)
-	assert.Equal(t, AgentEventDone, events[6].Type)
+	assert.Equal(t, AgentEventFinal, events[6].Type)
 	assert.Equal(t, "现在是 10:30", events[6].Content)
+	assert.Equal(t, AgentEventDone, events[7].Type)
+	assert.Equal(t, "现在是 10:30", events[7].Content)
 }
 
 // TestReActAgent_RunStream_MultipleToolCalls：LLM 连续调用两次工具再给最终回答。
@@ -245,6 +250,7 @@ func TestReActAgent_RunStream_MultipleToolCalls(t *testing.T) {
 		AgentEventLLMCall, AgentEventToolCall, AgentEventToolResult, // round2: tool_b
 		AgentEventToken,   // round3: "完成" token 先于 LLMCall（无工具轮先流 token，循环后才记 llm_call）
 		AgentEventLLMCall, // round3: llm_call 记录
+		AgentEventFinal,   // C5: 回复轮发 Final
 		AgentEventDone,
 	}
 	assert.Equal(t, expected, types)
@@ -253,6 +259,91 @@ func TestReActAgent_RunStream_MultipleToolCalls(t *testing.T) {
 	assert.Equal(t, "tool_a", events[1].ToolName)
 	assert.Equal(t, "tool_b", events[4].ToolName)
 	assert.Equal(t, "完成", events[6].Content)
+}
+
+// TestReActAgent_RunStream_FinalEventMarksReplyRound 思考模式 C5:回复轮(无 tool_call)
+// 末必须发 AgentEventFinal,携带该轮完整文本;思考轮(有 tool_call)不发 Final。
+// 模拟用户报告的 aihot 场景:思考文本+工具 -> 思考文本+工具 -> 最终回复。
+func TestReActAgent_RunStream_FinalEventMarksReplyRound(t *testing.T) {
+	llm := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			// round1: 思考文本 + 调 rss_reader
+			{
+				{ContentDelta: "我来读取这个网站。"},
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "rss_reader", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round2: 思考文本 + 再调 rss_reader
+			{
+				{ContentDelta: "让我尝试 RSS 地址。"},
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "rss_reader", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round3: 最终回复(无工具)
+			{
+				{ContentDelta: "这是最新文章资讯。"},
+				{FinishReason: "stop"},
+				{Done: true},
+			},
+		},
+	}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "rss_reader", DisplayLabel: "读取了 RSS 订阅",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "获取资讯"},
+	})
+	require.NoError(t, err)
+
+	events := drainEvents(t, ch)
+
+	// 收集所有 Final 事件:C5 下应恰好 1 个,且在回复轮(round3)发出
+	finals := []AgentEvent{}
+	for _, e := range events {
+		if e.Type == AgentEventFinal {
+			finals = append(finals, e)
+		}
+	}
+	require.Len(t, finals, 1, "回复轮应发 1 个 Final 事件")
+	assert.Equal(t, "这是最新文章资讯。", finals[0].Content, "Final 携带回复轮完整文本")
+
+	// Final 必须在 Done 之前(回复轮末 -> Final -> Done)
+	drainTypes := make([]AgentEventType, 0, len(events))
+	for _, e := range events {
+		drainTypes = append(drainTypes, e.Type)
+	}
+	finalIdx := -1
+	doneIdx := -1
+	for i, ty := range drainTypes {
+		if ty == AgentEventFinal {
+			finalIdx = i
+		}
+		if ty == AgentEventDone {
+			doneIdx = i
+		}
+	}
+	assert.Greater(t, finalIdx, -1, "有 Final")
+	assert.Greater(t, doneIdx, finalIdx, "Final 在 Done 之前")
+
+	// 思考轮(round1/round2)的 token 不应出现在 Final 里
+	assert.NotContains(t, finals[0].Content, "我来读取这个网站")
+	assert.NotContains(t, finals[0].Content, "让我尝试 RSS 地址")
 }
 
 // TestReActAgent_RunStream_ToolNotFound：LLM 调用了一个未注册的工具，

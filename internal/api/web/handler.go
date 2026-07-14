@@ -539,13 +539,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	for ev := range eventCh {
 		switch ev.Type {
 		case agentpkg.AgentEventToken:
-			// token 只进 segments(供思考块/主气泡分拆渲染),不直接累加 finalContent;
-			// finalContent 在循环结束后从 segments 最后一个 text 段取。
-			// 末尾是 text 段就追加，否则新建 text 段（与前端 store onChunk 一致）
+			// token 进 segments(供思考块/主气泡分拆渲染)。新建 text 段默认标 thought(思考轮文本);
+			// 回复轮末的 AgentEventFinal 会把该段改标 final。末尾是 text 段就追加,否则新建。
 			if n := len(segments); n > 0 && segments[n-1].Type == "text" {
 				segments[n-1].Content += ev.Content
 			} else {
-				segments = append(segments, conversation.MessageSegment{Type: "text", Content: ev.Content})
+				segments = append(segments, conversation.MessageSegment{Type: "text", Role: "thought", Content: ev.Content})
 			}
 			data, _ := json.Marshal(map[string]string{"content": ev.Content})
 			fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
@@ -597,10 +596,21 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			llmStep.Seq = seq
 			seq++
 			steps = append(steps, llmStep)
+		case agentpkg.AgentEventFinal:
+			// C5:回复轮标记。Content 是最终回复,直接作 finalContent(不再靠位置推断)。
+			// 把最后一个 text 段(回复轮 token 累积的)改标 role=final,供前端分拆渲染。
+			finalContent = ev.Content
+			for i := len(segments) - 1; i >= 0; i-- {
+				if segments[i].Type == "text" {
+					segments[i].Role = "final"
+					break
+				}
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: final\ndata: %s\n\n", data)
+			flusher.Flush()
 		case agentpkg.AgentEventDone:
-			// Done 携带的 Content 在常规 ReAct 路径下为「累计 token 拼接结果」，
-			// 超时/超步数兜底情况下是固定提示语。这里先记到 doneFallback,循环结束后
-			// 仅当 segments 无 text 段(finalContent 为空)时才用它兜底,避免覆盖最终回复。
+			// Done 仅作终止信号;Content 在未收到 Final 时(LLM 失败等)作兜底。
 			doneFallback = ev.Content
 		case agentpkg.AgentEventError:
 			errData, _ := json.Marshal(map[string]string{"error": ev.Error.Error()})
@@ -613,15 +623,7 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	// 思考模式改造:finalContent 取 segments 最后一个 text 段(ReAct 最终回复轮的文本)。
-	// 倒序找--多轮 ReAct 下中间思考轮的 text 段被排除,只留最后一轮无工具的回复。
-	// 无任何 text 段(纯工具/异常路径)时回落 doneFallback,保证 content 非空兜底。
-	for i := len(segments) - 1; i >= 0; i-- {
-		if segments[i].Type == "text" {
-			finalContent = segments[i].Content
-			break
-		}
-	}
+	// finalContent 由 AgentEventFinal 提供(C5);未收到 Final(异常)回落 doneFallback。
 	if finalContent == "" {
 		finalContent = doneFallback
 	}

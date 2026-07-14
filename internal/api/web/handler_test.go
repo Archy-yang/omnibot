@@ -935,6 +935,7 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30", ToolArguments: "{}", StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 5},
 			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
 			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[...]`, LLMResponse: `{"content":"现在是 10:30。"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 250},
+			{Type: agentpkg.AgentEventFinal, Content: "现在是 10:30。"},
 			{Type: agentpkg.AgentEventDone, Content: "让我查一下。现在是 10:30。"},
 		},
 	}
@@ -958,12 +959,14 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 	// segments 按时序：text → tool（含结果）→ text
 	require.Len(t, msgSvc.savedSegments, 3)
 	assert.Equal(t, "text", msgSvc.savedSegments[0].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[0].Role, "思考轮 text 段标 thought")
 	assert.Equal(t, "让我查一下。", msgSvc.savedSegments[0].Content)
 	assert.Equal(t, "tool", msgSvc.savedSegments[1].Type)
 	assert.Equal(t, "get_current_time", msgSvc.savedSegments[1].Tool)
 	assert.Equal(t, "查询了当前时间", msgSvc.savedSegments[1].Label)
 	assert.Equal(t, "10:30", msgSvc.savedSegments[1].Result)
 	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
+	assert.Equal(t, "final", msgSvc.savedSegments[2].Role, "回复轮 text 段标 final")
 	assert.Equal(t, "现在是 10:30。", msgSvc.savedSegments[2].Content)
 
 	// v1.5.5：agent_steps 步骤链按 seq 有序：llm_call → tool_call → llm_call
@@ -1006,6 +1009,7 @@ func TestHandleSendMessageAgentStream_ThoughtVsFinalSplit(t *testing.T) {
 			// 第3轮:最终回复(无工具,管家口吻)
 			{Type: agentpkg.AgentEventToken, Content: "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"},
 			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"content":"我帮你查了…"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 500},
+			{Type: agentpkg.AgentEventFinal, Content: "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"},
 			{Type: agentpkg.AgentEventDone, Content: ""},
 		},
 	}
@@ -1032,13 +1036,16 @@ func TestHandleSendMessageAgentStream_ThoughtVsFinalSplit(t *testing.T) {
 	// segments 完整保留:思考1 -> tool -> 思考2 -> tool -> 最终回复(5 段)
 	require.Len(t, msgSvc.savedSegments, 5)
 	assert.Equal(t, "text", msgSvc.savedSegments[0].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[0].Role)
 	assert.Equal(t, "好的,我来读取这个网站的最新文章资讯!", msgSvc.savedSegments[0].Content)
 	assert.Equal(t, "tool", msgSvc.savedSegments[1].Type)
 	assert.Equal(t, "rss_reader", msgSvc.savedSegments[1].Tool)
 	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[2].Role)
 	assert.Equal(t, "让我尝试几个常见的 RSS 订阅地址看看能否找到。", msgSvc.savedSegments[2].Content)
 	assert.Equal(t, "tool", msgSvc.savedSegments[3].Type)
 	assert.Equal(t, "text", msgSvc.savedSegments[4].Type)
+	assert.Equal(t, "final", msgSvc.savedSegments[4].Role, "最终回复段标 final")
 	assert.Equal(t, finalReply, msgSvc.savedSegments[4].Content)
 }
 
