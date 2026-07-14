@@ -106,6 +106,68 @@ func TestAgentService_Run_AggregatesRunStream_WithTool(t *testing.T) {
 	assert.Contains(t, result.Records[2].Response, "现在是 10:30", "末轮 llm_call response 是最终文本")
 }
 
+// TestAgentService_Run_ThoughtVsFinalSplit 思考模式改造:多轮 ReAct 中,模型在调工具前
+// 可能先吐一段思考文本("我来读取…""让我尝试…"),只有最后一轮无工具调用的文本才是最终回复。
+// Run 返回的 FinalResponse 必须只含最后一段文本,不含中间思考文本--
+// 这是 IM 路径(飞书/微信)给用户的回复,也是 BuildContextMessages 之外的展示口。
+//
+// 事件序列(模拟用户报告的 aihot 网站场景):
+//
+//	round1: 思考文本 -> 调 tool1
+//	round2: 思考文本 -> 调 tool2
+//	round3: 最终回复(无工具)
+func TestAgentService_Run_ThoughtVsFinalSplit(t *testing.T) {
+	stream := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			// round1: 先吐思考文本,再决定调 rss_reader
+			{
+				{ContentDelta: "好的,我来读取这个网站的最新文章资讯!"},
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "rss_reader", ArgumentsDelta: `{"url":"https://aihot.virxact.com/"}`}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round2: 继续思考,再调一次
+			{
+				{ContentDelta: "让我尝试几个常见的 RSS 订阅地址看看能否找到。"},
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "rss_reader", ArgumentsDelta: `{"url":"https://aihot.virxact.com/feed"}`}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round3: 最终回复(无工具)
+			{
+				{ContentDelta: "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"},
+				{FinishReason: "stop"},
+				{Done: true},
+			},
+		},
+	}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name:       "rss_reader",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	svc := NewAgentService(AgentServiceConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: stream,
+		ToolRegistry:       registry,
+		MaxSteps:           8,
+	})
+
+	result, err := svc.Run(context.Background(), 1, []map[string]interface{}{
+		{"role": "user", "content": "获取一下最新的文章资讯"},
+	})
+
+	require.NoError(t, err)
+	finalReply := "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"
+	assert.Equal(t, finalReply, result.FinalResponse, "FinalResponse 只含最后一轮文本")
+	assert.NotContains(t, result.FinalResponse, "我来读取这个网站", "不含思考文本1")
+	assert.NotContains(t, result.FinalResponse, "让我尝试几个常见的 RSS", "不含思考文本2")
+}
+
 // TestAgentService_Run_ToolError 工具失败时,tool_call record 状态为 error,
 // Response 保留原始错误(供 agent_steps 复盘)。
 func TestAgentService_Run_ToolError(t *testing.T) {

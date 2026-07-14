@@ -521,10 +521,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		return
 	}
 
-	// finalContent 累积所有 AgentEventToken 的 Content（也吸收 AgentEventDone 的兜底文本，
-	// 用于在结束后持久化为 assistant 消息）。
-	// segments 按和前端 store 相同的时序逻辑累积（text/tool 交错），用于历史持久化（v1.5.4）。
+	// finalContent 是落库用的最终回复纯文本。思考模式改造后,它只取 segments 的最后一个
+	// text 段(ReAct 最后一轮无工具调用的文本),不含中间轮的思考文本--避免污染下一轮上下文
+	// (BuildContextMessages 取 msg.Content) + 让主气泡只展示最终回复。
+	// doneFallback 仅在 segments 无任何 text 段(纯工具/超时/超步数)时兜底。
 	var finalContent string
+	var doneFallback string
 	var segments []conversation.MessageSegment
 	// steps 累积该轮的 Agent 运行步骤链（LLM 调用 + 工具调用），落 agent_steps 表（v1.5.5）。
 	// seq 是链内顺序，stepModel 用于给 llm_call 步骤标注模型名（自定义配置时已知）。
@@ -537,7 +539,8 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	for ev := range eventCh {
 		switch ev.Type {
 		case agentpkg.AgentEventToken:
-			finalContent += ev.Content
+			// token 只进 segments(供思考块/主气泡分拆渲染),不直接累加 finalContent;
+			// finalContent 在循环结束后从 segments 最后一个 text 段取。
 			// 末尾是 text 段就追加，否则新建 text 段（与前端 store onChunk 一致）
 			if n := len(segments); n > 0 && segments[n-1].Type == "text" {
 				segments[n-1].Content += ev.Content
@@ -596,11 +599,9 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			steps = append(steps, llmStep)
 		case agentpkg.AgentEventDone:
 			// Done 携带的 Content 在常规 ReAct 路径下为「累计 token 拼接结果」，
-			// 等价于 finalContent；超时/超步数兜底情况下是固定提示语。
-			// 优先使用我们累计的 finalContent，若为空则回落到 ev.Content。
-			if finalContent == "" {
-				finalContent = ev.Content
-			}
+			// 超时/超步数兜底情况下是固定提示语。这里先记到 doneFallback,循环结束后
+			// 仅当 segments 无 text 段(finalContent 为空)时才用它兜底,避免覆盖最终回复。
+			doneFallback = ev.Content
 		case agentpkg.AgentEventError:
 			errData, _ := json.Marshal(map[string]string{"error": ev.Error.Error()})
 			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
@@ -612,8 +613,21 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	flusher.Flush()
 
+	// 思考模式改造:finalContent 取 segments 最后一个 text 段(ReAct 最终回复轮的文本)。
+	// 倒序找--多轮 ReAct 下中间思考轮的 text 段被排除,只留最后一轮无工具的回复。
+	// 无任何 text 段(纯工具/异常路径)时回落 doneFallback,保证 content 非空兜底。
+	for i := len(segments) - 1; i >= 0; i-- {
+		if segments[i].Type == "text" {
+			finalContent = segments[i].Content
+			break
+		}
+	}
+	if finalContent == "" {
+		finalContent = doneFallback
+	}
+
 	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
-	// 纯文本提问 segments 只有一个 text 段，对历史展示也无害。
+	// 思考模式改造后 content 只含最终回复;segments 完整保留(思考+最终)供思考块回看。
 	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments, steps); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),

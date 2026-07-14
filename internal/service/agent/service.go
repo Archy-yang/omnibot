@@ -82,15 +82,19 @@ func (s *AgentService) Run(
 	}
 
 	var (
-		finalContent string
-		doneFallback string
-		records      []StepRecord
-		streamErr    error
+		finalContent     string
+		doneFallback     string
+		currentRoundText string // 本轮 ReAct 累积的文本;收到 ToolResult 即清空(本轮是思考轮)
+		records          []StepRecord
+		streamErr        error
 	)
 	for ev := range eventCh {
 		switch ev.Type {
 		case AgentEventToken:
-			finalContent += ev.Content
+			// token 进当前轮缓冲,不直接累加 finalContent。本轮若无工具调用(最终回复轮),
+			// 循环结束后 currentRoundText 即为最终回复;若本轮有工具调用(思考轮),
+			// ToolResult 会清空它,思考文本不进 FinalResponse。
+			currentRoundText += ev.Content
 		case AgentEventLLMCall:
 			records = append(records, StepRecord{
 				Kind:       StepKindLLMCall,
@@ -101,7 +105,10 @@ func (s *AgentService) Run(
 			})
 		case AgentEventToolResult:
 			// 注:RunStream 在 emit ToolResult 前会先 emit 同名 ToolCall(用户友好状态条),
-			// 聚合时只取 ToolResult 即可——它已带 ToolName/ToolArguments/原始 ToolResult/Status/Duration。
+			// 聚合时只取 ToolResult 即可--它已带 ToolName/ToolArguments/原始 ToolResult/Status/Duration。
+			// 收到 ToolResult 说明本轮有工具调用,是思考轮:本轮已累积的文本是思考过程,
+			// 清空,避免它混进 FinalResponse(与 handler 从 segments 取最后 text 段等价)。
+			currentRoundText = ""
 			records = append(records, StepRecord{
 				Kind:       StepKindToolCall,
 				Status:     ev.StepStatus,
@@ -120,6 +127,10 @@ func (s *AgentService) Run(
 	if streamErr != nil {
 		return nil, fmt.Errorf("agent stream error: %w", streamErr)
 	}
+	// 思考模式改造:finalContent 取最后一轮(无工具调用)累积的文本。多轮 ReAct 中,
+	// 前几轮的思考文本已被 ToolResult 清空,这里只剩最终回复轮的文本。
+	// 纯工具调用无最终文本(罕见)或超时/超步数兜底时,回落 doneFallback。
+	finalContent = currentRoundText
 	if finalContent == "" {
 		finalContent = doneFallback
 	}
