@@ -18,10 +18,12 @@ import (
 	"omnibot/internal/db"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
+	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
+	domainagent "omnibot/internal/domain/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	userService "omnibot/internal/service/user"
@@ -132,7 +134,28 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		ToolRegistry:       agentToolRegistry,
 	})
 
+	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
+	agentTaskRepo := agentRepo.NewAgentTaskRepository(dbConn.GetGormDB())
+	subAgentRegistry := agentpkg.NewSubAgentRegistry()
+	subAgentRegistry.Register(domainagent.SubAgentCard{
+		Type:           "researcher",
+		Name:           "研究员",
+		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
+		PromptTemplate: "你是一名研究员。目标:{goal}。使用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。",
+		Tools:          []string{"rss_reader", "search_memories", "search_history"},
+		MaxSteps:       15,
+		Timeout:        180 * time.Second,
+	})
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, agentToolRegistry)
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner)
+	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
+	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
+
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
+	webHandler.SetSubAgentSupport(subAgentSvc, subAgentRegistry)
+
+	// 后台 Agent 任务接口(08 §4.7):轮询 + report
+	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, subAgentRegistry, llmConfigSvc)
 
 	// v2.1: 邮箱密码认证装配
 	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
@@ -163,11 +186,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		chatAPIGroup.POST("/messages/agent/stream", webHandler.HandleSendMessageAgentStream)
 	}
 
+	// 后台 Agent 任务接口(08 §4.7):前端轮询 + 触发汇报
+	agentTaskGroup := r.Group("/api/v1/agent")
+	agentTaskGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		agentTaskGroup.GET("/tasks", agentTaskHandler.HandleListTasks)
+		agentTaskGroup.POST("/tasks/:id/report", agentTaskHandler.HandleReportTask)
+	}
+
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc)
+	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -235,6 +266,7 @@ func startFeishuChannel(
 	msgSvc chatService.MessageService,
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
+	subAgentSvc *agentpkg.SubAgentService,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -254,6 +286,7 @@ func startFeishuChannel(
 	sender := channelfeishu.NewLarkSender(larkClient)
 
 	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
+	handler.SetSubAgentReporter(subAgentSvc)
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)
