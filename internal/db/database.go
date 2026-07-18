@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/memory"
 	"omnibot/internal/domain/user"
@@ -149,6 +150,7 @@ func autoMigrate(db *gorm.DB) error {
 		&conversation.Message{},
 		&conversation.AgentStep{},
 		&memory.Memory{},
+		&agent.AgentTask{},
 	)
 }
 
