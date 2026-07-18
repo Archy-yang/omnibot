@@ -46,6 +46,16 @@ export function useChat() {
     chatStore.clearMessages();
   };
 
+  /** 启动后台 Agent 任务轮询(08 §4.5),页面 mount 时调用 */
+  const startPollingUnreported = (): void => {
+    chatStore.startPollingUnreported();
+  };
+
+  /** 停止轮询,页面 unmount 时调用 */
+  const stopPollingUnreported = (): void => {
+    chatStore.stopPollingUnreported();
+  };
+
   return {
     // State
     messages,
@@ -55,5 +65,7 @@ export function useChat() {
     sendMessage,
     loadHistory,
     clearMessages,
+    startPollingUnreported,
+    stopPollingUnreported,
   };
 }

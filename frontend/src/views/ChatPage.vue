@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useChat, useSettings, useToast } from '@/composables';
 import AppNav from '@/components/layout/AppNav.vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
@@ -11,7 +11,7 @@ import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
 // v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId(单一长期对话模型)
-const { messages, isLoading, sendMessage, loadHistory } = useChat();
+const { messages, isLoading, sendMessage, loadHistory, startPollingUnreported, stopPollingUnreported } = useChat();
 const { showSettingsPanel, toggleSettingsPanel, loadConfig } = useSettings();
 const { toasts, error } = useToast();
 
@@ -37,12 +37,18 @@ onMounted(async () => {
   try {
     await loadConfig();
     await loadHistory();
+    // 启动后台 Agent 任务轮询(08 §4.5):发现完成的子任务自动在对话框汇报
+    startPollingUnreported();
   } catch (err) {
     console.error('Init failed:', err);
     error('初始化失败，请刷新页面重试');
   } finally {
     isInitializing.value = false;
   }
+});
+
+onUnmounted(() => {
+  stopPollingUnreported();
 });
 
 const handleSend = async (content: string) => {
