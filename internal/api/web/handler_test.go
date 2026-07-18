@@ -716,6 +716,8 @@ type mockAgentService struct {
 	runErr    error
 	streamErr error
 	runResult *agentpkg.AgentResult
+	// 捕获 RunStream 收到的 conversation(前置汇报测试用)
+	capturedStreamConversation []map[string]interface{}
 }
 
 func (m *mockAgentService) Run(
@@ -742,6 +744,7 @@ func (m *mockAgentService) RunStream(
 	if m.streamErr != nil {
 		return nil, m.streamErr
 	}
+	m.capturedStreamConversation = conversation
 	ch := make(chan agentpkg.AgentEvent, len(m.events))
 	for _, e := range m.events {
 		ch <- e

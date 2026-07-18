@@ -78,6 +78,9 @@ type Handler struct {
 	llmConfigService LLMConfigService
 	memoryService    MemoryService
 	agentService     AgentService
+	// 后台 Agent 框架(08 §4.5 前置汇报兜底)。nil 时不启用前置汇报(向后兼容)。
+	subAgentSvc      *agentpkg.SubAgentService
+	subAgentRegistry *agentpkg.SubAgentRegistry
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -97,6 +100,13 @@ func NewHandler(
 		memoryService:    memoryService,
 		agentService:     agentService,
 	}
+}
+
+// SetSubAgentSupport 注入后台 Agent 框架依赖(前置汇报兜底用)。
+// 未调用时 subAgentSvc 为 nil,Handler 行为与之前一致(无前置汇报)。
+func (h *Handler) SetSubAgentSupport(svc *agentpkg.SubAgentService, registry *agentpkg.SubAgentRegistry) {
+	h.subAgentSvc = svc
+	h.subAgentRegistry = registry
 }
 
 // SendMessageRequest 发送消息请求体
@@ -488,6 +498,17 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		ctxMessages = []llm.ChatMessage{{Role: "user", Content: req.Content}}
 	}
 
+	// 后台 Agent 框架前置汇报兜底(08 §4.5):查未汇报任务,有则把回执注入上下文,
+	// 主 Agent 会先汇报再回应当前消息。汇报在流结束后标记 reported(防重复)。
+	var reportedTaskIDs []int64
+	if h.subAgentSvc != nil {
+		instruction, taskIDs := h.subAgentSvc.GetPendingReportContext(userID)
+		if instruction != "" {
+			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
+			reportedTaskIDs = taskIDs
+		}
+	}
+
 	// 选择流式 LLM 客户端：优先使用用户自定义配置（OpenAI 兼容协议）
 	activeStreamClient := h.agentService.DefaultStreamingLLMClient()
 	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
@@ -647,6 +668,15 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+
+	// 后台 Agent 框架:前置汇报兜底标记 reported(08 §4.5)。流式已把汇报推给用户,
+	// 标记这些任务已汇报,防轮询/下次前置重复汇报。
+	for _, tid := range reportedTaskIDs {
+		if err := h.subAgentSvc.MarkReported(tid); err != nil {
+			logger.ErrorWithFields("Failed to mark task reported",
+				zap.Int64("task_id", tid), zap.Error(err))
+		}
 	}
 }
 

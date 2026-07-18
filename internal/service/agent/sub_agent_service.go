@@ -133,6 +133,21 @@ func (s *SubAgentService) GetTask(taskID int64) (*domainagent.AgentTask, error) 
 	return s.taskRepo.GetByID(taskID)
 }
 
+// GetPendingReportContext 返回待汇报的回执指令 + 对应任务 ID(供主对话前置汇报兜底)。
+// 封装:查未汇报任务 + 构造回执指令。无待汇报任务返回空 instruction + nil taskIDs。
+// web/飞书主对话 handler 在调主 Agent Run 前调用此方法,有指令则 prepend 到上下文。
+func (s *SubAgentService) GetPendingReportContext(userID int64) (instruction string, taskIDs []int64) {
+	unreported, err := s.taskRepo.ListCompletedUnreported(userID)
+	if err != nil || len(unreported) == 0 {
+		return "", nil
+	}
+	instruction = BuildReportInstruction(s.registry, unreported)
+	for _, t := range unreported {
+		taskIDs = append(taskIDs, t.ID)
+	}
+	return instruction, taskIDs
+}
+
 // sanitizeSubAgentError 把子 Agent 错误转成不泄露内部细节的友好文案(安全红线)。
 // 超时/达最大步数有明确文案;其他统一"执行失败"。
 func sanitizeSubAgentError(err error) string {

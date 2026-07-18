@@ -33,6 +33,8 @@ type MessageHandler struct {
 	agentService     AgentService
 	llmConfigService LLMConfigService
 	sender           Sender
+	// 后台 Agent 框架前置汇报(08 §4.5)。nil 时不启用(向后兼容)。
+	subAgentReporter SubAgentReportProvider
 }
 
 // NewMessageHandler 创建飞书消息处理器。
@@ -50,6 +52,12 @@ func NewMessageHandler(
 		llmConfigService: cfg,
 		sender:           sender,
 	}
+}
+
+// SetSubAgentReporter 注入后台 Agent 框架前置汇报依赖(08 §4.5)。
+// 未调用时 subAgentReporter 为 nil,行为与之前一致(无前置汇报)。
+func (h *MessageHandler) SetSubAgentReporter(reporter SubAgentReportProvider) {
+	h.subAgentReporter = reporter
 }
 
 // fallbackReply 是 agent 执行失败时给用户的兜底文案——和 web 端「服务暂时不可用」对齐,
@@ -115,6 +123,17 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		ctxMessages = []llm.ChatMessage{{Role: "user", Content: in.Text}}
 	}
 
+	// 后台 Agent 框架前置汇报兜底(08 §4.5):查未汇报任务,有则把回执注入上下文,
+	// 主 Agent 同步 Run 时先汇报再回应当前消息。汇报后标记 reported(防重复)。
+	var reportedTaskIDs []int64
+	if h.subAgentReporter != nil {
+		instruction, taskIDs := h.subAgentReporter.GetPendingReportContext(userID)
+		if instruction != "" {
+			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
+			reportedTaskIDs = taskIDs
+		}
+	}
+
 	// 选 LLM:用户自定义配置优先(与 web 同步端点完全一致)
 	var activeLLMClient agentpkg.LLMClient
 	stepModel := ""
@@ -147,6 +166,15 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+
+	// 后台 Agent 框架:前置汇报标记 reported(08 §4.5)。主 Agent 已在本次回复里汇报,
+	// 标记这些任务已汇报,防下次重复。
+	for _, tid := range reportedTaskIDs {
+		if err := h.subAgentReporter.MarkReported(tid); err != nil {
+			logger.ErrorWithFields("feishu: mark task reported failed",
+				zap.Int64("task_id", tid), zap.Error(err))
+		}
 	}
 
 	// 回复用户。发送失败仅记日志,不上抛——消息已落库,后续可通过历史查看。

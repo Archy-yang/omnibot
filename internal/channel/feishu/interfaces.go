@@ -48,6 +48,16 @@ type LLMConfigService interface {
 	GetFullConfigForUser(userID int64) (*userservice.FullLLMConfig, bool, error)
 }
 
+// SubAgentReportProvider 后台 Agent 框架前置汇报接口(08 §4.5)。
+// 飞书主对话 handler 在调主 Agent Run 前查询未汇报任务,有则注入回执让主 Agent 先汇报。
+// nil 时不启用前置汇报(向后兼容,未装配后台 Agent 框架时)。
+type SubAgentReportProvider interface {
+	// GetPendingReportContext 返回待汇报的回执指令 + 对应任务 ID。无则 instruction 为空。
+	GetPendingReportContext(userID int64) (instruction string, taskIDs []int64)
+	// MarkReported 标记任务已汇报(防重复)。
+	MarkReported(taskID int64) error
+}
+
 // Sender 飞书发消息接口。隔离 SDK,测试 mock。
 //
 // SendText  — 纯文本消息(MsgType="text")。飞书客户端**不渲染 markdown**,
