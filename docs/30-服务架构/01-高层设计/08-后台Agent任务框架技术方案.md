@@ -32,20 +32,21 @@
 
 ### 1.3 非目标(第一版不做)
 
-- ❌ 主动推送(B 模式,需 SSE/客服消息推送通道)
+- ❌ 主动推送(B 模式,需 SSE/客服消息推送通道)--第一版用前端轮询 + report 接口替代
 - ❌ 多个子 Agent 并行编排(第一版一次派一个)
 - ❌ 子 Agent 运行时动态配置(第一版固定注册)
 - ❌ 子 Agent 跨进程/真 A2A HTTP(进程内实现)
 - ❌ 用户自定义子 Agent(第一版系统预设)
+- ❌ 微信入口接入(微信走 callLLM 非 Agent,5s 超时;第一版只做 Web + 飞书)
 
 ---
 
 ## 2. 核心架构
 
 ```
-用户消息
+用户消息(Web/飞书)
    ↓
-主 Agent RunStream(system prompt 含 delegate 工具 + "先汇报未汇报任务"指令)
+主 Agent RunStream(system prompt 含 delegate 工具)
    ├─ LLM 决定调 delegate 工具 -> SubAgentService.StartTask(...) -> 立即返 task_id
    │     ↓(后台 goroutine)
    │   子 Agent(独立 AgentService.Run,独立 prompt+工具) -> 写 Artifact 到任务表
@@ -53,15 +54,26 @@
    ├─ LLM 决定不派活 -> 正常对话回复(流式)
    ↓
 主 Agent 回复用户(含"已安排X处理"自然语言确认)
+
+=== 汇报阶段(前端轮询触发,方案B + 单独接口) ===
+
+前端定时轮询 GET /api/v1/agent/tasks?status=completed_unreported
+   ↓(发现有完成的任务)
+前端调 POST /api/v1/agent/tasks/:id/report
    ↓
-[子 Agent 后台完成,任务表状态 -> completed,未汇报]
+后端 report handler:
+   取 task.Artifact -> 构造 conversation=[{system: 回执格式},{user:"请汇报此任务结果"}]
+   -> 主 Agent RunStream 流式汇报 -> SSE 推前端
    ↓
-用户下次发消息
+前端把汇报作为正常流式助手消息渲染在对话框
    ↓
-主 Agent RunStream 前置:查 task 表有无 completed 且未 reported 的任务
-   ├─ 有 -> 把回执(Artifact)注入上下文 + system 指令"先汇报这些任务结果"
-   │        -> 主 Agent 生成汇报 -> 标记 reported
-   └─ 无 -> 正常处理当前消息
+汇报完调 MarkReported(taskID),不再重复汇报
+
+=== 兜底:用户发消息时前置查(防漏) ===
+用户发消息 -> 主 Agent RunStream 前置查 completed_unreported
+   ├─ 有 -> 把回执注入上下文,主 Agent 先汇报再回应当前消息
+   └─ 无 -> 正常处理
+(轮询是主路径,前置查兜底防漏;两者都靠 Reported 字段去重)
 ```
 
 ---
@@ -174,24 +186,46 @@ delegate 工具 Execute **立即返回**(异步):
   1. "你有 delegate 工具可派子 Agent 处理耗时任务。派活后告诉用户已安排,不要让用户等。"
   2. "若上下文有[子任务完成回执],先汇报该结果再回应当前消息。"
 
-### 4.5 主 Agent 前置汇报(主对话流程改造)
+### 4.5 汇报触发(轮询主路径 + 发消息兜底)
 
-web `HandleSendMessageAgentStream` / 飞书 `HandleInbound` / 微信 `handleTextMessage`:
+**主路径:前端轮询 + report 接口(方案B + 单独接口)**
+
+前端定时(约 8s)轮询 `GET /api/v1/agent/tasks?status=completed_unreported`,
+发现有完成的任务 -> 调 `POST /api/v1/agent/tasks/:id/report`:
+- 后端 report handler:取 task.Artifact -> 构造 conversation =
+  `[{role:system, content: 回执格式}, {role:user, content: "请向用户汇报此任务的结果"}]`
+  -> 主 Agent RunStream 流式汇报 -> SSE 推前端
+- 前端把汇报作为正常流式助手消息渲染在对话框(复用现有 ChatMessage 流式逻辑)
+- 汇报完调 `MarkReported(taskID)`,不重复汇报
+
+report 接口是独立 SSE 流,不混入用户对话历史(不落 messages 表),
+仅作为「子任务汇报」这条助手消息呈现。
+
+**兜底:用户发消息时前置查(防漏)**
+
+web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
 在调主 Agent Run 前,查 `GetCompletedUnreported(userID)`:
-- 有 -> 把回执拼进 conversation 上下文(作为 system 消息),主 Agent 自然会先汇报
+- 有 -> 把回执拼进 conversation 上下文(作为 system 消息),主 Agent 先汇报再回应当前消息
 - 无 -> 正常流程
+
+轮询是主路径(用户不用发消息也能收到汇报),前置查兜底防漏(轮询间隙用户发消息时也能汇报)。
+两者都靠 `Reported` 字段去重,不会重复汇报。
 
 ### 4.6 装配(routes.go)
 
 - 建 `agentTaskRepo` + `subAgentRegistry` + `subAgentSvc`
 - 注册示例子 Agent "researcher"(用现有 RSS + search_history 工具)
 - delegate 工具加入主 Agent toolRegistry
-- subAgentSvc 注入主 Agent handler(前置汇报用)
+- subAgentSvc 注入主 Agent handler(前置汇报兜底用)
+- 新增路由:`GET /api/v1/agent/tasks`(轮询)+ `POST /api/v1/agent/tasks/:id/report`(触发汇报)
+- 仅 Web + 飞书入口接入(微信第一版不接入)
 
-### 4.7 用户可见性(可选,第一版可不做)
+### 4.7 用户可见性(第一版必做)
 
-- `GET /api/v1/agent/tasks` -- 列出当前用户的任务及状态(让用户能看"我有哪些后台任务")
-- 第一版可只靠延迟汇报,不做主动查询接口
+- `GET /api/v1/agent/tasks?status=completed_unreported` -- 前端轮询用,返回未汇报的已完成任务
+- `GET /api/v1/agent/tasks` -- (可选)列出当前用户全部任务及状态,供未来「任务面板」用
+- `POST /api/v1/agent/tasks/:id/report` -- 触发主 Agent 流式汇报该任务
+- 第一版前端做轮询 + 自动触发汇报;「任务面板」(用户主动查看全部任务)留后续
 
 ---
 
@@ -210,12 +244,16 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound` / 微信 `handleText
 - 子 Agent 的运行链路(agent_steps)按 task_id 落库,不混入主对话 messages
 - 子 Agent 完成只把 Artifact(最终产出)回传,中间过程不进主对话
 
-### 5.3 延迟汇报(C 模式)的边界
+### 5.3 汇报触发的边界(轮询 + 兜底)
 
-- 用户下次发消息才汇报 -> 若用户长时间不来,任务结果"压"在任务表
-- 第一版接受这个限制(个人项目,用户基本会回来)
-- 任务表 `Reported` 字段保证不会重复汇报
-- 未来要 B 模式(主动推送)时,在 SubAgentService.executeTask 完成回调里加推送即可,任务表/回执格式都不用改
+- 主路径:前端轮询发现 completed_unreported -> 调 report 接口触发主 Agent 流式汇报。
+  用户不用发消息也能收到汇报(比原 C 模式"等用户下次发消息"更主动)。
+- 兜底:用户发消息时前置查未汇报任务(防轮询间隙漏报)。
+- 极端情况:用户关闭页面(前端不轮询)且不发消息 -> 任务结果压在任务表,等下次活跃时汇报。
+  第一版接受(个人项目;未来 B 模式主动推送可彻底解决)。
+- 任务表 `Reported` 字段保证轮询触发和兜底触发不会重复汇报。
+- 未来要 B 模式(服务端主动推送)时,在 SubAgentService.executeTask 完成回调里加推送即可,
+  任务表/回执格式/report 接口都不用改,前端轮询可逐步下线。
 
 ### 5.4 并发与持久化
 
