@@ -76,6 +76,13 @@ const (
 	// 保证消费方总能收到一次 Final;LLM 调用失败走 Error 不发 Final。
 	AgentEventFinal AgentEventType = "final"
 
+	// AgentEventThought：思考轮标记(方案5)。RunStream 在「有 tool_call 的轮」末发出,
+	// Content 携带该轮 LLM 文本(= 思考过程,如"我来读取网站…")。与 Final 对称:
+	// 回复轮发 Final,思考轮发 Thought。
+	// 设计:思考轮的 token 流式时已实时发出(前端先乐观进主气泡),轮末发 Thought 让
+	// 前端把该轮文本迁移到思考块--简单问题(单轮回复)无 Thought,主气泡零跳动。
+	AgentEventThought AgentEventType = "thought"
+
 	// AgentEventDone：整个 ReAct 循环结束的终止信号(在 Final 之后发出)。Content 字段
 	// 携带兜底文案,仅在消费方未收到 Final 时作兜底用。
 	AgentEventDone AgentEventType = "done"

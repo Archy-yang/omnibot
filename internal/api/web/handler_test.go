@@ -931,6 +931,7 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 		events: []agentpkg.AgentEvent{
 			{Type: agentpkg.AgentEventToken, Content: "让我查一下。"},
 			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[{"role":"user"}]`, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 300},
+			{Type: agentpkg.AgentEventThought, Content: "让我查一下。"},
 			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
 			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30", ToolArguments: "{}", StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 5},
 			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
@@ -999,11 +1000,13 @@ func TestHandleSendMessageAgentStream_ThoughtVsFinalSplit(t *testing.T) {
 			// 第1轮:思考文本 + 调 rss_reader 探测
 			{Type: agentpkg.AgentEventToken, Content: "好的,我来读取这个网站的最新文章资讯!"},
 			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 400},
+			{Type: agentpkg.AgentEventThought, Content: "好的,我来读取这个网站的最新文章资讯!"},
 			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
 			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "普通网站首页,非 RSS", ToolArguments: `{"url":"https://aihot.virxact.com/"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 800},
 			// 第2轮:继续思考 + 再调 rss_reader 试常见 RSS 路径
 			{Type: agentpkg.AgentEventToken, Content: "让我尝试几个常见的 RSS 订阅地址看看能否找到。"},
 			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 350},
+			{Type: agentpkg.AgentEventThought, Content: "让我尝试几个常见的 RSS 订阅地址看看能否找到。"},
 			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
 			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "找到 AI HOT 的 RSS 源", ToolArguments: `{"url":"https://aihot.virxact.com/feed"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 600},
 			// 第3轮:最终回复(无工具,管家口吻)

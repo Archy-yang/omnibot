@@ -539,12 +539,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	for ev := range eventCh {
 		switch ev.Type {
 		case agentpkg.AgentEventToken:
-			// token 进 segments(供思考块/主气泡分拆渲染)。新建 text 段默认标 thought(思考轮文本);
-			// 回复轮末的 AgentEventFinal 会把该段改标 final。末尾是 text 段就追加,否则新建。
+			// token 进 segments(供思考块/主气泡分拆渲染)。新建 text 段默认标 final(乐观当回复,
+			// 方案5);思考轮末的 AgentEventThought 会把该段改标 thought(迁移到思考块)。末尾是 text 段就追加,否则新建。
 			if n := len(segments); n > 0 && segments[n-1].Type == "text" {
 				segments[n-1].Content += ev.Content
 			} else {
-				segments = append(segments, conversation.MessageSegment{Type: "text", Role: "thought", Content: ev.Content})
+				segments = append(segments, conversation.MessageSegment{Type: "text", Role: "final", Content: ev.Content})
 			}
 			data, _ := json.Marshal(map[string]string{"content": ev.Content})
 			fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
@@ -596,6 +596,18 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			llmStep.Seq = seq
 			seq++
 			steps = append(steps, llmStep)
+		case agentpkg.AgentEventThought:
+			// 方案5:思考轮标记。把最后一个 text 段(思考轮 token 累积的)改标 role=thought,
+			// 供前端把它从主气泡迁移到思考块。Content 是该轮思考文本。
+			for i := len(segments) - 1; i >= 0; i-- {
+				if segments[i].Type == "text" {
+					segments[i].Role = "thought"
+					break
+				}
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: thought\ndata: %s\n\n", data)
+			flusher.Flush()
 		case agentpkg.AgentEventFinal:
 			// C5:回复轮标记。Content 是最终回复,直接作 finalContent(不再靠位置推断)。
 			// 把最后一个 text 段(回复轮 token 累积的)改标 role=final,供前端分拆渲染。

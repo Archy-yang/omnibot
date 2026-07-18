@@ -375,6 +375,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				StepDurationMs: time.Since(roundStart).Milliseconds(),
 			}
 
+			// 方案5:思考轮(有 tool_call)发 Thought,标记本轮文本是思考过程。
+			// 前端据此把本轮 token 从主气泡迁移到思考块。Content 是本轮 LLM 文本。
+			out <- AgentEvent{Type: AgentEventThought, Content: roundContent}
+
 			// 逐个执行工具：先 emit ToolCall（用户友好的「正在调用 xxx」），再执行，再 emit ToolResult。
 			for _, idx := range indices {
 				acc := toolCallAccum[idx]
