@@ -121,6 +121,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
 	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
 	agentToolRegistry.Register(agentpkg.CreateRSSReaderTool())
+	agentToolRegistry.Register(agentpkg.CreateWebFetcherTool())
+	agentToolRegistry.Register(agentpkg.CreateWebReaderTool())
 
 	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
 	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
@@ -142,7 +144,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Name:           "研究员",
 		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
 		PromptTemplate: "你是一名研究员。目标:{goal}。使用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。",
-		Tools:          []string{"rss_reader", "search_memories", "search_history"},
+		Tools:          []string{"rss_reader", "web_fetcher", "web_reader", "search_memories", "search_history"},
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
 	})
