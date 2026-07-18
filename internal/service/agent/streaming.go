@@ -54,10 +54,13 @@ const (
 )
 
 const (
-	// AgentEventToken：LLM 在最终回答阶段吐出的文本 token。前端按字符级拼接渲染。
+	// AgentEventToken：LLM 吐出的文本 token 增量。思考轮和回复轮的 token 都走这个事件--
+	// 区分靠轮末的 AgentEventFinal(回复轮)或 AgentEventToolCall(思考轮出现工具)。
+	// 前端按字符级拼接渲染,收到 Final/ToolCall 时给当前段定性。
 	AgentEventToken AgentEventType = "token"
 
 	// AgentEventToolCall：LLM 决定调用某个工具，准备执行（用户友好的「正在调用 xxx」状态条）。
+	// 它的出现也标志当前轮是思考轮(有工具调用)。
 	AgentEventToolCall AgentEventType = "tool_call"
 
 	// AgentEventToolResult：工具执行完成，附带原始结果。前端默认不展示，留作调试或后续展开 UI。
@@ -67,8 +70,21 @@ const (
 	// 供运行链路记录（agent_steps）。不推给前端，仅 handler 消费落库。
 	AgentEventLLMCall AgentEventType = "llm_call"
 
-	// AgentEventDone：整个 ReAct 循环结束，Content 字段携带最终拼接的完整文本，供 handler
-	// 用于持久化（SaveAssistantMessage）。
+	// AgentEventFinal：回复轮标记(思考模式改造,C5)。RunStream 在每个「无 tool_call 的轮」
+	// 末发出,Content 携带该轮完整文本(= 最终回复)。前端/IM 据此明确区分思考与回复,
+	// 不再靠「最后一个 text 段」推断。异常结束(超时/maxSteps)也发 Final(兜底文案),
+	// 保证消费方总能收到一次 Final;LLM 调用失败走 Error 不发 Final。
+	AgentEventFinal AgentEventType = "final"
+
+	// AgentEventThought：思考轮标记(方案5)。RunStream 在「有 tool_call 的轮」末发出,
+	// Content 携带该轮 LLM 文本(= 思考过程,如"我来读取网站…")。与 Final 对称:
+	// 回复轮发 Final,思考轮发 Thought。
+	// 设计:思考轮的 token 流式时已实时发出(前端先乐观进主气泡),轮末发 Thought 让
+	// 前端把该轮文本迁移到思考块--简单问题(单轮回复)无 Thought,主气泡零跳动。
+	AgentEventThought AgentEventType = "thought"
+
+	// AgentEventDone：整个 ReAct 循环结束的终止信号(在 Final 之后发出)。Content 字段
+	// 携带兜底文案,仅在消费方未收到 Final 时作兜底用。
 	AgentEventDone AgentEventType = "done"
 
 	// AgentEventError：流式过程中发生错误，channel 即将关闭。
@@ -81,7 +97,8 @@ const (
 //   - ToolCall    → ToolName + ToolLabel
 //   - ToolResult  → ToolName + ToolResult（原始未脱敏）+ ToolArguments + StepStatus + StepDurationMs
 //   - LLMCall     → LLMRequest + LLMResponse + StepStatus + StepDurationMs（运行链路记录，v1.5.5）
-//   - Done        → Content 是完整最终回答（用于持久化）
+//   - Final       -> Content 是回复轮完整文本(最终回复),思考模式 C5 标记
+//   - Done        -> Content 是兜底文案(仅在未收到 Final 时使用)
 //   - Error       → Error
 //
 // ToolResult 事件的 ToolResult 字段携带**原始未脱敏**结果（含真实错误），供 handler 落

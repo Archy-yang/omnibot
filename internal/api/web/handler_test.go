@@ -931,10 +931,12 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 		events: []agentpkg.AgentEvent{
 			{Type: agentpkg.AgentEventToken, Content: "让我查一下。"},
 			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[{"role":"user"}]`, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 300},
+			{Type: agentpkg.AgentEventThought, Content: "让我查一下。"},
 			{Type: agentpkg.AgentEventToolCall, ToolName: "get_current_time", ToolLabel: "查询了当前时间"},
 			{Type: agentpkg.AgentEventToolResult, ToolName: "get_current_time", ToolResult: "10:30", ToolArguments: "{}", StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 5},
 			{Type: agentpkg.AgentEventToken, Content: "现在是 10:30。"},
 			{Type: agentpkg.AgentEventLLMCall, LLMRequest: `[...]`, LLMResponse: `{"content":"现在是 10:30。"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 250},
+			{Type: agentpkg.AgentEventFinal, Content: "现在是 10:30。"},
 			{Type: agentpkg.AgentEventDone, Content: "让我查一下。现在是 10:30。"},
 		},
 	}
@@ -951,18 +953,21 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// content 是纯文本投影
-	assert.Equal(t, "让我查一下。现在是 10:30。", msgSvc.savedAssistantContent)
+	// content 是最终回复的纯文本投影(思考模式改造:只取最后一个 text 段,
+	// 不含前一段思考文本"让我查一下。",避免污染下一轮上下文)
+	assert.Equal(t, "现在是 10:30。", msgSvc.savedAssistantContent)
 
 	// segments 按时序：text → tool（含结果）→ text
 	require.Len(t, msgSvc.savedSegments, 3)
 	assert.Equal(t, "text", msgSvc.savedSegments[0].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[0].Role, "思考轮 text 段标 thought")
 	assert.Equal(t, "让我查一下。", msgSvc.savedSegments[0].Content)
 	assert.Equal(t, "tool", msgSvc.savedSegments[1].Type)
 	assert.Equal(t, "get_current_time", msgSvc.savedSegments[1].Tool)
 	assert.Equal(t, "查询了当前时间", msgSvc.savedSegments[1].Label)
 	assert.Equal(t, "10:30", msgSvc.savedSegments[1].Result)
 	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
+	assert.Equal(t, "final", msgSvc.savedSegments[2].Role, "回复轮 text 段标 final")
 	assert.Equal(t, "现在是 10:30。", msgSvc.savedSegments[2].Content)
 
 	// v1.5.5：agent_steps 步骤链按 seq 有序：llm_call → tool_call → llm_call
@@ -975,6 +980,76 @@ func TestHandleSendMessageAgentStream_PersistsSegments(t *testing.T) {
 	assert.Equal(t, "10:30", msgSvc.savedSteps[1].Response) // 工具步骤 response 是原始结果
 	assert.Equal(t, conversation.StepKindLLMCall, msgSvc.savedSteps[2].Kind)
 	assert.Equal(t, 2, msgSvc.savedSteps[2].Seq)
+}
+
+// TestHandleSendMessageAgentStream_ThoughtVsFinalSplit：思考模式展示改造--
+// 多轮 ReAct 中,中间轮的思考文本("我来读取…""让我尝试…")是过程,只有最后一轮无工具的
+// text 段才是最终回复。落库的 content 必须只含最终回复(供下一轮上下文 + 主气泡展示),
+// 不能把思考文本拼进去污染上下文。segments 仍完整保留(思考+最终)供思考块回看。
+//
+// 事件序列模拟用户报告的 aihot 网站资讯场景:
+//
+//	text(思考1) -> tool -> text(思考2) -> tool -> text(最终回复)
+func TestHandleSendMessageAgentStream_ThoughtVsFinalSplit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	userSvc := &mockUserService{userID: 42, created: false}
+	msgSvc := &mockMessageService{}
+	agentSvc := &mockAgentService{
+		events: []agentpkg.AgentEvent{
+			// 第1轮:思考文本 + 调 rss_reader 探测
+			{Type: agentpkg.AgentEventToken, Content: "好的,我来读取这个网站的最新文章资讯!"},
+			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 400},
+			{Type: agentpkg.AgentEventThought, Content: "好的,我来读取这个网站的最新文章资讯!"},
+			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "普通网站首页,非 RSS", ToolArguments: `{"url":"https://aihot.virxact.com/"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 800},
+			// 第2轮:继续思考 + 再调 rss_reader 试常见 RSS 路径
+			{Type: agentpkg.AgentEventToken, Content: "让我尝试几个常见的 RSS 订阅地址看看能否找到。"},
+			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"tool_calls":[...]}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 350},
+			{Type: agentpkg.AgentEventThought, Content: "让我尝试几个常见的 RSS 订阅地址看看能否找到。"},
+			{Type: agentpkg.AgentEventToolCall, ToolName: "rss_reader", ToolLabel: "读取了 RSS 订阅"},
+			{Type: agentpkg.AgentEventToolResult, ToolName: "rss_reader", ToolResult: "找到 AI HOT 的 RSS 源", ToolArguments: `{"url":"https://aihot.virxact.com/feed"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 600},
+			// 第3轮:最终回复(无工具,管家口吻)
+			{Type: agentpkg.AgentEventToken, Content: "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"},
+			{Type: agentpkg.AgentEventLLMCall, LLMResponse: `{"content":"我帮你查了…"}`, StepStatus: agentpkg.StepStatusSuccess, StepDurationMs: 500},
+			{Type: agentpkg.AgentEventFinal, Content: "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"},
+			{Type: agentpkg.AgentEventDone, Content: ""},
+		},
+	}
+	handler := NewHandler(userSvc, msgSvc, &mockLLMClient{}, &mockLLMConfigService{hasConfig: false}, &mockMemoryService{}, agentSvc)
+	router := gin.New()
+	router.Use(injectUserID(42))
+	router.POST("/api/v1/chat/messages/agent/stream", handler.HandleSendMessageAgentStream)
+
+	body, _ := json.Marshal(map[string]string{"content": "获取一下最新的文章资讯"})
+	req, _ := http.NewRequest("POST", "/api/v1/chat/messages/agent/stream", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// 核心断言:content 只含最后一个 text 段(最终回复),不含两段思考文本。
+	// 这保证 BuildContextMessages 取 msg.Content 时,下一轮上下文不被思考文本污染。
+	finalReply := "我帮你查了 AI HOT 的最新资讯,以下是三篇文章…"
+	assert.Equal(t, finalReply, msgSvc.savedAssistantContent)
+	assert.NotContains(t, msgSvc.savedAssistantContent, "我来读取这个网站")
+	assert.NotContains(t, msgSvc.savedAssistantContent, "让我尝试几个常见的 RSS")
+
+	// segments 完整保留:思考1 -> tool -> 思考2 -> tool -> 最终回复(5 段)
+	require.Len(t, msgSvc.savedSegments, 5)
+	assert.Equal(t, "text", msgSvc.savedSegments[0].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[0].Role)
+	assert.Equal(t, "好的,我来读取这个网站的最新文章资讯!", msgSvc.savedSegments[0].Content)
+	assert.Equal(t, "tool", msgSvc.savedSegments[1].Type)
+	assert.Equal(t, "rss_reader", msgSvc.savedSegments[1].Tool)
+	assert.Equal(t, "text", msgSvc.savedSegments[2].Type)
+	assert.Equal(t, "thought", msgSvc.savedSegments[2].Role)
+	assert.Equal(t, "让我尝试几个常见的 RSS 订阅地址看看能否找到。", msgSvc.savedSegments[2].Content)
+	assert.Equal(t, "tool", msgSvc.savedSegments[3].Type)
+	assert.Equal(t, "text", msgSvc.savedSegments[4].Type)
+	assert.Equal(t, "final", msgSvc.savedSegments[4].Role, "最终回复段标 final")
+	assert.Equal(t, finalReply, msgSvc.savedSegments[4].Content)
 }
 
 // TestHandleSendMessageAgentStream_PersistsSanitizedSegments：落库的工具失败结果

@@ -521,10 +521,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		return
 	}
 
-	// finalContent 累积所有 AgentEventToken 的 Content（也吸收 AgentEventDone 的兜底文本，
-	// 用于在结束后持久化为 assistant 消息）。
-	// segments 按和前端 store 相同的时序逻辑累积（text/tool 交错），用于历史持久化（v1.5.4）。
+	// finalContent 是落库用的最终回复纯文本。思考模式改造后,它只取 segments 的最后一个
+	// text 段(ReAct 最后一轮无工具调用的文本),不含中间轮的思考文本--避免污染下一轮上下文
+	// (BuildContextMessages 取 msg.Content) + 让主气泡只展示最终回复。
+	// doneFallback 仅在 segments 无任何 text 段(纯工具/超时/超步数)时兜底。
 	var finalContent string
+	var doneFallback string
 	var segments []conversation.MessageSegment
 	// steps 累积该轮的 Agent 运行步骤链（LLM 调用 + 工具调用），落 agent_steps 表（v1.5.5）。
 	// seq 是链内顺序，stepModel 用于给 llm_call 步骤标注模型名（自定义配置时已知）。
@@ -537,12 +539,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	for ev := range eventCh {
 		switch ev.Type {
 		case agentpkg.AgentEventToken:
-			finalContent += ev.Content
-			// 末尾是 text 段就追加，否则新建 text 段（与前端 store onChunk 一致）
+			// token 进 segments(供思考块/主气泡分拆渲染)。新建 text 段默认标 final(乐观当回复,
+			// 方案5);思考轮末的 AgentEventThought 会把该段改标 thought(迁移到思考块)。末尾是 text 段就追加,否则新建。
 			if n := len(segments); n > 0 && segments[n-1].Type == "text" {
 				segments[n-1].Content += ev.Content
 			} else {
-				segments = append(segments, conversation.MessageSegment{Type: "text", Content: ev.Content})
+				segments = append(segments, conversation.MessageSegment{Type: "text", Role: "final", Content: ev.Content})
 			}
 			data, _ := json.Marshal(map[string]string{"content": ev.Content})
 			fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
@@ -594,13 +596,34 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			llmStep.Seq = seq
 			seq++
 			steps = append(steps, llmStep)
-		case agentpkg.AgentEventDone:
-			// Done 携带的 Content 在常规 ReAct 路径下为「累计 token 拼接结果」，
-			// 等价于 finalContent；超时/超步数兜底情况下是固定提示语。
-			// 优先使用我们累计的 finalContent，若为空则回落到 ev.Content。
-			if finalContent == "" {
-				finalContent = ev.Content
+		case agentpkg.AgentEventThought:
+			// 方案5:思考轮标记。把最后一个 text 段(思考轮 token 累积的)改标 role=thought,
+			// 供前端把它从主气泡迁移到思考块。Content 是该轮思考文本。
+			for i := len(segments) - 1; i >= 0; i-- {
+				if segments[i].Type == "text" {
+					segments[i].Role = "thought"
+					break
+				}
 			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: thought\ndata: %s\n\n", data)
+			flusher.Flush()
+		case agentpkg.AgentEventFinal:
+			// C5:回复轮标记。Content 是最终回复,直接作 finalContent(不再靠位置推断)。
+			// 把最后一个 text 段(回复轮 token 累积的)改标 role=final,供前端分拆渲染。
+			finalContent = ev.Content
+			for i := len(segments) - 1; i >= 0; i-- {
+				if segments[i].Type == "text" {
+					segments[i].Role = "final"
+					break
+				}
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: final\ndata: %s\n\n", data)
+			flusher.Flush()
+		case agentpkg.AgentEventDone:
+			// Done 仅作终止信号;Content 在未收到 Final 时(LLM 失败等)作兜底。
+			doneFallback = ev.Content
 		case agentpkg.AgentEventError:
 			errData, _ := json.Marshal(map[string]string{"error": ev.Error.Error()})
 			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
@@ -612,8 +635,13 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	flusher.Flush()
 
+	// finalContent 由 AgentEventFinal 提供(C5);未收到 Final(异常)回落 doneFallback。
+	if finalContent == "" {
+		finalContent = doneFallback
+	}
+
 	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
-	// 纯文本提问 segments 只有一个 text 段，对历史展示也无害。
+	// 思考模式改造后 content 只含最终回复;segments 完整保留(思考+最终)供思考块回看。
 	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments, steps); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),

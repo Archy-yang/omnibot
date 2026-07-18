@@ -8,6 +8,10 @@ interface StreamCallbacks {
   onChunk: (content: string) => void;
   onToolCall?: (event: ToolCallEvent) => void;
   onToolResult?: (event: ToolResultEvent) => void;
+  /** C5:收到 AgentEventFinal,标记当前 text 段为最终回复(主气泡) */
+  onFinal?: (content: string) => void;
+  /** 方案5:思考轮标记,把当前 text 段从主气泡迁移到思考块 */
+  onThought?: (content: string) => void;
   onDone: (fullContent: string) => void;
   onError: (error: Error) => void;
 }
@@ -50,7 +54,7 @@ export const chatService = {
     content: string,
     callbacks: StreamCallbacks
   ): Promise<void> {
-    const { onChunk, onToolCall, onToolResult, onDone, onError } = callbacks;
+    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onDone, onError } = callbacks;
 
     try {
       const token = localStorage.getItem('token');
@@ -123,6 +127,18 @@ export const chatService = {
             }
             if (currentEvent === 'tool_result') {
               onToolResult?.(parsed as ToolResultEvent);
+              currentEvent = 'message';
+              continue;
+            }
+            if (currentEvent === 'final') {
+              // C5:回复轮标记。parsed.content 是最终回复完整文本。
+              onFinal?.(parsed.content);
+              currentEvent = 'message';
+              continue;
+            }
+            if (currentEvent === 'thought') {
+              // 方案5:思考轮标记。parsed.content 是该轮思考文本。
+              onThought?.(parsed.content);
               currentEvent = 'message';
               continue;
             }

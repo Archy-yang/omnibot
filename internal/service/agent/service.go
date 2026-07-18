@@ -90,7 +90,8 @@ func (s *AgentService) Run(
 	for ev := range eventCh {
 		switch ev.Type {
 		case AgentEventToken:
-			finalContent += ev.Content
+			// token 是思考轮或回复轮的文本增量,IM 聚合路径不直接拼接(避免思考文本混入
+			// FinalResponse)。最终回复由 AgentEventFinal 显式提供(C5)。
 		case AgentEventLLMCall:
 			records = append(records, StepRecord{
 				Kind:       StepKindLLMCall,
@@ -101,7 +102,7 @@ func (s *AgentService) Run(
 			})
 		case AgentEventToolResult:
 			// 注:RunStream 在 emit ToolResult 前会先 emit 同名 ToolCall(用户友好状态条),
-			// 聚合时只取 ToolResult 即可——它已带 ToolName/ToolArguments/原始 ToolResult/Status/Duration。
+			// 聚合时只取 ToolResult 即可--它已带 ToolName/ToolArguments/原始 ToolResult/Status/Duration。
 			records = append(records, StepRecord{
 				Kind:       StepKindToolCall,
 				Status:     ev.StepStatus,
@@ -110,8 +111,11 @@ func (s *AgentService) Run(
 				Request:    ev.ToolArguments,
 				Response:   ev.ToolResult, // 原始未脱敏,展示脱敏由 handler 单独做
 			})
+		case AgentEventFinal:
+			// C5:回复轮标记,Content 是最终回复。直接取,不靠 token 拼接/位置推断。
+			finalContent = ev.Content
 		case AgentEventDone:
-			doneFallback = ev.Content // 仅在 finalContent 为空时兜底(如超时/达到最大步数)
+			doneFallback = ev.Content // 仅在未收到 Final 时兜底(LLM 失败等异常)
 		case AgentEventError:
 			streamErr = ev.Error
 		}
@@ -120,6 +124,7 @@ func (s *AgentService) Run(
 	if streamErr != nil {
 		return nil, fmt.Errorf("agent stream error: %w", streamErr)
 	}
+	// finalContent 由 AgentEventFinal 提供;未收到 Final(异常路径)回落 doneFallback。
 	if finalContent == "" {
 		finalContent = doneFallback
 	}

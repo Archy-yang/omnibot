@@ -256,6 +256,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
 			select {
 			case <-ctx.Done():
+				out <- AgentEvent{Type: AgentEventFinal, Content: "处理超时，已返回当前结果。"}
 				out <- AgentEvent{Type: AgentEventDone, Content: "处理超时，已返回当前结果。"}
 				return
 			default:
@@ -331,6 +332,9 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					StepDurationMs: time.Since(roundStart).Milliseconds(),
 				}
 				finalAnswer += roundContent
+				// 思考模式 C5:回复轮(无 tool_call)发 Final,携带本轮完整文本(= 最终回复)。
+				// 消费方据此明确区分思考与回复,不靠位置推断。
+				out <- AgentEvent{Type: AgentEventFinal, Content: roundContent}
 				out <- AgentEvent{Type: AgentEventDone, Content: finalAnswer}
 				return
 			}
@@ -370,6 +374,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				StepStatus:     StepStatusSuccess,
 				StepDurationMs: time.Since(roundStart).Milliseconds(),
 			}
+
+			// 方案5:思考轮(有 tool_call)发 Thought,标记本轮文本是思考过程。
+			// 前端据此把本轮 token 从主气泡迁移到思考块。Content 是本轮 LLM 文本。
+			out <- AgentEvent{Type: AgentEventThought, Content: roundContent}
 
 			// 逐个执行工具：先 emit ToolCall（用户友好的「正在调用 xxx」），再执行，再 emit ToolResult。
 			for _, idx := range indices {
@@ -433,6 +441,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		}
 
 		// 达到最大步数兜底
+		out <- AgentEvent{Type: AgentEventFinal, Content: "已达到最大步数限制。"}
 		out <- AgentEvent{Type: AgentEventDone, Content: "已达到最大步数限制。"}
 	}()
 

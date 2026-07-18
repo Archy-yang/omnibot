@@ -25,6 +25,7 @@ const (
 type MessageSegment struct {
 	Type    string `json:"type"`              // "text" | "tool"
 	Content string `json:"content,omitempty"` // text 段：文本内容
+	Role    string `json:"role,omitempty"`    // text 段语义(C5):"thought"|"final";tool 段不用
 	Tool    string `json:"tool,omitempty"`    // tool 段：工具名
 	Label   string `json:"label,omitempty"`   // tool 段：面向用户的友好文案
 	Result  string `json:"result,omitempty"`  // tool 段：脱敏后的工具结果
