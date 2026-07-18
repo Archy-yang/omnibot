@@ -191,6 +191,16 @@ data: {"error":"streaming client not configured"}
 > 见 `sanitizeToolResult`（`internal/api/web/handler.go`）。tool_result 不计入落库内容。
 > 事件严格按 LLM 真实时序推送，前端据此交错渲染「文本 → 思考 → 文本」。
 
+> **思考模式(v2.x,方案5)新增两个标记事件:**
+> - `event: thought` -- 思考轮标记。ReAct 一轮 LLM 流结束后若该轮有 tool_call(思考轮),
+>   后端发 thought,携带该轮思考文本。前端据此把该轮 token 从主气泡迁移到灰色思考块。
+> - `event: final` -- 回复轮标记。一轮无 tool_call(回复轮)时发 final,携带最终回复文本。
+>   前端据此确认主气泡内容 + 落库 content。
+>
+> 设计动机:思考 vs 回复的语义由后端在轮末**显式标记**,前端不再靠「最后一个 text 段」
+> 推断(不可靠)。token 流式时先乐观进主气泡,思考轮末的 thought 事件触发迁移--简单问题
+> (单轮回复)无 thought,主气泡零跳动。详见 §6.5 思考模式展示。
+
 ---
 
 ## 6. 安全约束
@@ -214,6 +224,38 @@ Web Agent 流式回复的思考过程会落库，刷新页面后历史可还原�
   原始 error 不入库
 - 这是「JSON 骨架 + 实体表」混合存储的碎片层。未来 artifact / 生成文件 / 异步任务等
   一等实体走独立表，segment 里放引用 id，不再改 messages 结构（详见演进路线图 v1.5.4）
+
+### 6.5.1 思考模式展示(v2.x,方案5)
+
+思考过程与最终回复分离展示:思考进灰色可折叠思考块,最终回复进主气泡。
+
+**事件层(后端 RunStream):**
+- `AgentEventFinal`:回复轮(无 tool_call)末发出,Content=最终回复。异常结束(超时/maxSteps)
+  也发 Final(兜底文案),保证消费方总收到一次。LLM 失败走 Error 不发 Final。
+- `AgentEventThought`:思考轮(有 tool_call)末发出,Content=该轮思考文本。与 Final 对称。
+
+**段语义(MessageSegment.Role):**
+- `text` 段带 `role`:`thought`(思考过程) | `final`(最终回复)
+- `tool` 段天然是思考过程,不用 role
+- handler 收到 Thought 把当前 text 段标 thought,收到 Final 标 final;落库 segments 带 role,
+  历史回看按 role 分拆渲染
+
+**前端展示(ChatMessage.vue):**
+- 思考块 = 所有 role!=="final" 的段(thought text + 全部 tool);主气泡 = role==="final" 的段
+- 流式时(streaming=true)思考块展开实时显示过程,结束自动收起成「已思考 N 步」
+- 操作栏(复制/点赞/踩)流式中隐藏,回复完成才显示
+
+**方案5 的迁移设计(token 默认进主气泡):**
+token 流式时先乐观进 final 段(主气泡实时显示);思考轮末收到 thought 后,该轮文本段被
+改标 thought,从主气泡迁移到思考块。简单问题(单轮回复)无 thought 事件,主气泡零跳动;
+多轮工具的思考文本短暂在主气泡后迁移。这避免「一开始就把回复当思考状态显示」的体验问题。
+
+**IM 路径(飞书/微信):** AgentService.Run 聚合时,Final 事件 -> FinalResponse(只含最终回复,
+不含思考文本);Thought 事件忽略。IM 用户只收到最终回复,不展示思考块。
+
+**为 reasoning_content(模型原生思考)预留:** 将来支持 DeepSeek-R1 等模型的
+`delta.reasoning_content` 字段时,reasoning 进 thought 段、content 进 final 段,
+复用同一套 role 机制,无需改展示层。
 
 ---
 
