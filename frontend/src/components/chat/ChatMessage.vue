@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ChatMessageProps } from '@/types';
@@ -19,6 +19,70 @@ const isUser = computed(() => props.message.role === 'user');
 // 本会话流式产生的有序段落（text / tool 交错）。历史/刷新后的消息无此字段。
 const segments = computed(() => props.message.segments ?? []);
 const hasSegments = computed(() => segments.value.length > 0);
+
+// ===== 思考模式 C5:思考过程 vs 最终回复分拆(基于 segment role) =====
+// 后端在回复轮发 AgentEventFinal,前端 onFinal 把对应 text 段标 role=final。
+// 思考块 = 所有 role!=='final' 的段(thought text + 全部 tool);
+// 主气泡 = role==='final' 的 text 段。
+// 老消息(无 role 字段):回退--最后一个 text 段当 final,其余 thought。
+
+// 最终回复文本:取 role==='final' 的 text 段;无则回退 message.content。
+// 兼容老数据:若所有 text 段都无 role,取最后一个 text 段作 final。
+const finalText = computed(() => {
+  const segs = segments.value;
+  // 优先 role=final 的段
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const seg = segs[i];
+    if (seg.type === 'text' && seg.role === 'final') return seg.content;
+  }
+  // 回退 1:无 role 标记的老数据,取最后一个 text 段
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const seg = segs[i];
+    if (seg.type === 'text') return seg.content;
+  }
+  // 回退 2:无 segments,用 message.content
+  return props.message.content;
+});
+
+// 思考过程段:除最终回复段外的所有段(thought text + 全部 tool)。
+// 老数据(无 role):最后一个 text 段是 final,其余是 thought。
+const thoughtSegments = computed(() => {
+  const segs = segments.value;
+  if (segs.length === 0) return [];
+  // 找 final 段下标(role=final,或老数据最后一个 text 段)
+  let finalIdx = -1;
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const seg = segs[i];
+    if (seg.type === 'text' && seg.role === 'final') { finalIdx = i; break; }
+  }
+  if (finalIdx === -1) {
+    // 老数据:最后一个 text 段当 final
+    for (let i = segs.length - 1; i >= 0; i--) {
+      if (segs[i].type === 'text') { finalIdx = i; break; }
+    }
+  }
+  if (finalIdx === -1) return segs; // 纯工具:全部算思考
+  return segs.slice(0, finalIdx);
+});
+
+const hasThought = computed(() => thoughtSegments.value.length > 0);
+
+// 思考步数:思考段里的 tool 段数量(用于「已思考 N 步」文案)。
+const thoughtStepCount = computed(
+  () => thoughtSegments.value.filter((s) => s.type === 'tool').length,
+);
+
+// 思考块折叠状态:流式中(streaming=true)强制展开实时看过程,结束自动收起。
+// 用户可手动 toggle(历史消息默认收起,点击展开)。
+const thoughtCollapsed = ref(true);
+watch(
+  () => props.message.streaming,
+  (streaming) => {
+    // true -> 展开;false -> 收起。仅在 streaming 变化时驱动,不覆盖用户手动操作后的状态。
+    thoughtCollapsed.value = !streaming;
+  },
+  { immediate: true },
+);
 
 // 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
 // 以及无 segments 时的 content 回退渲染共用。
@@ -59,9 +123,10 @@ const handleFeedback = (next: 'up' | 'down') => {
 };
 
 // 复制助手回复的原始 markdown 文本(不是渲染后的 HTML)。
+// 思考模式:复制最终回复(finalText),不含思考过程文本。
 // 用 navigator.clipboard 优先，浏览器不支持时降级到 textarea + execCommand。
 async function handleCopy() {
-  const text = props.message.content;
+  const text = finalText.value;
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -109,71 +174,117 @@ defineEmits<{
         </div>
         <div class="assistant-body">
           <!--
-            v1.5.3：按 LLM 真实输出时序交错渲染段落。
-            text 段渲 markdown，tool 段渲可点击展开的思考条，顺序即发生顺序。
-            无 segments（历史 / 刷新后）时回退渲染整段 content。
+            思考模式改造:思考过程(灰色可折叠思考块)+ 最终回复(主气泡)分拆。
+            - 思考块:hasThought 时显示「已思考 N 步」按钮条,展开看 thoughtSegments
+              (前面的 text 思考文本 + tool 调用)。流式时(streaming)展开实时看过程,
+              结束自动收起;历史消息点击按钮条手动展开。
+            - 主气泡:finalText(最后一个 text 段)正常 markdown 渲染。
+            - 无 segments(老消息)回退渲染 content。
           -->
-          <template v-if="hasSegments">
-            <template v-for="(seg, idx) in segments" :key="idx">
-              <!-- 文本段 -->
-              <div
-                v-if="seg.type === 'text'"
-                class="assistant-content markdown-body"
-                v-html="renderMarkdown(seg.content)"
-              ></div>
 
-              <!-- 工具段：可点击展开看结果 -->
-              <div v-else class="tool-segment">
-                <button
-                  type="button"
-                  class="tool-segment-header"
-                  :aria-expanded="seg.expanded ? 'true' : 'false'"
-                  @click="toggleExpand(seg)"
-                >
-                  <!-- result 未回来时显示旋转齿轮,回来后显示静态齿轮(v2 设计) -->
-                  <svg
-                    v-if="seg.result === undefined"
-                    class="tool-segment-spinner"
-                    width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                  >
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                    <circle cx="12" cy="12" r="3"/>
-                  </svg>
-                  <svg
-                    v-else
-                    class="tool-segment-icon"
-                    width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                  >
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                    <circle cx="12" cy="12" r="3"/>
-                  </svg>
-                  <span class="tool-segment-label">
-                    {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
-                  </span>
-                  <!-- result 回来后才显示展开图标:上下双箭头(v2 设计) -->
-                  <svg
-                    v-if="seg.result !== undefined"
-                    class="tool-segment-chevron"
-                    :class="{ 'is-open': seg.expanded }"
-                    width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                  >
-                    <path d="m7 15 5 5 5-5"/>
-                    <path d="m7 9 5-5 5 5"/>
-                  </svg>
-                </button>
-                <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
-              </div>
-            </template>
-          </template>
+          <!-- 思考块:有思考过程时显示 -->
+          <div v-if="hasThought" class="thought-block">
+            <button
+              type="button"
+              class="thought-toggle"
+              :aria-expanded="thoughtCollapsed ? 'false' : 'true'"
+              @click="thoughtCollapsed = !thoughtCollapsed"
+            >
+              <!-- 流式中:旋转齿轮 + 「思考中…」;结束:静态图标 + 「已思考 N 步」 -->
+              <svg
+                v-if="message.streaming"
+                class="thought-spinner"
+                width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+              <svg
+                v-else
+                class="thought-icon"
+                width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              >
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>
+              </svg>
+              <span class="thought-toggle-label">
+                {{ message.streaming ? '思考中…' : `已思考 ${thoughtStepCount} 步` }}
+              </span>
+              <svg
+                class="thought-chevron"
+                :class="{ 'is-open': !thoughtCollapsed }"
+                width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              >
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
 
-          <!-- 回退：无 segments 的历史消息 -->
+            <!-- 思考过程段:展开时按序渲染(text 思考文本小字灰 + tool 调用条) -->
+            <div v-show="!thoughtCollapsed" class="thought-content">
+              <template v-for="(seg, idx) in thoughtSegments" :key="idx">
+                <div
+                  v-if="seg.type === 'text'"
+                  class="thought-text markdown-body"
+                  v-html="renderMarkdown(seg.content)"
+                ></div>
+                                <div v-else class="tool-segment">
+                  <button
+                    type="button"
+                    class="tool-segment-header"
+                    :aria-expanded="seg.expanded ? 'true' : 'false'"
+                    @click="toggleExpand(seg)"
+                  >
+                    <svg
+                      v-if="seg.result === undefined"
+                      class="tool-segment-spinner"
+                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    <svg
+                      v-else
+                      class="tool-segment-icon"
+                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    <span class="tool-segment-label">
+                      {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
+                    </span>
+                    <svg
+                      v-if="seg.result !== undefined"
+                      class="tool-segment-chevron"
+                      :class="{ 'is-open': seg.expanded }"
+                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="m7 15 5 5 5-5"/>
+                      <path d="m7 9 5-5 5 5"/>
+                    </svg>
+                  </button>
+                  <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- 主气泡:最终回复(最后 text 段),无 segments 时回退 content -->
+          <div
+            v-if="hasSegments"
+            class="assistant-content markdown-body"
+            v-html="renderMarkdown(finalText)"
+          ></div>
           <div v-else class="assistant-content markdown-body" v-html="renderedContent"></div>
 
-          <!-- 操作栏：仅在内容非空时显示，避免流式中途出现空按钮 -->
-          <div v-if="message.content" class="assistant-actions">
+          <!-- 操作栏:流式结束后(message.streaming 非 true)且内容非空时显示,
+               避免回复未完成时出现复制/点赞按钮(复制到半截内容、对不完整回复反馈都无意义)。
+               历史消息无 streaming 字段(falsy),正常显示。 -->
+          <div v-if="message.content && !message.streaming" class="assistant-actions">
             <button
               type="button"
               class="action-btn"
@@ -354,6 +465,81 @@ defineEmits<{
 .action-btn.is-active:hover {
   background: rgba(37, 99, 235, 0.08);
   color: #1d4ed8;
+}
+
+/* ===== 思考块 (思考模式改造) =====
+   灰色可折叠容器,包裹 Agent 的思考过程(思考文本 + 工具调用)。
+   流式时展开实时显示,结束自动收起;点击「已思考 N 步」按钮条 toggle。
+   视觉语言沿用 tool-segment:浅灰底、左边框、小字、低对比度,不打扰主气泡阅读。 */
+.thought-block {
+  margin: 8px 0 12px 0;
+  background: #f9fafb;
+  border-left: 2px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.thought-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.thought-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.thought-spinner,
+.thought-icon {
+  flex-shrink: 0;
+  color: #9ca3af;
+}
+
+.thought-spinner {
+  animation: tool-spin 0.8s linear infinite;
+}
+
+.thought-toggle-label {
+  flex: 1;
+}
+
+.thought-chevron {
+  flex-shrink: 0;
+  color: #9ca3af;
+  transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.thought-chevron.is-open {
+  transform: rotate(180deg);
+  color: #6b7280;
+}
+
+.thought-content {
+  padding: 4px 12px 10px 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* 思考文本段:小字、浅灰,与主气泡正文区分 */
+.thought-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #6b7280;
+  margin: 6px 0;
+}
+
+/* 思考块内的 tool 段去掉外层 margin,贴合思考块内边距 */
+.thought-content :deep(.tool-segment) {
+  margin: 6px 0;
 }
 
 /* ===== 工具思考段 (v1.5.3) =====
