@@ -13,8 +13,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"omnibot/internal/domain/conversation"
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
+	chatrepo "omnibot/internal/repository/chat"
 )
 
 // mockRunner 可控的 SubAgentRunner mock:按 preset 返回结果或错误,记录调用。
@@ -30,7 +32,7 @@ type call struct {
 	goal string
 }
 
-func (m *mockRunner) Run(ctx context.Context, card domainagent.SubAgentCard, goal string) (string, error) {
+func (m *mockRunner) Run(ctx context.Context, _ int64, card domainagent.SubAgentCard, goal string) (string, []StepRecord, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, call{card: card, goal: goal})
 	m.mu.Unlock()
@@ -41,9 +43,9 @@ func (m *mockRunner) Run(ctx context.Context, card domainagent.SubAgentCard, goa
 		}
 	}
 	if m.err != nil {
-		return "", m.err
+		return "", nil, m.err
 	}
-	return m.artifact, nil
+	return m.artifact, []StepRecord{{Kind: StepKindLLMCall, Status: StepStatusSuccess}}, nil
 }
 
 func (m *mockRunner) callCount() int {
@@ -63,11 +65,11 @@ func setupSubAgentServiceTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}))
+	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}))
 	return db
 }
 
-func setupSubAgentService(t *testing.T, runner SubAgentRunner) (*SubAgentService, *repoagent.GormAgentTaskRepository) {
+func setupSubAgentService(t *testing.T, runner SubAgentRunner) (*SubAgentService, *repoagent.GormAgentTaskRepository, chatrepo.AgentStepRepository) {
 	db := setupSubAgentServiceTestDB(t)
 	repo := repoagent.NewAgentTaskRepository(db).(*repoagent.GormAgentTaskRepository)
 	registry := NewSubAgentRegistry()
@@ -80,8 +82,9 @@ func setupSubAgentService(t *testing.T, runner SubAgentRunner) (*SubAgentService
 		MaxSteps:       15,
 		Timeout:        5 * time.Second,
 	}))
-	svc := NewSubAgentService(repo, registry, runner)
-	return svc, repo
+	stepRepo := chatrepo.NewAgentStepRepository(db)
+	svc := NewSubAgentService(repo, registry, runner, stepRepo)
+	return svc, repo, stepRepo
 }
 
 // waitForTaskStatus 轮询等任务达到目标状态(或超时),让 goroutine 有时间跑完。
@@ -102,7 +105,7 @@ func waitForTaskStatus(t *testing.T, repo repoagent.AgentTaskRepository, taskID 
 
 func TestSubAgentService_StartTask_Success(t *testing.T) {
 	runner := &mockRunner{artifact: "Go 1.24 要点:① 泛型 ② ...", delay: 20 * time.Millisecond}
-	svc, repo := setupSubAgentService(t, runner)
+	svc, repo, stepRepo := setupSubAgentService(t, runner)
 
 	taskID, err := svc.StartTask(context.Background(), 42, "researcher", "研究 Go 1.24")
 	require.NoError(t, err)
@@ -116,11 +119,19 @@ func TestSubAgentService_StartTask_Success(t *testing.T) {
 	assert.False(t, task.Reported)
 	assert.Equal(t, 1, runner.callCount())
 	assert.Equal(t, "研究 Go 1.24", runner.calls[0].goal)
+
+	// 方案A:子 Agent 步骤应落 agent_steps,按 task_id 关联,MessageID 为 nil
+	steps, err := stepRepo.ListByTaskID(taskID)
+	require.NoError(t, err)
+	require.Len(t, steps, 1, "mockRunner 返回 1 条 record,应落 1 步")
+	assert.Nil(t, steps[0].MessageID, "子 Agent 步骤 MessageID 应为 nil")
+	require.NotNil(t, steps[0].TaskID)
+	assert.Equal(t, taskID, *steps[0].TaskID)
 }
 
 func TestSubAgentService_StartTask_RunnerError(t *testing.T) {
 	runner := &mockRunner{err: errors.New("llm timeout"), delay: 20 * time.Millisecond}
-	svc, repo := setupSubAgentService(t, runner)
+	svc, repo, _ := setupSubAgentService(t, runner)
 
 	taskID, err := svc.StartTask(context.Background(), 1, "researcher", "goal")
 	require.NoError(t, err)
@@ -133,7 +144,7 @@ func TestSubAgentService_StartTask_RunnerError(t *testing.T) {
 
 func TestSubAgentService_StartTask_EmptyArtifact(t *testing.T) {
 	runner := &mockRunner{artifact: "   ", delay: 20 * time.Millisecond} // 空白产出
-	svc, repo := setupSubAgentService(t, runner)
+	svc, repo, _ := setupSubAgentService(t, runner)
 
 	taskID, _ := svc.StartTask(context.Background(), 1, "researcher", "goal")
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
@@ -142,7 +153,7 @@ func TestSubAgentService_StartTask_EmptyArtifact(t *testing.T) {
 }
 
 func TestSubAgentService_StartTask_UnregisteredType(t *testing.T) {
-	svc, _ := setupSubAgentService(t, &mockRunner{})
+	svc, _, _ := setupSubAgentService(t, &mockRunner{})
 
 	_, err := svc.StartTask(context.Background(), 1, "nonexistent", "goal")
 	require.Error(t, err)
@@ -150,7 +161,7 @@ func TestSubAgentService_StartTask_UnregisteredType(t *testing.T) {
 }
 
 func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
-	svc, repo := setupSubAgentService(t, &mockRunner{artifact: "result"})
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{artifact: "result"})
 
 	// 直接造任务(不经 StartTask,避免异步)
 	t1 := domainagent.NewAgentTask(1, "researcher", "g1")
@@ -174,7 +185,7 @@ func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
 }
 
 func TestSubAgentService_MarkReported(t *testing.T) {
-	svc, repo := setupSubAgentService(t, &mockRunner{})
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, "researcher", "g")
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))

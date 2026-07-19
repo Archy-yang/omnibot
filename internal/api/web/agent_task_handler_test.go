@@ -19,14 +19,15 @@ import (
 	agentpkg "omnibot/internal/service/agent"
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
+	chatrepo "omnibot/internal/repository/chat"
 )
 
 // webMockRunner web 包测试用 SubAgentRunner stub。report 测试不调 StartTask,
 // runner 仅用于构造 SubAgentService,不会被实际调用。
 type webMockRunner struct{}
 
-func (w *webMockRunner) Run(_ context.Context, _ domainagent.SubAgentCard, _ string) (string, error) {
-	return "r", nil
+func (w *webMockRunner) Run(_ context.Context, _ int64, _ domainagent.SubAgentCard, _ string) (string, []agentpkg.StepRecord, error) {
+	return "r", nil, nil
 }
 
 func setupAgentTaskHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.AgentTaskRepository) {
@@ -44,7 +45,7 @@ func setupAgentTaskHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.Agent
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
 	}))
-	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{})
+	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
 	handler := NewAgentTaskHandler(svc, &mockAgentService{}, registry, &mockLLMConfigService{hasConfig: false})
 	return handler, repo
 }

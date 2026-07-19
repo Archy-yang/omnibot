@@ -18,7 +18,8 @@ import (
 type AgentStep struct {
 	ID         int64     `gorm:"primaryKey;autoIncrement"`
 	UserID     int64     `gorm:"index;not null"`          // 用户 ID
-	MessageID  int64     `gorm:"index;not null"`          // 锚到这一轮的 assistant 消息 ID
+	MessageID  *int64    `gorm:"index"`                   // 主 Agent 步骤:锚到 assistant 消息 ID;子 Agent 步骤为 nil
+	TaskID     *int64    `gorm:"index"`                   // 子 Agent 步骤:锚到 agent_tasks ID;主 Agent 步骤为 nil
 	Seq        int       `gorm:"not null"`                // 链内顺序 0,1,2...
 	Kind       string    `gorm:"size:20;index;not null"`  // llm_call / tool_call
 	Status     string    `gorm:"size:20;index"`           // success / error / not_found

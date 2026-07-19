@@ -693,27 +693,11 @@ func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 // 这里只负责按序 stamp Seq 并补 Model(agent 包拿不到模型名)。MessageID 由
 // MessageService.SaveAssistantMessageWithSegments 在落消息后回写,本函数不管。
 //
+// recordsToAgentSteps 主 Agent 步骤转换(委托 agent.StepRecordsToAgentSteps 公共函数)。
 // 返回 nil 表示无运行链路(records 为空),上层 SaveAssistantMessageWithSegments 收到
 // 空切片会跳过写步骤,语义安全。
 func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model string) []*conversation.AgentStep {
-	if len(records) == 0 {
-		return nil
-	}
-	steps := make([]*conversation.AgentStep, 0, len(records))
-	for i, r := range records {
-		var step *conversation.AgentStep
-		switch r.Kind {
-		case agentpkg.StepKindLLMCall:
-			step = conversation.NewLLMStep(userID, r.Request, r.Response, model, r.Status, r.DurationMs)
-		case agentpkg.StepKindToolCall:
-			step = conversation.NewToolStep(userID, r.Tool, r.Request, r.Response, r.Status, r.DurationMs)
-		default:
-			continue // 未知 kind 跳过,防御未来扩展
-		}
-		step.Seq = i
-		steps = append(steps, step)
-	}
-	return steps
+	return agentpkg.StepRecordsToAgentSteps(records, userID, model)
 }
 
 // ========== 长期记忆接口 ==========

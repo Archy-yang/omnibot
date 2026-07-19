@@ -202,31 +202,10 @@ func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 	return items
 }
 
-// recordsToAgentSteps 把 agent 聚合产出的 StepRecord 链转成可落库的 conversation.AgentStep
-// 链(同款语义,与 web handler 同名 helper 行为一致)。MessageID 由 service 层 stamp。
-//
-// v1.6 思考:helper 在 web 和 feishu 各一份是为保持包独立性(避免 feishu→web 反向依赖,
-// 也避免把存储型 entity conversation.AgentStep 拖进 agent 包语义)。逻辑稳定且只有几行,
-// 重复可接受;若未来出现第 3 个入口,再抽到 chat service 层不晚。
+// recordsToAgentSteps 主 Agent 步骤转换(委托 agent.StepRecordsToAgentSteps 公共函数)。
+// MessageID 由 service 层 stamp。
 func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model string) []*conversation.AgentStep {
-	if len(records) == 0 {
-		return nil
-	}
-	steps := make([]*conversation.AgentStep, 0, len(records))
-	for i, r := range records {
-		var step *conversation.AgentStep
-		switch r.Kind {
-		case agentpkg.StepKindLLMCall:
-			step = conversation.NewLLMStep(userID, r.Request, r.Response, model, r.Status, r.DurationMs)
-		case agentpkg.StepKindToolCall:
-			step = conversation.NewToolStep(userID, r.Tool, r.Request, r.Response, r.Status, r.DurationMs)
-		default:
-			continue
-		}
-		step.Seq = i
-		steps = append(steps, step)
-	}
-	return steps
+	return agentpkg.StepRecordsToAgentSteps(records, userID, model)
 }
 
 

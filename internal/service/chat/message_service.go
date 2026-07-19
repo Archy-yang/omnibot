@@ -173,7 +173,7 @@ func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, u
 	// 运行步骤链是辅助记录：消息已落库成功，步骤落库失败不应让整次保存失败，仅记日志。
 	if s.stepRepo != nil && len(steps) > 0 {
 		for _, step := range steps {
-			step.MessageID = msg.ID
+			step.MessageID = &msg.ID
 			step.UserID = userID
 		}
 		if err := s.stepRepo.CreateBatch(steps); err != nil {

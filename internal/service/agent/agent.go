@@ -58,6 +58,39 @@ When you need information, use the available tools to get it.
 After receiving tool results, use them to provide a complete and helpful answer.
 If a tool call fails, try a different approach or let the user know.`
 
+// MainAgentSystemPrompt 构造主 Agent 的 system prompt(08 §4.4)。
+// 在 defaultSystemPrompt 基础上增补:
+//  1. 派活引导:耗时任务(研究/调研/多步检索)用 delegate 工具派子 Agent 后台执行,
+//     派活后立即告诉用户"已安排",不要让用户干等。
+//  2. 汇报引导:若上下文含[子任务完成回执],先汇报该结果再回应当前消息。
+//
+// hasSubAgents 表示是否装配了后台 Agent 框架(有 delegate 工具)。false 时回落默认 prompt。
+func MainAgentSystemPrompt(hasSubAgents bool) string {
+	if !hasSubAgents {
+		return defaultSystemPrompt
+	}
+	return defaultSystemPrompt + `
+
+== 派活规则(必须遵守)==
+你有 delegate 工具,可以把任务委派给子 Agent(如研究员)后台执行。
+
+【硬规则】当用户请求属于以下任一类时,**必须**调 delegate 派活,**禁止**自己直接回答:
+- 研究/调研/了解某个主题或网站的最新内容(如"研究X""调研Y""了解Z的最新动态")
+- 总结/汇总某网站的文章、资讯、动态
+- 抓取或阅读某个网页的内容
+- 任何需要联网获取实时信息的请求
+
+为什么必须派活:你的训练知识可能过时或编造,联网获取才能保证准确。即使你觉得"知道答案",
+涉及以上场景时也必须派活让子 Agent 获取实时信息。
+
+派活后:立即用一句话告诉用户"已安排X处理,稍后汇报",然后结束本轮回复。
+不要在派活后继续等待,也不要自己重复做子 Agent 正在做的事。
+
+== 汇报规则==
+若对话上下文中出现[子任务完成回执],说明之前安排的子任务有结果了:
+请先向用户汇报该任务的结果(用管家口吻转述,不要照搬回执格式),再回应用户当前的消息。`
+}
+
 // ReActAgent ReAct 模式 Agent
 type ReActAgent struct {
 	llmClient       LLMClient

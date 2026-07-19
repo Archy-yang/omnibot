@@ -130,13 +130,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		agentTimeout = 30 * time.Second
 	}
 	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
-	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
-		LLMClient:          agentLLMClient,
-		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
-		ToolRegistry:       agentToolRegistry,
-	})
 
 	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
+	// 先于 agentSvc 装配,因 delegate 工具 + 主 Agent system prompt 依赖子 Agent 框架。
 	agentTaskRepo := agentRepo.NewAgentTaskRepository(dbConn.GetGormDB())
 	subAgentRegistry := agentpkg.NewSubAgentRegistry()
 	subAgentRegistry.Register(domainagent.SubAgentCard{
@@ -148,10 +144,20 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
 	})
-	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, agentToolRegistry)
-	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner)
+	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
+	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, agentToolRegistry, subAgentLLMProvider)
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo)
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
 	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
+
+	// 主 Agent 服务:system prompt 含 delegate 派活 + 汇报引导(08 §4.4),toolRegistry 含 delegate
+	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
+		LLMClient:          agentLLMClient,
+		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
+		ToolRegistry:       agentToolRegistry,
+		SystemPrompt:       agentpkg.MainAgentSystemPrompt(true),
+	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc, subAgentRegistry)
@@ -304,4 +310,21 @@ func startFeishuChannel(
 			logger.ErrorWithFields("feishu: long connection ended with error", zap.Error(err))
 		}
 	}()
+}
+
+// subAgentLLMConfigAdapter 适配 userService.LLMConfigService -> agentpkg.SubAgentLLMConfigProvider。
+// 方案3:子 Agent 优先用用户自定义 LLM 配置,无配置时 runner 内部回落系统默认。
+type subAgentLLMConfigAdapter struct {
+	svc userService.LLMConfigService
+}
+
+func (a *subAgentLLMConfigAdapter) GetFullConfig(userID int64) (apiKey, baseURL, model string, hasConfig bool, err error) {
+	cfg, has, e := a.svc.GetFullConfigForUser(userID)
+	if e != nil {
+		return "", "", "", false, e
+	}
+	if !has || cfg == nil {
+		return "", "", "", false, nil
+	}
+	return cfg.APIKey, cfg.BaseURL, cfg.Model, true, nil
 }

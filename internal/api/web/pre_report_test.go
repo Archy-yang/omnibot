@@ -20,6 +20,7 @@ import (
 	agentpkg "omnibot/internal/service/agent"
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
+	chatrepo "omnibot/internal/repository/chat"
 )
 
 // TestHandleSendMessageAgentStream_PreReportInjectsReceipt 验证前置汇报兜底:
@@ -41,7 +42,7 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{})
+	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
 
 	// 造一个 completed 未汇报任务
 	task := domainagent.NewAgentTask(42, "researcher", "研究 Go 1.24")
@@ -108,7 +109,7 @@ func TestHandleSendMessageAgentStream_NoPreReportWhenNoTasks(t *testing.T) {
 		Type: "researcher", Name: "研究员", Description: "d",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{})
+	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
 	// 不造任务
 
 	agentSvc := &mockAgentService{events: []agentpkg.AgentEvent{

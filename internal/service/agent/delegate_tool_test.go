@@ -12,6 +12,7 @@ import (
 
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
+	chatrepo "omnibot/internal/repository/chat"
 )
 
 // 让 stub 满足 SubAgentService 的 StartTask 调用需要:delegate 工具调的是 *SubAgentService.StartTask。
@@ -31,7 +32,7 @@ func setupDelegateToolTest(t *testing.T) (Tool, *SubAgentService, *SubAgentRegis
 		Timeout:        5 * time.Second,
 	}))
 	// stub runner:立即返回 artifact(不真跑 LLM)
-	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"})
+	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"}, chatrepo.NewAgentStepRepository(db))
 	tool := CreateDelegateTool(registry, svc)
 	return tool, svc, registry
 }

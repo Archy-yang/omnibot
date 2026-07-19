@@ -272,7 +272,7 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 		t.Fatalf("expected 2 steps, got %d", len(chain))
 	}
 	// MessageID 关联 + 按 seq 有序：llm_call → tool_call
-	if chain[0].MessageID != savedMsgID || chain[0].Kind != conversation.StepKindLLMCall {
+	if chain[0].MessageID == nil || *chain[0].MessageID != savedMsgID || chain[0].Kind != conversation.StepKindLLMCall {
 		t.Errorf("step[0] = %+v, want llm_call linked to msg %d", chain[0], savedMsgID)
 	}
 	if chain[1].Kind != conversation.StepKindToolCall {

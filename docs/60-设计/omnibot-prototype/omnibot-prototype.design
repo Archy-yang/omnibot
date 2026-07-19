@@ -1,0 +1,153 @@
+{
+  "data": [
+    {
+      "id": "page-chat-empty",
+      "title": "V1.x 聊天主页 - 空状态",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782614000000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/chat-empty.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-chat-active",
+      "title": "V1.x 聊天主页 - 对话中",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782614000000,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/chat-active.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-chat-rail",
+      "title": "V1.x 聊天主页 - 侧边栏折叠",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782614000000,
+      "canvasData": {
+        "x": 1240,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/chat-rail.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-settings",
+      "title": "V1.x 设置面板",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782614000000,
+      "canvasData": {
+        "x": 1860,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/settings.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-v2-home-empty",
+      "title": "V2.0 主页 - 空状态（新用户）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782615200000,
+      "canvasData": {
+        "x": 0,
+        "y": 377,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/v2-home-empty.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-v2-home-active",
+      "title": "V2.0 主页 - 对话中",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782615200000,
+      "canvasData": {
+        "x": 620,
+        "y": 377,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/v2-home-active.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-v2-settings",
+      "title": "V2.0 设置面板（右侧抽屉）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782615800000,
+      "canvasData": {
+        "x": 1240,
+        "y": 377,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/v2-settings.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-v2-memory",
+      "title": "V2.0 记忆管理（右侧抽屉）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782615800000,
+      "canvasData": {
+        "x": 1860,
+        "y": 377,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/v2-memory.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-v2-login",
+      "title": "V2.0 登录页面",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782616400000,
+      "canvasData": {
+        "x": 2480,
+        "y": 377,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/v2-login.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "OmniBot 页面设计原型"
+  }
+}
