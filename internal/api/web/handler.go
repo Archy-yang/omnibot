@@ -35,6 +35,7 @@ type MessageService interface {
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -554,6 +555,10 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	var steps []*conversation.AgentStep
 	seq := 0
 	stepModel := ""
+	// toolCallsAccum 累积主 Agent 调用的工具配对(规范改造),落 Message.ToolCalls 供跨轮重建。
+	// 按 tool_call_id 索引:ToolCall 事件存 id/name/args,ToolResult 事件回填 result。
+	toolCallsAccum := map[string]*conversation.ToolCallPair{}
+	var toolCallOrder []string // 保持顺序
 	if hasCustomConfig && userConfig != nil {
 		stepModel = userConfig.Model
 	}
@@ -577,6 +582,15 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 				Tool:  ev.ToolName,
 				Label: ev.ToolLabel,
 			})
+			// 规范改造:累积工具调用配对(落 Message.ToolCalls 供跨轮重建)
+			if ev.ToolCallID != "" {
+				if _, exists := toolCallsAccum[ev.ToolCallID]; !exists {
+					toolCallsAccum[ev.ToolCallID] = &conversation.ToolCallPair{
+						ID: ev.ToolCallID, Name: ev.ToolName, Arguments: ev.ToolArguments,
+					}
+					toolCallOrder = append(toolCallOrder, ev.ToolCallID)
+				}
+			}
 			data, _ := json.Marshal(map[string]string{
 				"tool":  ev.ToolName,
 				"label": ev.ToolLabel,
@@ -593,6 +607,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 				if segments[i].Type == "tool" && segments[i].Result == "" {
 					segments[i].Result = sanitized
 					break
+				}
+			}
+			// 规范改造:回填工具调用配对的 result(用脱敏值,和展示一致)
+			if ev.ToolCallID != "" {
+				if p, ok := toolCallsAccum[ev.ToolCallID]; ok {
+					p.Result = sanitized
 				}
 			}
 			// v1.5.5：append 一个 tool_call 步骤。Response 用原始未脱敏值（含真实错误），
@@ -663,7 +683,21 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 
 	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
 	// 思考模式改造后 content 只含最终回复;segments 完整保留(思考+最终)供思考块回看。
-	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments, steps); err != nil {
+	// 规范改造:toolCalls 序列化落 Message.ToolCalls,供跨轮重建工具调用配对。
+	var toolCallsJSON *string
+	if len(toolCallOrder) > 0 {
+		pairs := make([]conversation.ToolCallPair, 0, len(toolCallOrder))
+		for _, id := range toolCallOrder {
+			if p, ok := toolCallsAccum[id]; ok {
+				pairs = append(pairs, *p)
+			}
+		}
+		if b, err := json.Marshal(pairs); err == nil {
+			s := string(b)
+			toolCallsJSON = &s
+		}
+	}
+	if err := h.messageService.SaveAssistantMessageWithToolCalls(c.Request.Context(), userID, finalContent, segments, toolCallsJSON, steps); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
@@ -680,10 +714,19 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	}
 }
 
+// toAgentMessages 把 llm.ChatMessage 转成 agent 包期望的 []map[string]interface{}(OpenAI 格式)。
+// 规范改造:支持 tool_calls(assistant 调工具) + tool_call_id(tool 结果配对)。
 func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 	items := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
-		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
+		m := map[string]interface{}{"role": msg.Role, "content": msg.Content}
+		if len(msg.ToolCalls) > 0 {
+			m["tool_calls"] = msg.ToolCalls
+		}
+		if msg.ToolCallID != "" {
+			m["tool_call_id"] = msg.ToolCallID
+		}
+		items = append(items, m)
 	}
 	return items
 }

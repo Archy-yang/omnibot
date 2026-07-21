@@ -8,10 +8,12 @@ import (
 // ErrStreamingNotSupported 表示该 provider 不支持流式输出
 var ErrStreamingNotSupported = errors.New("streaming not supported by this provider")
 
-// ChatMessage 单轮对话消息
+// ChatMessage 单轮对话消息(OpenAI chat 协议格式)
 type ChatMessage struct {
-	Role    string // system / user / assistant
-	Content string // 消息文本
+	Role       string                   // system / user / assistant / tool
+	Content    string                   // 消息文本
+	ToolCalls  []map[string]interface{} // assistant 消息:工具调用 [{id,type,function:{name,arguments}}],规范改造
+	ToolCallID string                   // tool 消息:对应的 tool_call_id,规范改造
 }
 
 // StreamChunk 流式响应的单个片段

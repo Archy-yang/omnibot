@@ -197,7 +197,14 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 	items := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
-		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
+		m := map[string]interface{}{"role": msg.Role, "content": msg.Content}
+		if len(msg.ToolCalls) > 0 {
+			m["tool_calls"] = msg.ToolCalls
+		}
+		if msg.ToolCallID != "" {
+			m["tool_call_id"] = msg.ToolCallID
+		}
+		items = append(items, m)
 	}
 	return items
 }

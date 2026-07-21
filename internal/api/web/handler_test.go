@@ -74,6 +74,13 @@ func (m *mockMessageService) SaveAssistantMessageWithSegments(ctx context.Contex
 	return nil
 }
 
+func (m *mockMessageService) SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error {
+	m.savedAssistantContent = content
+	m.savedSegments = segments
+	m.savedSteps = steps
+	return nil
+}
+
 func (m *mockMessageService) BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error) {
 	return []llm.ChatMessage{
 		{Role: "user", Content: currentContent},

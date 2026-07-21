@@ -39,12 +39,23 @@ type Message struct {
 	Content   string           `gorm:"type:text;not null"`     // 消息内容（纯文本投影，供复制/上下文/搜索）
 	MsgID     *string          `gorm:"size:100;uniqueIndex"`   // 微信消息 ID（用于去重，仅 user 消息有）
 	Segments  []MessageSegment `gorm:"serializer:json"`        // v1.5.4：Agent 思考过程有序片段，NULL 表示无（普通消息）
+	ToolCalls *string          `gorm:"type:text"`               // 规范改造:assistant 调工具的配对 JSON [{id,name,arguments,result}],NULL 表示无
 	CreatedAt time.Time        `gorm:"not null"`
 }
 
 // TableName 指定表名
 func (Message) TableName() string {
 	return "messages"
+}
+
+// ToolCallPair Message.ToolCalls JSON 的元素结构(规范改造)。
+// 主 Agent 调工具的配对:id/name/arguments(工具调用) + result(工具结果)。
+// 跨轮重建上下文时,展开成 assistant(tool_calls) -> tool(result) -> assistant(最终回复)。
+type ToolCallPair struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Result    string `json:"result"`
 }
 
 // NewUserMessage 创建用户消息。

@@ -72,19 +72,27 @@ func MainAgentSystemPrompt(hasSubAgents bool) string {
 	return defaultSystemPrompt + `
 
 == 派活规则(必须遵守)==
-你有 delegate 工具,可以把任务委派给子 Agent(如研究员)后台执行。
+你有 delegate 工具,可以把任务委派给子 Agent(研究员)后台执行。
 
-【硬规则】当用户请求属于以下任一类时,**必须**调 delegate 派活,**禁止**自己直接回答:
+【什么是派活】派活 = **调用 delegate 工具**(Function Calling),不是口头说"已安排"。
+你必须实际调用 delegate 工具(sub_agent_type + goal 参数),工具会返回 task_id。
+只有拿到 task_id 后,你才可以说"已安排X处理"。
+
+【硬规则】当用户请求属于以下任一类时,**必须调用 delegate 工具**,**禁止**自己直接回答:
 - 研究/调研/了解某个主题或网站的最新内容(如"研究X""调研Y""了解Z的最新动态")
 - 总结/汇总某网站的文章、资讯、动态
 - 抓取或阅读某个网页的内容
 - 任何需要联网获取实时信息的请求
 
-为什么必须派活:你的训练知识可能过时或编造,联网获取才能保证准确。即使你觉得"知道答案",
-涉及以上场景时也必须派活让子 Agent 获取实时信息。
+【禁止行为】
+- 禁止不调用 delegate 工具,却在回复里说"已安排/已派研究员/稍后汇报"--这是欺骗用户。
+  没调工具就不能说已安排。
+- 禁止凭训练知识直接回答以上类请求(知识可能过时/编造)。
 
-派活后:立即用一句话告诉用户"已安排X处理,稍后汇报",然后结束本轮回复。
-不要在派活后继续等待,也不要自己重复做子 Agent 正在做的事。
+【正确流程】
+1. 识别到以上类请求 -> 第一步就调用 delegate 工具(sub_agent_type="researcher", goal=具体研究目标)
+2. 工具返回 task_id 后 -> 用一句话告诉用户"已安排研究员处理X,稍后汇报"
+3. 结束本轮回复。不要自己重复做子 Agent 会做的事。
 
 == 汇报规则==
 若对话上下文中出现[子任务完成回执],说明之前安排的子任务有结果了:
@@ -422,6 +430,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 						"arguments": acc.argumentsBuilder.String(),
 					},
 				})
+				rawArgs := acc.argumentsBuilder.String()
 
 				tool, ok := a.toolRegistry.Get(toolCall.Name)
 				label := toolCall.Name // 工具不存在时回落到英文名
@@ -430,15 +439,16 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				}
 
 				out <- AgentEvent{
-					Type:      AgentEventToolCall,
-					ToolName:  toolCall.Name,
-					ToolLabel: label,
+					Type:          AgentEventToolCall,
+					ToolName:      toolCall.Name,
+					ToolLabel:     label,
+					ToolCallID:    toolCall.ID,
+					ToolArguments: rawArgs,
 				}
 
 				// 执行工具并捕获记录字段（v1.5.5）：原始结果、状态、耗时、原始 arguments。
 				var toolResult string
 				var status string
-				rawArgs := acc.argumentsBuilder.String()
 				execStart := time.Now()
 				if !ok {
 					toolResult = fmt.Sprintf("错误：工具 %q 不存在", toolCall.Name)
@@ -460,6 +470,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					ToolName:       toolCall.Name,
 					ToolResult:     toolResult,
 					ToolArguments:  rawArgs,
+					ToolCallID:     toolCall.ID,
 					StepStatus:     status,
 					StepDurationMs: durationMs,
 				}

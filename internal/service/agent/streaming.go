@@ -112,6 +112,7 @@ type AgentEvent struct {
 	ToolResult string
 	// 工具与 LLM 步骤共用的记录字段（v1.5.5）
 	ToolArguments  string // 工具步骤：原始 arguments JSON
+	ToolCallID     string // 工具步骤:tool_call ID(OpenAI 配对用,规范改造)
 	StepStatus     string // success/error/not_found
 	StepDurationMs int64  // 本步耗时（毫秒）
 	// LLM 调用步骤专用（v1.5.5）

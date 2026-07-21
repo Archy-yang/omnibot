@@ -115,14 +115,24 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Web 聊天 API 路由
 	// 创建 Agent 服务
+	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按 card.Tools 选
+	globalToolRegistry := agentpkg.NewToolRegistry()
+	globalToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
+	globalToolRegistry.Register(agentpkg.CreateCalculatorTool())
+	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
+	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
+	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
+	globalToolRegistry.Register(agentpkg.CreateWebFetcherTool())
+	globalToolRegistry.Register(agentpkg.CreateWebReaderTool())
+
+	// agentToolRegistry:主 Agent 工具集。方向B--移除抓取类(rss/web_fetcher/web_reader),
+	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具仍在
+	// globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
 	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
 	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
 	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
 	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
-	agentToolRegistry.Register(agentpkg.CreateRSSReaderTool())
-	agentToolRegistry.Register(agentpkg.CreateWebFetcherTool())
-	agentToolRegistry.Register(agentpkg.CreateWebReaderTool())
 
 	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
 	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
@@ -146,7 +156,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
 	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
-	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, agentToolRegistry, subAgentLLMProvider)
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider)
 	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo)
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
 	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))

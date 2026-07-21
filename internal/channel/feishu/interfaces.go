@@ -36,6 +36,7 @@ type MessageService interface {
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
 }
 
 // AgentService Agent 服务接口(仅同步 Run,飞书不走流式)。签名与 web AgentService 一致。
