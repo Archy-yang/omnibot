@@ -171,6 +171,12 @@ defineEmits<{
         <div class="assistant-header">
           <div class="assistant-avatar" aria-hidden="true">O</div>
           <div class="assistant-name">OmniBot</div>
+          <!-- kind=report:主 Agent 主动汇报子任务结果的消息,用徽标与普通回复区分 -->
+          <span
+            v-if="message.kind === 'report'"
+            class="report-badge"
+            title="主 Agent 对子任务结果的汇报"
+          >子任务汇报</span>
         </div>
         <div class="assistant-body">
           <!--
@@ -403,6 +409,20 @@ defineEmits<{
   font-size: 13px;
   color: #6b7280;
   font-weight: 500;
+}
+
+/* kind=report 汇报消息徽标:与普通助手回复区分,提示这是主 Agent 主动汇报的子任务结果 */
+.report-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border-radius: 9999px;
+  user-select: none;
 }
 
 /* 正文：缩进对齐头像右侧（32px 头像 + 10px 间距 = 42px） */

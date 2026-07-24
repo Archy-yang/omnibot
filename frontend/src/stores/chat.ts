@@ -166,7 +166,8 @@ export const useChatStore = defineStore(
     };
 
     // renderReport 把一个后台任务的汇报作为流式助手消息渲染(复用 sendMessage 的 segments 逻辑)。
-    // 汇报消息不进 messages 表(后端不落库),仅前端展示。
+    // 后端 HandleReportTask 流式汇报的同时会落库为 kind=report 消息(关联 task_id),
+    // 刷新后 loadHistory 会带回该消息(带"子任务汇报"徽标);此处本地 reportMessage 仅用于流式实时展示。
     const renderReport = async (taskId: number): Promise<void> => {
       const reportMessage = reactive<Message>({
         id: Date.now(),
@@ -175,6 +176,8 @@ export const useChatStore = defineStore(
         created_at: new Date().toISOString(),
         segments: [],
         streaming: true,
+        kind: 'report', // 标记为子任务汇报,前端显示徽标(与刷新后历史回带的标记一致)
+        task_id: taskId,
       });
       addMessage(reportMessage);
 

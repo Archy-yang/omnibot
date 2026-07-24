@@ -44,7 +44,8 @@ export const agentTaskService = {
   /**
    * 触发主 Agent 流式汇报指定任务(08 §4.5)。
    * SSE 协议与 sendMessageStream 一致(token/thought/final/tool_call/tool_result/done)。
-   * 汇报不落 messages 表,前端把汇报作为流式助手消息渲染。
+   * 后端流式汇报的同时会落库为 kind=report 消息(关联 task_id),刷新后从历史还原;
+   * 前端把汇报作为流式助手消息实时渲染。
    */
   async reportTask(taskId: number, callbacks: ReportStreamCallbacks): Promise<void> {
     const { onChunk, onToolCall, onToolResult, onFinal, onThought, onDone, onError } = callbacks;

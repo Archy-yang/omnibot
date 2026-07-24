@@ -45,6 +45,10 @@ export interface Message {
    * 历史消息无此字段(默认 falsy),视为已结束。
    */
   streaming?: boolean;
+  /** 消息种类:"report"=主 Agent 主动汇报子任务结果(后端落库,刷新后历史仍还原);空=普通对话 */
+  kind?: string;
+  /** 汇报消息关联的后台任务 ID(kind==="report" 时有,可点开看对应子任务) */
+  task_id?: number;
 }
 
 /**
