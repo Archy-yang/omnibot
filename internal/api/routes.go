@@ -16,6 +16,7 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
 	agentRepo "omnibot/internal/repository/agent"
@@ -23,7 +24,6 @@ import (
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
-	domainagent "omnibot/internal/domain/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	userService "omnibot/internal/service/user"
@@ -173,7 +173,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	webHandler.SetSubAgentSupport(subAgentSvc, subAgentRegistry)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
-	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, subAgentRegistry, llmConfigSvc)
+	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, subAgentRegistry, llmConfigSvc, msgSvc)
 
 	// v2.1: 邮箱密码认证装配
 	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
@@ -209,6 +209,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentTaskGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
 		agentTaskGroup.GET("/tasks", agentTaskHandler.HandleListTasks)
+		agentTaskGroup.GET("/tasks/:id/steps", agentTaskHandler.HandleListTaskSteps)
 		agentTaskGroup.POST("/tasks/:id/report", agentTaskHandler.HandleReportTask)
 	}
 

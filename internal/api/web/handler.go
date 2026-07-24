@@ -36,6 +36,8 @@ type MessageService interface {
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
+	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask 落库主动汇报。
+	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -143,11 +145,13 @@ type GetHistoryResponse struct {
 
 // MessageDTO represents a message in the response
 type MessageDTO struct {
-	ID        int64                          `json:"id"`
-	Role      string                         `json:"role"`
-	Content   string                         `json:"content"`
-	Segments  []conversation.MessageSegment  `json:"segments,omitempty"` // v1.5.4：Agent 思考过程片段，无则省略
-	CreatedAt string                         `json:"created_at"`
+	ID        int64                         `json:"id"`
+	Role      string                        `json:"role"`
+	Content   string                        `json:"content"`
+	Segments  []conversation.MessageSegment `json:"segments,omitempty"` // v1.5.4：Agent 思考过程片段，无则省略
+	Kind      string                        `json:"kind,omitempty"`     // 消息种类:"report"=子任务汇报,空省略=普通对话
+	TaskID    *int64                        `json:"task_id,omitempty"`  // 汇报消息关联的任务 ID(Kind=report 时有)
+	CreatedAt string                        `json:"created_at"`
 }
 
 // HandleGetHistory gets message history for the current user
@@ -197,6 +201,8 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 			Role:      msg.Role,
 			Content:   msg.Content,
 			Segments:  msg.Segments,
+			Kind:      msg.Kind,
+			TaskID:    msg.TaskID,
 			CreatedAt: msg.CreatedAt.Format(time.RFC3339),
 		})
 	}

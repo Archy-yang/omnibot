@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	domainagent "omnibot/internal/domain/agent"
+	conversation "omnibot/internal/domain/conversation"
 	repoagent "omnibot/internal/repository/agent"
 	chatrepo "omnibot/internal/repository/chat"
 	"omnibot/pkg/logger"
@@ -156,6 +158,23 @@ func (s *SubAgentService) MarkReported(taskID int64) error {
 // GetTask 取单个任务(供 report 接口用)。
 func (s *SubAgentService) GetTask(taskID int64) (*domainagent.AgentTask, error) {
 	return s.taskRepo.GetByID(taskID)
+}
+
+// ErrTaskNotOwned 任务不属于该用户(属主校验失败)。
+var ErrTaskNotOwned = errors.New("task not owned by user")
+
+// ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。
+// 供排查/展示子 Agent 执行过程(可观测性)。属主校验:只能查自己的任务(安全红线),
+// 否则返回 ErrTaskNotOwned。
+func (s *SubAgentService) ListTaskSteps(taskID, userID int64) ([]*conversation.AgentStep, error) {
+	task, err := s.taskRepo.GetByID(taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.UserID != userID {
+		return nil, ErrTaskNotOwned
+	}
+	return s.stepRepo.ListByTaskID(taskID)
 }
 
 // GetPendingReportContext 返回待汇报的回执指令 + 对应任务 ID(供主对话前置汇报兜底)。

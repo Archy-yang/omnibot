@@ -48,6 +48,10 @@ type MessageService interface {
 	// (nil 表示无工具调用),落 Message.ToolCalls 供跨轮重建上下文。
 	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
 
+	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask
+	// 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报。
+	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+
 	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
 	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
@@ -59,9 +63,9 @@ type LongTermMemoryProvider interface {
 }
 
 type messageService struct {
-	msgRepo      chatrepo.MessageRepository
-	memorySvc    LongTermMemoryProvider
-	stepRepo     chatrepo.AgentStepRepository
+	msgRepo   chatrepo.MessageRepository
+	memorySvc LongTermMemoryProvider
+	stepRepo  chatrepo.AgentStepRepository
 }
 
 // NewMessageService 创建消息服务
@@ -238,6 +242,30 @@ func (s *messageService) SaveAssistantMessageWithToolCalls(ctx context.Context, 
 		if err := s.stepRepo.CreateBatch(steps); err != nil {
 			logger.ErrorWithFields("Failed to save agent steps",
 				zap.Int64("user_id", userID),
+				zap.Int64("message_id", msg.ID),
+				zap.Error(err),
+			)
+		}
+	}
+	return nil
+}
+
+// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),并落 Agent 运行步骤链。
+// 供 HandleReportTask 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报(不再只是前端内存里的一闪而过)。
+func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+	msg := conversation.NewReportMessage(userID, taskID, content, segments)
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+	if s.stepRepo != nil && len(steps) > 0 {
+		for _, step := range steps {
+			step.MessageID = &msg.ID
+			step.UserID = userID
+		}
+		if err := s.stepRepo.CreateBatch(steps); err != nil {
+			logger.ErrorWithFields("Failed to save report agent steps",
+				zap.Int64("user_id", userID),
+				zap.Int64("task_id", taskID),
 				zap.Int64("message_id", msg.ID),
 				zap.Error(err),
 			)

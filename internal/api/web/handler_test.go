@@ -47,14 +47,19 @@ func (m *mockUserService) GetOrCreateByChannel(channelType, channelUserID string
 }
 
 type mockMessageService struct {
-	savedUserContent     string
+	savedUserContent      string
 	savedAssistantContent string
-	savedSegments        []conversation.MessageSegment
-	savedSteps           []*conversation.AgentStep
-	listMessages         []*conversation.Message
-	listErr              error
-	listCalledLimit      int
-	listCalledBefore     int64
+	savedSegments         []conversation.MessageSegment
+	savedSteps            []*conversation.AgentStep
+	listMessages          []*conversation.Message
+	listErr               error
+	listCalledLimit       int
+	listCalledBefore      int64
+	reportSaved           bool
+	savedReportTaskID     int64
+	savedReportContent    string
+	savedReportSegments   []conversation.MessageSegment
+	savedReportSteps      []*conversation.AgentStep
 }
 
 func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
@@ -78,6 +83,15 @@ func (m *mockMessageService) SaveAssistantMessageWithToolCalls(ctx context.Conte
 	m.savedAssistantContent = content
 	m.savedSegments = segments
 	m.savedSteps = steps
+	return nil
+}
+
+func (m *mockMessageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+	m.reportSaved = true
+	m.savedReportTaskID = taskID
+	m.savedReportContent = content
+	m.savedReportSegments = segments
+	m.savedReportSteps = steps
 	return nil
 }
 
@@ -116,12 +130,12 @@ func (m *mockLLMClient) StreamChatCompletion(ctx context.Context, messages []llm
 
 // LLMConfigService mock
 type mockLLMConfigService struct {
-	hasConfig    bool
-	configView   *LLMConfigView
-	fullConfig   *FullLLMConfig
-	updateErr    error
-	clearErr     error
-	lastUpdate   UpdateConfigRequest
+	hasConfig  bool
+	configView *LLMConfigView
+	fullConfig *FullLLMConfig
+	updateErr  error
+	clearErr   error
+	lastUpdate UpdateConfigRequest
 }
 
 func (m *mockLLMConfigService) GetConfigView(userID int64) (*LLMConfigView, error) {

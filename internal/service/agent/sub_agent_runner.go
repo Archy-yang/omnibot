@@ -85,12 +85,13 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domaina
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	ag := NewReActAgent(ReActAgentConfig{
+	// 用 AgentService 聚合 Run(内部 drain RunStream,产生 Records + FinalResponse)。
+	// 不能直接用 ReActAgent.Run(老路径不产生 Records,导致子 Agent 步骤落不了库)。
+	svc := NewAgentService(AgentServiceConfig{
 		LLMClient:          syncClient,
 		StreamingLLMClient: streamClient,
 		ToolRegistry:       subToolRegistry,
 		MaxSteps:           maxSteps,
-		Timeout:            timeout,
 		SystemPrompt:       systemPrompt,
 	})
 
@@ -100,9 +101,17 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domaina
 		{"role": "user", "content": goal},
 	}
 
-	// 6. 跑同步聚合 Run(内部 drain RunStream,返回 FinalResponse)
-	result, err := ag.Run(withUserID(ctx, userID), conversation)
+	// 6. 跑同步聚合 Run(内部 drain RunStream,返回 FinalResponse + Records)。
+	// userID 透传给 AgentService.Run,由其内部 withUserID(ctx, userID) 注入 ctx--
+	// 供 search_memories 等按用户隔离工具读取。之前误传 0,被 Run 内部 withUserID(ctx,0)
+	// 覆盖成 0,导致子 Agent 里依赖 userID 的工具拿错用户。
+	result, err := svc.Run(ctx, userID, conversation, syncClient)
+	// err 时若 result 非 nil,仍把已收集的 records 透传给上层落库(失败也落步骤)。
+	// AgentService.Run 在 err 时也会返回已收集的 records,这里不能因 err 就丢掉。
 	if err != nil {
+		if result != nil {
+			return "", result.Records, err
+		}
 		return "", nil, err
 	}
 	return result.FinalResponse, result.Records, nil

@@ -121,8 +121,14 @@ func (s *AgentService) Run(
 		}
 	}
 
+	// err 时也返回已收集的 records(不丢执行过程):RunStream 失败前已 emit 的 llm_call/tool_call
+	// 步骤对复盘至关重要,尤其子 Agent 失败任务--否则 executeTask 拿到 nil records 落不了库,
+	// 与「失败也落步骤」矛盾。
 	if streamErr != nil {
-		return nil, fmt.Errorf("agent stream error: %w", streamErr)
+		return &AgentResult{
+			FinalResponse: finalContent,
+			Records:       records,
+		}, fmt.Errorf("agent stream error: %w", streamErr)
 	}
 	// finalContent 由 AgentEventFinal 提供;未收到 Final(异常路径)回落 doneFallback。
 	if finalContent == "" {

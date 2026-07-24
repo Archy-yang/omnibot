@@ -211,8 +211,10 @@ func TestAgentService_Run_ToolError(t *testing.T) {
 	assert.Equal(t, `{"x":1}`, result.Records[1].Request)
 }
 
-// TestAgentService_Run_StreamOpenError 流打开失败:Run 返回 error,Records 至少含一条
-// status=error 的 llm_call(v1.5.5 在 RunStream 打开失败时已 emit 该事件)。
+// TestAgentService_Run_StreamOpenError 流打开失败:Run 返回 error,且必须把 RunStream 已 emit 的
+// error llm_call 步骤随 result 返回(不丢弃 records)。
+// 这条约束是子 Agent 失败任务能否落库复盘的前提--RunStream 打开失败已 emit 1 条 error llm_call,
+// 若 Run 在 err 时返回 nil records,上层子 Agent 的执行过程就完全落不了库。
 func TestAgentService_Run_StreamOpenError(t *testing.T) {
 	stream := &mockStreamingLLMClient{openErr: errors.New("network down")}
 	svc := NewAgentService(AgentServiceConfig{
@@ -222,11 +224,15 @@ func TestAgentService_Run_StreamOpenError(t *testing.T) {
 		MaxSteps:           5,
 	})
 
-	_, err := svc.Run(context.Background(), 1, []map[string]interface{}{
+	result, err := svc.Run(context.Background(), 1, []map[string]interface{}{
 		{"role": "user", "content": "x"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "network down")
+	require.NotNil(t, result, "err 时也应返回 result 以携带已收集的 records,不丢执行过程")
+	require.Len(t, result.Records, 1, "RunStream 打开失败已 emit 1 条 error llm_call")
+	assert.Equal(t, StepKindLLMCall, result.Records[0].Kind)
+	assert.Equal(t, StepStatusError, result.Records[0].Status)
 }
 
 // TestAgentService_Run_CustomLLMOverride 自定义 LLM(同时实现 StreamingLLMClient)透传到 RunStream。
