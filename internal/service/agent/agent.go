@@ -170,7 +170,7 @@ func (a *ReActAgent) Run(ctx context.Context, conversation []map[string]interfac
 		}
 
 		// 处理工具调用
-		messages = append(messages, buildAssistantToolCallMessage(toolCalls))
+		messages = append(messages, buildAssistantToolCallMessage(toolCalls, ""))
 
 		for _, tc := range toolCalls {
 			toolCall := parseToolCall(tc)
@@ -244,7 +244,7 @@ func parseToolCall(raw map[string]interface{}) ToolCall {
 	}
 }
 
-func buildAssistantToolCallMessage(toolCalls []map[string]interface{}) map[string]interface{} {
+func buildAssistantToolCallMessage(toolCalls []map[string]interface{}, reasoning string) map[string]interface{} {
 	oaiToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		oaiToolCalls = append(oaiToolCalls, map[string]interface{}{
@@ -253,11 +253,15 @@ func buildAssistantToolCallMessage(toolCalls []map[string]interface{}) map[strin
 			"function": tc["function"],
 		})
 	}
-	return map[string]interface{}{
+	msg := map[string]interface{}{
 		"role":       "assistant",
 		"content":    nil,
 		"tool_calls": oaiToolCalls,
 	}
+	if reasoning != "" {
+		msg["reasoning_content"] = reasoning // deepseek 思考模式:千帆要求多轮回传
+	}
+	return msg
 }
 
 // RunStream 执行流式 ReAct 循环。返回的 channel 由 agent 内部 goroutine 写入并关闭，
@@ -323,6 +327,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 本轮内累积：一段 LLM 响应可能是文本（emit token）或工具调用（按 index 累积 delta）。
 			var roundContent string
+			var roundReasoning string // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
 			toolCallAccum := make(map[int]*toolCallAccumulator) // 按 index 索引
 
 			for chunk := range chunkCh {
@@ -343,6 +348,9 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				if chunk.ContentDelta != "" {
 					out <- AgentEvent{Type: AgentEventToken, Content: chunk.ContentDelta}
 					roundContent += chunk.ContentDelta
+				}
+				if chunk.ReasoningDelta != "" {
+					roundReasoning += chunk.ReasoningDelta
 				}
 				if chunk.ToolCallDelta != nil {
 					acc, ok := toolCallAccum[chunk.ToolCallDelta.Index]
@@ -405,7 +413,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					},
 				})
 			}
-			messages = append(messages, buildAssistantToolCallMessage(rawToolCalls))
+			messages = append(messages, buildAssistantToolCallMessage(rawToolCalls, roundReasoning))
 
 			// v1.5.5：记一条 llm_call 步骤（response 是模型决定调用的 tool_calls）。
 			out <- AgentEvent{
