@@ -32,7 +32,7 @@ type call struct {
 	goal string
 }
 
-func (m *mockRunner) Run(ctx context.Context, _ int64, card domainagent.SubAgentCard, goal string) (string, []StepRecord, error) {
+func (m *mockRunner) Run(ctx context.Context, _ int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, call{card: card, goal: goal})
 	m.mu.Unlock()
@@ -43,9 +43,12 @@ func (m *mockRunner) Run(ctx context.Context, _ int64, card domainagent.SubAgent
 		}
 	}
 	if m.err != nil {
-		return "", nil, m.err
+		return "", m.err
 	}
-	return m.artifact, []StepRecord{{Kind: StepKindLLMCall, Status: StepStatusSuccess}}, nil
+	if onStep != nil {
+		onStep(StepRecord{Kind: StepKindLLMCall, Status: StepStatusSuccess})
+	}
+	return m.artifact, nil
 }
 
 func (m *mockRunner) callCount() int {
@@ -121,9 +124,10 @@ func TestSubAgentService_StartTask_Success(t *testing.T) {
 	assert.Equal(t, "研究 Go 1.24", runner.calls[0].goal)
 
 	// 方案A:子 Agent 步骤应落 agent_steps,按 task_id 关联,MessageID 为 nil
+	// mockRunner 调 onStep 1 次 -> 实时落 1 步
 	steps, err := stepRepo.ListByTaskID(taskID)
 	require.NoError(t, err)
-	require.Len(t, steps, 1, "mockRunner 返回 1 条 record,应落 1 步")
+	require.Len(t, steps, 1, "mockRunner onStep 调 1 次,应落 1 步")
 	assert.Nil(t, steps[0].MessageID, "子 Agent 步骤 MessageID 应为 nil")
 	require.NotNil(t, steps[0].TaskID)
 	assert.Equal(t, taskID, *steps[0].TaskID)
@@ -150,6 +154,69 @@ func TestSubAgentService_StartTask_EmptyArtifact(t *testing.T) {
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
 	require.NotNil(t, task.ErrorMsg)
 	assert.Contains(t, *task.ErrorMsg, "未产出有效结果")
+}
+
+// incrementalMockRunner 先 onStep 产一步,再阻塞等 proceed 信号,然后返回 artifact。
+// 模拟"子 Agent 正在跑"的中间态:步骤已产出但任务未结束,用于验证步骤实时落库。
+type incrementalMockRunner struct {
+	onStepRecord StepRecord
+	proceed      chan struct{}
+	artifact     string
+}
+
+func (m *incrementalMockRunner) Run(ctx context.Context, _ int64, _ domainagent.SubAgentCard, _ string, onStep func(StepRecord)) (string, error) {
+	if onStep != nil {
+		onStep(m.onStepRecord)
+	}
+	select {
+	case <-m.proceed:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return m.artifact, nil
+}
+
+// TestSubAgentService_StepsSavedIncrementally 步骤必须边跑边落库,而非等任务结束批量落。
+// runner 先 onStep 产一步再阻塞,此时任务仍 running,测试从 DB 能查到该步 -> 证明实时持久化。
+// 回归保护:之前 runner 用聚合 Run(records 结束才返回)+ executeTask 末尾批量落,
+// 任务跑的过程中 agent_steps 查不到任何 task_id 步骤。
+func TestSubAgentService_StepsSavedIncrementally(t *testing.T) {
+	proceed := make(chan struct{})
+	runner := &incrementalMockRunner{
+		onStepRecord: StepRecord{Kind: StepKindToolCall, Tool: "rss_reader", Status: StepStatusSuccess},
+		proceed:      proceed,
+		artifact:     "result",
+	}
+	svc, repo, stepRepo := setupSubAgentService(t, runner)
+
+	taskID, err := svc.StartTask(context.Background(), 42, "researcher", "g")
+	require.NoError(t, err)
+
+	// 任务 running 中就应能从 DB 查到 onStep 实时落的步骤(不等结束)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s, _ := stepRepo.ListByTaskID(taskID); len(s) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	steps, err := stepRepo.ListByTaskID(taskID)
+	require.NoError(t, err)
+	require.Len(t, steps, 1, "任务 running 中就应能查到 onStep 实时落的步骤")
+	require.NotNil(t, steps[0].TaskID)
+	assert.Equal(t, taskID, *steps[0].TaskID)
+	assert.Equal(t, "rss_reader", steps[0].Tool)
+	assert.Nil(t, steps[0].MessageID, "子 Agent 步骤 MessageID 应为 nil")
+
+	// 步骤已落但 runner 仍阻塞,任务应仍是 running
+	task, err := repo.GetByID(taskID)
+	require.NoError(t, err)
+	assert.Equal(t, domainagent.TaskStatusRunning, task.Status, "步骤已落但 runner 仍阻塞,任务应仍 running")
+
+	// 放行 runner -> 任务完成
+	close(proceed)
+	completed := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
+	assert.NotNil(t, completed.Artifact)
 }
 
 func TestSubAgentService_StartTask_UnregisteredType(t *testing.T) {

@@ -47,16 +47,16 @@ func NewSubAgentRunner(
 	}
 }
 
-func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string) (string, []StepRecord, error) {
+func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
 	// 1. 构造子 Agent 独立 ToolRegistry(从全局池选 card.Tools 指定的工具)
 	subToolRegistry := NewToolRegistry()
 	for _, toolName := range card.Tools {
 		tool, ok := r.globalToolRegistry.Get(toolName)
 		if !ok {
-			return "", nil, fmt.Errorf("sub agent %q: tool %q not in global registry", card.Type, toolName)
+			return "", fmt.Errorf("sub agent %q: tool %q not in global registry", card.Type, toolName)
 		}
 		if err := subToolRegistry.Register(tool); err != nil {
-			return "", nil, fmt.Errorf("sub agent %q: register tool %q: %w", card.Type, toolName, err)
+			return "", fmt.Errorf("sub agent %q: register tool %q: %w", card.Type, toolName, err)
 		}
 	}
 
@@ -101,18 +101,58 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domaina
 		{"role": "user", "content": goal},
 	}
 
-	// 6. 跑同步聚合 Run(内部 drain RunStream,返回 FinalResponse + Records)。
-	// userID 透传给 AgentService.Run,由其内部 withUserID(ctx, userID) 注入 ctx--
-	// 供 search_memories 等按用户隔离工具读取。之前误传 0,被 Run 内部 withUserID(ctx,0)
-	// 覆盖成 0,导致子 Agent 里依赖 userID 的工具拿错用户。
-	result, err := svc.Run(ctx, userID, conversation, syncClient)
-	// err 时若 result 非 nil,仍把已收集的 records 透传给上层落库(失败也落步骤)。
-	// AgentService.Run 在 err 时也会返回已收集的 records,这里不能因 err 就丢掉。
+	// 6. 流式执行 + 边跑边回吐步骤(onStep)。每产生一步立即回调上层落库,
+	// 使任务 running 中即可观测执行过程(而非等结束批量落)。
+	// userID 透传给 RunStream,由其内部 withUserID(ctx, userID) 注入 ctx,
+	// 供 search_memories 等按用户隔离工具读取。
+	eventCh, err := svc.RunStream(ctx, userID, conversation, streamClient)
 	if err != nil {
-		if result != nil {
-			return "", result.Records, err
-		}
-		return "", nil, err
+		return "", err
 	}
-	return result.FinalResponse, result.Records, nil
+
+	var finalContent string
+	var doneFallback string
+	var streamErr error
+	for ev := range eventCh {
+		switch ev.Type {
+		case AgentEventLLMCall:
+			if onStep != nil {
+				onStep(StepRecord{
+					Kind:       StepKindLLMCall,
+					Status:     ev.StepStatus,
+					DurationMs: ev.StepDurationMs,
+					Request:    ev.LLMRequest,
+					Response:   ev.LLMResponse,
+				})
+			}
+		case AgentEventToolResult:
+			// ToolResult 已带 ToolName/ToolArguments/原始结果/Status/Duration,
+			// 聚合时只取 ToolResult 即可(RunStream 在其前发的 ToolCall 是状态条,不含结果)。
+			if onStep != nil {
+				onStep(StepRecord{
+					Kind:       StepKindToolCall,
+					Status:     ev.StepStatus,
+					DurationMs: ev.StepDurationMs,
+					Tool:       ev.ToolName,
+					Request:    ev.ToolArguments,
+					Response:   ev.ToolResult,
+				})
+			}
+		case AgentEventFinal:
+			finalContent = ev.Content
+		case AgentEventDone:
+			doneFallback = ev.Content
+		case AgentEventError:
+			streamErr = ev.Error
+		}
+	}
+
+	// err 时步骤已随 onStep 实时落库(失败前已 emit 的步骤不丢),这里只返回错误。
+	if streamErr != nil {
+		return "", fmt.Errorf("agent stream error: %w", streamErr)
+	}
+	if finalContent == "" {
+		finalContent = doneFallback
+	}
+	return finalContent, nil
 }

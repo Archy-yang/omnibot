@@ -22,8 +22,10 @@ import (
 type SubAgentRunner interface {
 	// Run 按 card 配置执行子 Agent。goal 已填入 card.PromptTemplate 生成 system prompt。
 	// userID 用于查用户 LLM 配置(方案3:优先用户配置,无则系统默认)。
-	// 返回子 Agent 的最终回复(FinalResponse)作为 Artifact + 运行链路 records(供落 agent_steps)。
-	Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string) (artifact string, records []StepRecord, err error)
+	// onStep:每产生一步(LLM调用/工具调用)立即回调,供上层实时落 agent_steps--
+	// 任务 running 中即可观测执行过程,而非等结束批量落。nil 时跳过回调(测试可用)。
+	// 返回子 Agent 的最终回复(FinalResponse)作为 Artifact。
+	Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (artifact string, err error)
 }
 
 // SubAgentService 后台子 Agent 任务服务(08 技术方案 §4.3)。
@@ -101,7 +103,31 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 	ctx, cancel := context.WithTimeout(context.Background(), card.Timeout)
 	defer cancel()
 
-	artifact, records, err := s.runner.Run(ctx, task.UserID, card, task.Goal)
+	// onStep:每产生一步(LLM调用/工具调用)立即落 agent_steps(task_id 关联,自增 seq)。
+	// 使任务 running 中即可查到执行过程,而非等结束批量落。落库失败仅记日志,不阻断执行。
+	seq := 0
+	onStep := func(r StepRecord) {
+		if s.stepRepo == nil {
+			return
+		}
+		steps := StepRecordsToAgentSteps([]StepRecord{r}, task.UserID, "")
+		if len(steps) == 0 {
+			return
+		}
+		step := steps[0]
+		step.Seq = seq
+		seq++
+		taskID := task.ID
+		step.TaskID = &taskID
+		if err := s.stepRepo.CreateBatch([]*conversation.AgentStep{step}); err != nil {
+			logger.ErrorWithFields("sub agent: save step failed",
+				zap.Int64("task_id", task.ID),
+				zap.Int("seq", step.Seq),
+				zap.Error(err))
+		}
+	}
+
+	artifact, err := s.runner.Run(ctx, task.UserID, card, task.Goal, onStep)
 	if err != nil {
 		errMsg := sanitizeSubAgentError(err)
 		logger.ErrorWithFields("sub agent: run failed",
@@ -110,37 +136,17 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 			zap.Error(err),
 		)
 		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
-		s.saveTaskSteps(task, records) // 失败也落步骤,便于排查哪步炸
-		return
+		return // 步骤已随 onStep 实时落库,无需再批量落
 	}
 
 	if strings.TrimSpace(artifact) == "" {
 		errMsg := "子 Agent 未产出有效结果"
 		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
-		s.saveTaskSteps(task, records)
 		return
 	}
 
 	if err := s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &artifact, nil); err != nil {
 		logger.ErrorWithFields("sub agent: update to completed failed",
-			zap.Int64("task_id", task.ID), zap.Error(err))
-	}
-	s.saveTaskSteps(task, records)
-}
-
-// saveTaskSteps 把子 Agent 运行链路 records 转 AgentStep 落库(方案A,task_id 关联)。
-// records 为空(如 runner 失败前未产生)时跳过。落库失败仅记日志,不影响任务状态。
-func (s *SubAgentService) saveTaskSteps(task *domainagent.AgentTask, records []StepRecord) {
-	if s.stepRepo == nil || len(records) == 0 {
-		return
-	}
-	steps := StepRecordsToAgentSteps(records, task.UserID, "")
-	for _, step := range steps {
-		taskID := task.ID
-		step.TaskID = &taskID
-	}
-	if err := s.stepRepo.CreateBatch(steps); err != nil {
-		logger.ErrorWithFields("sub agent: save steps failed",
 			zap.Int64("task_id", task.ID), zap.Error(err))
 	}
 }
