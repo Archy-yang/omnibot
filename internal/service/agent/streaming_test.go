@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -456,6 +457,119 @@ func TestReActAgent_RunStream_ToolError(t *testing.T) {
 	assert.Equal(t, `{"x":1}`, events[3].ToolArguments)
 	// 原始错误透传（未脱敏）
 	assert.Contains(t, events[3].ToolResult, context.DeadlineExceeded.Error())
+}
+
+// TestReActAgent_RunStream_ToolCircuitBreaker 同一工具连续失败达阈值后熔断:
+// 模型再次调用该工具时不再执行 Execute,直接返回熔断提示,迫使模型改路子。
+//
+// 场景:failing_tool 连续 error 3 次 -> 第 4 次调用被熔断(Execute 不应被调用第 4 次)。
+// 熔断后 ToolResult 携带禁用提示,status 为 error。
+// 这是抑制子 Agent 无限循环的硬约束(见 task 16/17:web_reader 连失败仍换 URL 重试)。
+func TestReActAgent_RunStream_ToolCircuitBreaker(t *testing.T) {
+	// 5 轮都调 failing_tool,第 6 轮给文本回答结束
+	toolRound := []LLMStreamChunk{
+		{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "failing_tool", ArgumentsDelta: "{}"}},
+		{FinishReason: "tool_calls"},
+		{Done: true},
+	}
+	rounds := make([][]LLMStreamChunk, 0, 6)
+	for i := 0; i < 5; i++ {
+		rounds = append(rounds, append([]LLMStreamChunk{}, toolRound...))
+	}
+	rounds = append(rounds, []LLMStreamChunk{{ContentDelta: "放弃工具,直接回答"}, {FinishReason: "stop"}, {Done: true}})
+	llm := &mockStreamingLLMClient{rounds: rounds}
+
+	execCount := 0
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "failing_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			execCount++
+			return "", fmt.Errorf("HTTP 401")
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	require.NoError(t, err)
+	events := drainEvents(t, ch)
+
+	// 前 3 次真执行 Execute(连续失败 3 次触发熔断),第 4、5 次被熔断不执行
+	assert.Equal(t, 3, execCount, "连续失败 3 次后熔断,后续调用不应再执行 Execute")
+
+	// 找熔断后的 ToolResult(第 4 次起),应含禁用提示
+	var breakerResult string
+	toolResultCount := 0
+	for _, e := range events {
+		if e.Type == AgentEventToolResult && e.ToolName == "failing_tool" {
+			toolResultCount++
+			if toolResultCount == 4 { // 第 4 次 = 熔断后第一次
+				breakerResult = e.ToolResult
+			}
+		}
+	}
+	require.NotEmpty(t, breakerResult, "应存在第 4 次 ToolResult(熔断后)")
+	assert.Contains(t, breakerResult, "已连续失败", "熔断提示应说明连续失败")
+	assert.Contains(t, breakerResult, "已禁用", "熔断后应提示已禁用")
+}
+
+// TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess 工具成功一次应清零连续失败计数,
+// 不误熔断偶尔失败的工具。
+func TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess(t *testing.T) {
+	// round1: error, round2: error, round3: success(清零), round4: error, round5: error,
+	// round6: error(此时才达 3 次连续失败熔断), round7: 文本结束
+	mkRound := func() []LLMStreamChunk {
+		return []LLMStreamChunk{
+			{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "flaky", ArgumentsDelta: "{}"}},
+			{FinishReason: "tool_calls"},
+			{Done: true},
+		}
+	}
+	rounds := [][]LLMStreamChunk{mkRound(), mkRound(), mkRound(), mkRound(), mkRound(), mkRound()}
+	rounds = append(rounds, []LLMStreamChunk{{ContentDelta: "ok"}, {FinishReason: "stop"}, {Done: true}})
+	llm := &mockStreamingLLMClient{rounds: rounds}
+
+	callIdx := 0
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "flaky",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			callIdx++
+			// 第 1,2 次 error;第 3 次 success;第 4,5,6 次 error(第 6 次达连续 3 次熔断)
+			if callIdx == 3 {
+				return "ok", nil
+			}
+			return "", fmt.Errorf("err")
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	// 第 3 次 success 清零,所以第 4,5,6 次失败才构成"连续 3 次"-> 第 6 次后熔断
+	// 前 6 次都真执行(3 失败 + 1 成功 + 2 失败 = 还没连续 3 次),第 6 次执行后达 3 次连续失败
+	// 第 7 轮若再调会熔断,但第 7 轮是文本结束,无更多工具调用
+	// 所以 Execute 应被调用 6 次(全部真执行,无熔断跳过)
+	assert.Equal(t, 6, callIdx, "中间 success 清零计数,6 次都应真执行,无熔断跳过")
 }
 
 // noopSyncLLM 仅用于满足 ReActAgentConfig.LLMClient 必填，流式路径不会调用它。

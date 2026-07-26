@@ -51,6 +51,10 @@ type ReActAgentConfig struct {
 const (
 	DefaultMaxSteps = 10
 	DefaultTimeout  = 120 * time.Second
+
+	// toolFailureThreshold 同一工具连续失败达此次数后熔断(不再执行,返回禁用提示)。
+	// 抑制子 Agent 对一直失败的工具(如 web_reader 对 401 站点)无限重试。
+	toolFailureThreshold = 3
 )
 
 var defaultSystemPrompt = `You are a helpful AI assistant with access to tools.
@@ -298,6 +302,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		// 用 string 拼接 OK，因为 LLM 单次回答的 token 总量有限（远小于 context window）。
 		var finalAnswer string
 
+		// 工具连续失败熔断(B):同一工具连续失败达 toolFailureThreshold 次,后续调用不再执行 Execute,
+		// 直接返回熔断提示,迫使模型改路子。某次成功则清零该工具计数。抑制子 Agent 无限重试同类失败。
+		toolFailStreak := make(map[string]int)
+
 		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
 			select {
 			case <-ctx.Done():
@@ -461,14 +469,23 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				if !ok {
 					toolResult = fmt.Sprintf("错误：工具 %q 不存在", toolCall.Name)
 					status = StepStatusNotFound
+				} else if toolFailStreak[toolCall.Name] >= toolFailureThreshold {
+					// 熔断(B):该工具已连续失败达阈值,不再执行,直接返回禁用提示。
+					// 让模型读到"已禁用"从而改换思路/基于已有信息汇总,停止无效重试。
+					toolResult = fmt.Sprintf("工具 %q 已连续失败 %d 次,已禁用。请改用其他来源或基于已有信息汇总,不要再调用该工具。",
+						toolCall.Name, toolFailStreak[toolCall.Name])
+					status = StepStatusError
 				} else {
 					result, execErr := tool.Execute(ctx, toolCall.Arguments)
 					if execErr != nil {
 						toolResult = fmt.Sprintf("工具执行错误: %s", execErr.Error())
 						status = StepStatusError
+						toolFailStreak[toolCall.Name]++
 					} else {
 						toolResult = result
 						status = StepStatusSuccess
+						// 成功一次清零连续失败计数(偶尔失败不误熔断)
+						toolFailStreak[toolCall.Name] = 0
 					}
 				}
 				durationMs := time.Since(execStart).Milliseconds()
