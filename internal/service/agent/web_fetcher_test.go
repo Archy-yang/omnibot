@@ -34,6 +34,10 @@ func TestWebFetcher_ExtractsArticle(t *testing.T) {
 
 	result, err := fetchAndExtract(context.Background(), server.URL)
 	require.NoError(t, err)
+	// 新格式:成功也带标记头([抓取成功] HTTP 200 + URL + 正文),让模型读到结构化状态
+	assert.Contains(t, result, "[抓取成功]")
+	assert.Contains(t, result, "HTTP 200")
+	assert.Contains(t, result, "正文:")
 	assert.Contains(t, result, "Go 1.24 新特性概览")
 	assert.Contains(t, result, "泛型类型别名")
 	// 噪音应被去除

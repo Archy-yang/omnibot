@@ -49,7 +49,7 @@ func CreateWebReaderTool() Tool {
 				return "", fmt.Errorf("url 不能为空")
 			}
 			if err := validateURL(urlStr); err != nil {
-				return "", err
+				return "", formatWebFailure(0, urlStr, err.Error())
 			}
 			return readViaJina(ctx, urlStr)
 		},
@@ -57,13 +57,14 @@ func CreateWebReaderTool() Tool {
 }
 
 // readViaJina 调 Jina Reader 抓取。抽独立函数便于单测(mock server)。
+// 失败统一 formatWebFailure(标记文本),成功 formatWebSuccess(头 + 裸 Markdown)。
 func readViaJina(ctx context.Context, targetURL string) (string, error) {
 	jinaURL := jinaReaderBase + targetURL
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", jinaURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, targetURL, sanitizeFetchError(err))
 	}
 	// Jina Reader 推荐带 Accept: text/markdown
 	req.Header.Set("Accept", "text/markdown")
@@ -71,25 +72,27 @@ func readViaJina(ctx context.Context, targetURL string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, targetURL, sanitizeFetchError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("读取服务返回 HTTP %d", resp.StatusCode)
+		// 401/403:Jina 报目标站点要鉴权;4xx/5xx:目标不可达或 Jina 失败。
+		// 统一标记文本,让模型据 HTTP code 决定是否放弃该站点。
+		return "", formatWebFailure(resp.StatusCode, targetURL, http.StatusText(resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, webReaderMaxBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, targetURL, sanitizeFetchError(err))
 	}
 
 	text := strings.TrimSpace(string(body))
 	if text == "" {
-		return "", fmt.Errorf("读取到空正文")
+		return "", formatWebFailure(0, targetURL, "读取到空正文(可能是 JS 渲染页面或反爬)")
 	}
 	if len(text) > webReaderMaxBytes {
 		text = text[:webReaderMaxBytes] + "\n...(正文过长已截断)"
 	}
-	return text, nil
+	return formatWebSuccess(resp.StatusCode, targetURL, text), nil
 }

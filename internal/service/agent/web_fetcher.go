@@ -112,7 +112,7 @@ func CreateWebFetcherTool() Tool {
 				return "", fmt.Errorf("url 不能为空")
 			}
 			if err := validateURL(urlStr); err != nil {
-				return "", err
+				return "", formatWebFailure(0, urlStr, err.Error())
 			}
 			return fetchAndExtract(ctx, urlStr)
 		},
@@ -121,32 +121,34 @@ func CreateWebFetcherTool() Tool {
 
 // fetchAndExtract 抓取 URL 并提取正文(goquery 解析)。不含 SSRF 校验(由调用方先 validateURL)。
 // 抽出独立函数便于单测(测试用 httptest 本地 server,会触发 SSRF 拒绝,故直接测此函数)。
+// 失败统一 formatWebFailure(标记文本),成功 formatWebSuccess(头 + 裸正文)。
 func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, urlStr, sanitizeFetchError(err))
 	}
 	req.Header.Set("User-Agent", "OmniBot/1.0 (web_fetcher; +https://github.com/Archy-yang/omnibot)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, urlStr, sanitizeFetchError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("目标返回 HTTP %d", resp.StatusCode)
+		// 401/403:目标站点要鉴权;4xx/5xx:不可达。标记文本让模型据 code 决定是否放弃该站点。
+		return "", formatWebFailure(resp.StatusCode, urlStr, http.StatusText(resp.StatusCode))
 	}
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/html") && !strings.Contains(ct, "application/xhtml") {
-		return "", fmt.Errorf("非 HTML 页面,无法提取正文")
+		return "", formatWebFailure(resp.StatusCode, urlStr, "目标非 HTML 页面,无法提取正文")
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("%s", sanitizeFetchError(err))
+		return "", formatWebFailure(0, urlStr, sanitizeFetchError(err))
 	}
 
 	doc.Find("script,style,nav,aside,header,footer,form,iframe,noscript,svg,button").Remove()
@@ -159,7 +161,7 @@ func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 	text := cleanText(selection.Text())
 
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("抓取到空正文(可能是 JS 渲染页面,换用 web_reader)")
+		return "", formatWebFailure(0, urlStr, "抓取到空正文(可能是 JS 渲染页面,换用 web_reader)")
 	}
 	if len(text) > webFetchMaxBytes {
 		text = text[:webFetchMaxBytes] + "\n...(正文过长已截断)"
@@ -169,7 +171,7 @@ func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 	if title != "" {
 		result = "标题: " + strings.TrimSpace(title) + "\n\n" + text
 	}
-	return result, nil
+	return formatWebSuccess(resp.StatusCode, urlStr, result), nil
 }
 
 // cleanText 压缩空白:多空格/换行合并,去首尾空白。
