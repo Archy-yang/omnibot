@@ -572,6 +572,79 @@ func TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess(t *testing.T) {
 	assert.Equal(t, 6, callIdx, "中间 success 清零计数,6 次都应真执行,无熔断跳过")
 }
 
+// TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools 熔断后该工具应从后续轮次
+// 发给 LLM 的 tools 列表移除(硬约束),模型看不到就调不了,而非只在调用时返回提示(软约束)。
+// 见 task 18:熔断提示返回了但模型仍反复调 web_reader。
+func TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools(t *testing.T) {
+	// round1-3: 调 failing_tool 连续失败 3 次 -> 熔断
+	// round4: 模型被迫转调 other_tool(因为 failing_tool 已从 tools 移除,看不到)
+	// round5: 文本结束
+	mkFailingRound := func() []LLMStreamChunk {
+		return []LLMStreamChunk{
+			{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "failing_tool", ArgumentsDelta: "{}"}},
+			{FinishReason: "tool_calls"},
+			{Done: true},
+		}
+	}
+	inner := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			mkFailingRound(), mkFailingRound(), mkFailingRound(),
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "other_tool", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ContentDelta: "done"}, {FinishReason: "stop"}, {Done: true}},
+		},
+	}
+	llm := &captureToolsLLMClient{mockStreamingLLMClient: inner}
+
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "failing_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "", fmt.Errorf("err")
+		},
+	})
+	registry.Register(Tool{
+		Name: "other_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "ok", nil
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	require.GreaterOrEqual(t, len(llm.toolsPerCall), 4, "应至少 4 轮调用")
+	// round1-3 都含 failing_tool(还在累计失败)
+	hasFailing := func(tools []map[string]interface{}) bool {
+		for _, t := range tools {
+			if fn, ok := t["function"].(map[string]interface{}); ok {
+				if n, _ := fn["name"].(string); n == "failing_tool" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// 前 3 轮(失败累计中)failing_tool 还在 tools 里(第 3 轮调用时还没达阈值,执行后才达)
+	// 第 4 轮(round4,索引3)起 failing_tool 应被移除
+	for i, tc := range llm.toolsPerCall {
+		if i >= 3 {
+			assert.False(t, hasFailing(tc), "round %d: 熔断后 failing_tool 应从 tools 移除", i+1)
+		}
+	}
+	assert.False(t, hasFailing(llm.toolsPerCall[3]), "round4 熔断后 failing_tool 应已从 tools 移除")
+}
+
 // noopSyncLLM 仅用于满足 ReActAgentConfig.LLMClient 必填，流式路径不会调用它。
 type noopSyncLLM struct{}
 

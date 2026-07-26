@@ -319,7 +319,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			reqSnapshot := marshalMessagesSnapshot(messages)
 			roundStart := time.Now()
 
-			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, messages, tools)
+			// 熔断硬约束(B):本轮发给 LLM 的 tools 移除已熔断工具,让模型看不到它们。
+			// 比"调用时返回提示"更狠--模型无法再发起该工具调用,被迫转向(见 task 18)。
+			roundTools := filterToolsByCircuitBreaker(tools, toolFailStreak, toolFailureThreshold)
+			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, messages, roundTools)
 			if err != nil {
 				// LLM 调用打开失败也记一条 error 的 llm_call 步骤，再 emit Error。
 				out <- AgentEvent{
@@ -613,4 +616,24 @@ func marshalLLMResponse(content string, toolCalls []map[string]interface{}) stri
 		return ""
 	}
 	return string(b)
+}
+
+// filterToolsByCircuitBreaker 从发给 LLM 的 tools 列表移除已熔断(连续失败达阈值)的工具。
+// 让模型根本看不到该工具(硬约束),而非仅在调用时返回提示(软约束,模型仍会反复调,见 task 18)。
+// 全部熔断时返回空,模型无工具可用,只能产出文本报告(与 C 强制汇总呼应)。
+func filterToolsByCircuitBreaker(tools []map[string]interface{}, streak map[string]int, threshold int) []map[string]interface{} {
+	filtered := make([]map[string]interface{}, 0, len(tools))
+	for _, t := range tools {
+		name := ""
+		if fn, ok := t["function"].(map[string]interface{}); ok {
+			if n, ok := fn["name"].(string); ok {
+				name = n
+			}
+		}
+		if streak[name] >= threshold {
+			continue // 已熔断,移除
+		}
+		filtered = append(filtered, t)
+	}
+	return filtered
 }
