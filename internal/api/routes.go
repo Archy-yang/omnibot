@@ -197,6 +197,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
 		ToolRegistry:       agentToolRegistry,
 		SystemPrompt:       agentpkg.MainAgentSystemPrompt(true),
+		// 主 Agent 同样装配执行链:熔断(工具连失败抑制)+ 强制汇总(MaxSteps 兜底出报告,不吐废话)。
+		Hooks: []agentpkg.RoundHook{
+			agentpkg.NewCircuitBreakerHook(agentpkg.ToolFailureThreshold),
+			agentpkg.NewForceSummaryHook(agentLLMClient),
+		},
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)

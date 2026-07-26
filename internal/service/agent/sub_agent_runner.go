@@ -87,12 +87,17 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domaina
 	}
 	// 用 AgentService 聚合 Run(内部 drain RunStream,产生 Records + FinalResponse)。
 	// 不能直接用 ReActAgent.Run(老路径不产生 Records,导致子 Agent 步骤落不了库)。
+	// 子 Agent 装配执行链 hook:熔断(抑制对失败工具的无限重试)+ 强制汇总(MaxSteps 兜底出报告)。
 	svc := NewAgentService(AgentServiceConfig{
 		LLMClient:          syncClient,
 		StreamingLLMClient: streamClient,
 		ToolRegistry:       subToolRegistry,
 		MaxSteps:           maxSteps,
 		SystemPrompt:       systemPrompt,
+		Hooks: []RoundHook{
+			NewCircuitBreakerHook(ToolFailureThreshold),
+			NewForceSummaryHook(streamClient),
+		},
 	})
 
 	// 5. 子 Agent 独立上下文:只有 system(已含 goal)+ 一条 user 触发。

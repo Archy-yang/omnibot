@@ -45,6 +45,9 @@ type ReActAgentConfig struct {
 	MaxSteps           int
 	Timeout            time.Duration
 	SystemPrompt       string
+	// Hooks 可插拔的执行链机制(熔断/强制汇总等)。nil/空=纯推理(无机制)。
+	// 主 Agent 可不传(纯推理),子 Agent 传 [CircuitBreakerHook, ForceSummaryHook]。
+	Hooks []RoundHook
 }
 
 // 默认值
@@ -52,9 +55,9 @@ const (
 	DefaultMaxSteps = 10
 	DefaultTimeout  = 120 * time.Second
 
-	// toolFailureThreshold 同一工具连续失败达此次数后熔断(不再执行,返回禁用提示)。
-	// 抑制子 Agent 对一直失败的工具(如 web_reader 对 401 站点)无限重试。
-	toolFailureThreshold = 3
+	// ToolFailureThreshold 同一工具连续失败达此次数后熔断(不再执行,返回禁用提示)。
+	// 抑制子 Agent 对一直失败的工具(如 web_reader 对 401 站点)无限重试。可装配时覆盖。
+	ToolFailureThreshold = 3
 )
 
 var defaultSystemPrompt = `You are a helpful AI assistant with access to tools.
@@ -111,6 +114,7 @@ type ReActAgent struct {
 	maxSteps        int
 	timeout         time.Duration
 	systemPrompt    string
+	hooks           []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -131,6 +135,7 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		maxSteps:        config.MaxSteps,
 		timeout:         config.Timeout,
 		systemPrompt:    config.SystemPrompt,
+		hooks:           config.Hooks,
 	}
 }
 
@@ -298,13 +303,16 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 		tools := a.toolRegistry.ToOpenAITools()
 
-		// 累积本轮 ReAct 中所有 token 拼接成的最终回答，仅在最后没有 tool_call 时才有意义。
-		// 用 string 拼接 OK，因为 LLM 单次回答的 token 总量有限（远小于 context window）。
-		var finalAnswer string
-
-		// 工具连续失败熔断(B):同一工具连续失败达 toolFailureThreshold 次,后续调用不再执行 Execute,
-		// 直接返回熔断提示,迫使模型改路子。某次成功则清零该工具计数。抑制子 Agent 无限重试同类失败。
-		toolFailStreak := make(map[string]int)
+		// 运行时共享状态 + hook 链。熔断计数/强制汇总等机制通过 hook 介入循环,
+		// 循环本身保持纯推理(调 LLM -> 解析 -> 执行工具 -> 判断结束)。
+		rt := &Runtime{
+			Ctx:        ctx,
+			Messages:   messages,
+			Tools:      tools,
+			FailStreak: make(map[string]int),
+			Emit:       func(e AgentEvent) { out <- e },
+		}
+		hooks := newHookChain(a.hooks)
 
 		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
 			select {
@@ -314,15 +322,15 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				return
 			default:
 			}
+			rt.Step = stepNum
 
 			// v1.5.5：快照本轮发给模型的 messages 作为 request 记录，并起计耗时。
-			reqSnapshot := marshalMessagesSnapshot(messages)
+			reqSnapshot := marshalMessagesSnapshot(rt.Messages)
 			roundStart := time.Now()
 
-			// 熔断硬约束(B):本轮发给 LLM 的 tools 移除已熔断工具,让模型看不到它们。
-			// 比"调用时返回提示"更狠--模型无法再发起该工具调用,被迫转向(见 task 18)。
-			roundTools := filterToolsByCircuitBreaker(tools, toolFailStreak, toolFailureThreshold)
-			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, messages, roundTools)
+			// hook 链:BeforeRound 过滤本轮可用 tools(如熔断移除已禁工具)。无 hook 则原样。
+			roundTools := hooks.BeforeRound(rt)
+			chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, rt.Messages, roundTools)
 			if err != nil {
 				// LLM 调用打开失败也记一条 error 的 llm_call 步骤，再 emit Error。
 				out <- AgentEvent{
@@ -391,11 +399,11 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					StepStatus:     StepStatusSuccess,
 					StepDurationMs: time.Since(roundStart).Milliseconds(),
 				}
-				finalAnswer += roundContent
+				rt.FinalAnswer += roundContent
 				// 思考模式 C5:回复轮(无 tool_call)发 Final,携带本轮完整文本(= 最终回复)。
 				// 消费方据此明确区分思考与回复,不靠位置推断。
 				out <- AgentEvent{Type: AgentEventFinal, Content: roundContent}
-				out <- AgentEvent{Type: AgentEventDone, Content: finalAnswer}
+				out <- AgentEvent{Type: AgentEventDone, Content: rt.FinalAnswer}
 				return
 			}
 
@@ -413,6 +421,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 构造塞回 messages 的 OpenAI 风格 tool_calls 数组（保持和同步 Run 一致的格式）
 			rawToolCalls := make([]map[string]interface{}, 0, len(indices))
+			toolCalls := make([]ToolCall, 0, len(indices))
 			for _, idx := range indices {
 				acc := toolCallAccum[idx]
 				rawToolCalls = append(rawToolCalls, map[string]interface{}{
@@ -423,8 +432,15 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 						"arguments": acc.argumentsBuilder.String(),
 					},
 				})
+				toolCalls = append(toolCalls, ToolCall{ID: acc.id, Name: acc.name})
 			}
-			messages = append(messages, buildAssistantToolCallMessage(rawToolCalls, roundReasoning))
+			rt.Messages = append(rt.Messages, buildAssistantToolCallMessage(rawToolCalls, roundReasoning))
+
+			// hook 链:OnLLMResult(预留;当前内置 hook 不阻断)。返回 false 提前结束本轮工具执行。
+			if !hooks.OnLLMResult(rt, roundContent, roundReasoning, toolCalls) {
+				out <- AgentEvent{Type: AgentEventDone, Content: rt.FinalAnswer}
+				return
+			}
 
 			// v1.5.5：记一条 llm_call 步骤（response 是模型决定调用的 tool_calls）。
 			out <- AgentEvent{
@@ -472,23 +488,24 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				if !ok {
 					toolResult = fmt.Sprintf("错误：工具 %q 不存在", toolCall.Name)
 					status = StepStatusNotFound
-				} else if toolFailStreak[toolCall.Name] >= toolFailureThreshold {
-					// 熔断(B):该工具已连续失败达阈值,不再执行,直接返回禁用提示。
-					// 让模型读到"已禁用"从而改换思路/基于已有信息汇总,停止无效重试。
-					toolResult = fmt.Sprintf("工具 %q 已连续失败 %d 次,已禁用。请改用其他来源或基于已有信息汇总,不要再调用该工具。",
-						toolCall.Name, toolFailStreak[toolCall.Name])
-					status = StepStatusError
 				} else {
-					result, execErr := tool.Execute(ctx, toolCall.Arguments)
-					if execErr != nil {
-						toolResult = fmt.Sprintf("工具执行错误: %s", execErr.Error())
-						status = StepStatusError
-						toolFailStreak[toolCall.Name]++
+					// hook 链:OnToolExecute 短路。第一个 executed=true(如熔断拦截)就用其结果;
+					// 都未拦截才真正执行工具。执行后更新熔断计数(成功清零/失败++,供下轮 BeforeRound 过滤)。
+					r, s, executed := hooks.OnToolExecute(rt, toolCall)
+					if executed {
+						toolResult = r
+						status = s
 					} else {
-						toolResult = result
-						status = StepStatusSuccess
-						// 成功一次清零连续失败计数(偶尔失败不误熔断)
-						toolFailStreak[toolCall.Name] = 0
+						result, execErr := tool.Execute(ctx, toolCall.Arguments)
+						if execErr != nil {
+							toolResult = fmt.Sprintf("工具执行错误: %s", execErr.Error())
+							status = StepStatusError
+							rt.FailStreak[toolCall.Name]++
+						} else {
+							toolResult = result
+							status = StepStatusSuccess
+							rt.FailStreak[toolCall.Name] = 0 // 成功清零(偶尔失败不误熔断)
+						}
 					}
 				}
 				durationMs := time.Since(execStart).Milliseconds()
@@ -503,7 +520,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					StepDurationMs: durationMs,
 				}
 
-				messages = append(messages, map[string]interface{}{
+				rt.Messages = append(rt.Messages, map[string]interface{}{
 					"role":         "tool",
 					"tool_call_id": toolCall.ID,
 					"content":      toolResult,
@@ -512,11 +529,9 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			// 进入下一轮 ReAct，让 LLM 基于工具结果继续推理。
 		}
 
-		// 达到最大步数兜底:不吐"已达到最大步数限制"废话,而是强制做一次无工具 LLM 调用
-		// (tools=[]),让模型基于已收集信息立即产出报告。保证最坏情况也有一份基于已有内容的报告,
-		// 而非跑满步数却啥也没产出(见 task 15/17:15 轮检索后吐一句废话)。
-		// 汇总失败(LLM 报错)才回落兜底文案。
-		summary := a.runForcedSummary(ctx, messages, out)
+		// 达到最大步数兜底:hook 链 OnMaxExhausted 强制汇总(ForceSummaryHook 做无工具 LLM 调用产出报告)。
+		// 无 hook 或汇总失败时回落兜底文案。保证最坏情况也有一份报告,而非跑满步数吐废话。
+		summary := hooks.OnMaxExhausted(rt)
 		if summary == "" {
 			summary = "已达到最大步数限制,未能生成汇总报告。"
 		}
@@ -525,66 +540,6 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 	}()
 
 	return out, nil
-}
-
-// runForcedSummary 在 MaxSteps 用尽时强制做一次无工具 LLM 调用(tools=[]),
-// 让模型基于已收集的对话历史(messages)产出最终报告。emit token(实时)+ llm_call + 返回汇总文本。
-// 失败(stream 打不开/chunk error/空内容)返回空串,由调用方回落兜底文案。
-//
-// 关键:传空 tools,强制模型只能产出文本,不能再调工具继续循环。
-func (a *ReActAgent) runForcedSummary(ctx context.Context, messages []map[string]interface{}, out chan<- AgentEvent) string {
-	// 追加一条 user 提示,明确要求模型立即汇总(不依赖模型自觉)。
-	summaryMessages := make([]map[string]interface{}, len(messages), len(messages)+1)
-	copy(summaryMessages, messages)
-	summaryMessages = append(summaryMessages, map[string]interface{}{
-		"role":    "user",
-		"content": "已达到工具调用步数上限,请立即基于以上已收集的信息,直接产出最终的研究报告/回答,不要再调用任何工具。",
-	})
-
-	reqSnapshot := marshalMessagesSnapshot(summaryMessages)
-	roundStart := time.Now()
-
-	chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, summaryMessages, nil) // tools=nil/空:强制只产出文本
-	if err != nil {
-		out <- AgentEvent{
-			Type:           AgentEventLLMCall,
-			LLMRequest:     reqSnapshot,
-			LLMResponse:    "",
-			StepStatus:     StepStatusError,
-			StepDurationMs:  time.Since(roundStart).Milliseconds(),
-		}
-		return ""
-	}
-
-	var content string
-	for chunk := range chunkCh {
-		if chunk.Error != nil {
-			out <- AgentEvent{
-				Type:           AgentEventLLMCall,
-				LLMRequest:     reqSnapshot,
-				LLMResponse:    content,
-				StepStatus:     StepStatusError,
-				StepDurationMs: time.Since(roundStart).Milliseconds(),
-			}
-			return ""
-		}
-		if chunk.Done {
-			continue
-		}
-		if chunk.ContentDelta != "" {
-			out <- AgentEvent{Type: AgentEventToken, Content: chunk.ContentDelta}
-			content += chunk.ContentDelta
-		}
-	}
-
-	out <- AgentEvent{
-		Type:           AgentEventLLMCall,
-		LLMRequest:     reqSnapshot,
-		LLMResponse:    marshalLLMResponse(content, nil),
-		StepStatus:     StepStatusSuccess,
-		StepDurationMs: time.Since(roundStart).Milliseconds(),
-	}
-	return content
 }
 
 // toolCallAccumulator 累积单个 tool_call 跨 chunk 的增量数据。

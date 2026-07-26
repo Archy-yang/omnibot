@@ -12,6 +12,9 @@ type AgentServiceConfig struct {
 	ToolRegistry       *ToolRegistry
 	MaxSteps           int
 	SystemPrompt       string
+	// Hooks 可插拔执行链(熔断/强制汇总等)。子 Agent 应装配[熔断+强制汇总];
+	// 主 Agent 可不传(纯推理)或按需装配。nil=无机制(纯 ReAct 推理)。
+	Hooks []RoundHook
 }
 
 // AgentService 封装 ReActAgent,供 API 层调用。
@@ -25,6 +28,7 @@ type AgentService struct {
 	toolRegistry        *ToolRegistry
 	maxSteps            int
 	systemPrompt        string
+	hooks               []RoundHook
 }
 
 // NewAgentService 创建 Agent 服务。
@@ -35,6 +39,7 @@ func NewAgentService(config AgentServiceConfig) *AgentService {
 		toolRegistry:        config.ToolRegistry,
 		maxSteps:            config.MaxSteps,
 		systemPrompt:        config.SystemPrompt,
+		hooks:               config.Hooks,
 	}
 }
 
@@ -168,6 +173,7 @@ func (s *AgentService) runStreamWithClient(
 		ToolRegistry:       s.toolRegistry,
 		MaxSteps:           s.maxSteps,
 		SystemPrompt:       s.systemPrompt,
+		Hooks:              s.hooks,
 	})
 	return agent.RunStream(withUserID(ctx, userID), conversation)
 }

@@ -495,6 +495,7 @@ func TestReActAgent_RunStream_ToolCircuitBreaker(t *testing.T) {
 		ToolRegistry:       registry,
 		MaxSteps:           10,
 		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
 	})
 
 	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
@@ -558,6 +559,7 @@ func TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess(t *testing.T) {
 		ToolRegistry:       registry,
 		MaxSteps:           10,
 		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
 	})
 
 	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
@@ -616,6 +618,7 @@ func TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools(t *testing.T) 
 		ToolRegistry:       registry,
 		MaxSteps:           10,
 		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
 	})
 
 	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
@@ -698,6 +701,7 @@ func TestReActAgent_RunStream_MaxStepsForcedSummary(t *testing.T) {
 		ToolRegistry:       registry,
 		MaxSteps:           2,
 		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewForceSummaryHook(llm)},
 	})
 
 	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
@@ -762,6 +766,7 @@ func TestReActAgent_RunStream_MaxStepsSummaryNoTools(t *testing.T) {
 		ToolRegistry:       registry,
 		MaxSteps:           2,
 		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewForceSummaryHook(llm)},
 	})
 
 	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{

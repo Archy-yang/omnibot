@@ -16,7 +16,7 @@ func TestFilterToolsByCircuitBreaker(t *testing.T) {
 	}
 	streak := map[string]int{"web_reader": 3} // web_reader 达熔断阈值
 
-	got := filterToolsByCircuitBreaker(tools, streak, toolFailureThreshold)
+	got := filterToolsByCircuitBreaker(tools, streak, ToolFailureThreshold)
 
 	// web_reader 被移除,剩下 web_fetcher + rss_reader
 	assert.Len(t, got, 2)
@@ -38,7 +38,7 @@ func TestFilterToolsByCircuitBreaker_NoneTripped(t *testing.T) {
 	}
 	streak := map[string]int{"a": 1, "b": 2} // 都没到阈值 3
 
-	got := filterToolsByCircuitBreaker(tools, streak, toolFailureThreshold)
+	got := filterToolsByCircuitBreaker(tools, streak, ToolFailureThreshold)
 	assert.Len(t, got, 2, "都没达阈值,应原样返回")
 }
 
@@ -50,6 +50,6 @@ func TestFilterToolsByCircuitBreaker_AllTripped(t *testing.T) {
 	}
 	streak := map[string]int{"a": 3, "b": 3}
 
-	got := filterToolsByCircuitBreaker(tools, streak, toolFailureThreshold)
+	got := filterToolsByCircuitBreaker(tools, streak, ToolFailureThreshold)
 	assert.Empty(t, got, "全部熔断应返回空,模型无工具只能出报告")
 }
