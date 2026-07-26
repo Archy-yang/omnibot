@@ -35,6 +35,36 @@ import (
 	"go.uber.org/zap"
 )
 
+// researcherSystemPrompt 研究员子 Agent 的 system prompt。
+//
+// 设计目标:在 ReAct「每轮决定是否再次调用工具」这个决策点上,显式约束收敛,
+// 避免 web_fetcher 对 JS 渲染页面拿不到正文时,模型反复换 URL 重试直至跑满 MaxSteps
+// (见 task 15:15 轮 web_fetcher,最后吐"已达到最大步数限制",检索全白做)。
+//
+// 三条收敛规则:
+//  1. 每轮工具调用前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
+//     够了就立即产出报告,不要再调工具。
+//  2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,不要继续重试--
+//     改换思路或基于已收集信息汇总。绝不反复重试同类失败。
+//  3. 信息不足也能产出报告:基于已有来源如实汇总,明确标注哪些部分未能查证,
+//     绝不空转到最后一句"已达到最大步数限制"。
+var researcherSystemPrompt = `你是一名研究员。目标:{goal}。
+
+工作方式:用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。
+
+== 收敛规则(每轮决策是否再次调工具时必须遵守)==
+1. 调用工具前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
+   信息够就立即产出报告,不要再调工具。宁可早出报告,不要多检索。
+2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,
+   立即停止重试该工具,改换思路或基于已有信息汇总。绝不反复重试同类失败。
+3. 信息不足也必须产出报告:基于已有来源如实汇总,对未能查证的部分明确标注"未能查证",
+   绝不空转到步数耗尽。一份基于部分来源的报告,远好过跑满步数却啥也没产出。
+
+== web_fetcher 注意事项==
+web_fetcher 对 JS 渲染页面(SPA,如首页/活动页)常只能抓到导航菜单而非正文。
+若一次抓取结果是导航菜单、空正文、或乱码,视为该页面无效,不要继续换该站点的
+其他 URL 重试--改用 search_memories/search_history 查历史,或基于已有信息汇总。`
+
 func init() {
 	channelfactory.Register(channelweb.NewChannel())
 	channelfactory.Register(channelwechat.NewChannel())
@@ -149,7 +179,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Type:           "researcher",
 		Name:           "研究员",
 		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
-		PromptTemplate: "你是一名研究员。目标:{goal}。使用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。",
+		PromptTemplate: researcherSystemPrompt,
 		Tools:          []string{"rss_reader", "web_fetcher", "web_reader", "search_memories", "search_history"},
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
