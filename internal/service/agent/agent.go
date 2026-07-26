@@ -492,12 +492,79 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			// 进入下一轮 ReAct，让 LLM 基于工具结果继续推理。
 		}
 
-		// 达到最大步数兜底
-		out <- AgentEvent{Type: AgentEventFinal, Content: "已达到最大步数限制。"}
-		out <- AgentEvent{Type: AgentEventDone, Content: "已达到最大步数限制。"}
+		// 达到最大步数兜底:不吐"已达到最大步数限制"废话,而是强制做一次无工具 LLM 调用
+		// (tools=[]),让模型基于已收集信息立即产出报告。保证最坏情况也有一份基于已有内容的报告,
+		// 而非跑满步数却啥也没产出(见 task 15/17:15 轮检索后吐一句废话)。
+		// 汇总失败(LLM 报错)才回落兜底文案。
+		summary := a.runForcedSummary(ctx, messages, out)
+		if summary == "" {
+			summary = "已达到最大步数限制,未能生成汇总报告。"
+		}
+		out <- AgentEvent{Type: AgentEventFinal, Content: summary}
+		out <- AgentEvent{Type: AgentEventDone, Content: summary}
 	}()
 
 	return out, nil
+}
+
+// runForcedSummary 在 MaxSteps 用尽时强制做一次无工具 LLM 调用(tools=[]),
+// 让模型基于已收集的对话历史(messages)产出最终报告。emit token(实时)+ llm_call + 返回汇总文本。
+// 失败(stream 打不开/chunk error/空内容)返回空串,由调用方回落兜底文案。
+//
+// 关键:传空 tools,强制模型只能产出文本,不能再调工具继续循环。
+func (a *ReActAgent) runForcedSummary(ctx context.Context, messages []map[string]interface{}, out chan<- AgentEvent) string {
+	// 追加一条 user 提示,明确要求模型立即汇总(不依赖模型自觉)。
+	summaryMessages := make([]map[string]interface{}, len(messages), len(messages)+1)
+	copy(summaryMessages, messages)
+	summaryMessages = append(summaryMessages, map[string]interface{}{
+		"role":    "user",
+		"content": "已达到工具调用步数上限,请立即基于以上已收集的信息,直接产出最终的研究报告/回答,不要再调用任何工具。",
+	})
+
+	reqSnapshot := marshalMessagesSnapshot(summaryMessages)
+	roundStart := time.Now()
+
+	chunkCh, err := a.streamingClient.ChatCompletionStream(ctx, summaryMessages, nil) // tools=nil/空:强制只产出文本
+	if err != nil {
+		out <- AgentEvent{
+			Type:           AgentEventLLMCall,
+			LLMRequest:     reqSnapshot,
+			LLMResponse:    "",
+			StepStatus:     StepStatusError,
+			StepDurationMs:  time.Since(roundStart).Milliseconds(),
+		}
+		return ""
+	}
+
+	var content string
+	for chunk := range chunkCh {
+		if chunk.Error != nil {
+			out <- AgentEvent{
+				Type:           AgentEventLLMCall,
+				LLMRequest:     reqSnapshot,
+				LLMResponse:    content,
+				StepStatus:     StepStatusError,
+				StepDurationMs: time.Since(roundStart).Milliseconds(),
+			}
+			return ""
+		}
+		if chunk.Done {
+			continue
+		}
+		if chunk.ContentDelta != "" {
+			out <- AgentEvent{Type: AgentEventToken, Content: chunk.ContentDelta}
+			content += chunk.ContentDelta
+		}
+	}
+
+	out <- AgentEvent{
+		Type:           AgentEventLLMCall,
+		LLMRequest:     reqSnapshot,
+		LLMResponse:    marshalLLMResponse(content, nil),
+		StepStatus:     StepStatusSuccess,
+		StepDurationMs: time.Since(roundStart).Milliseconds(),
+	}
+	return content
 }
 
 // toolCallAccumulator 累积单个 tool_call 跨 chunk 的增量数据。

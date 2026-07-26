@@ -468,3 +468,122 @@ func (noopSyncLLM) ChatCompletion(
 ) (string, []map[string]interface{}, error) {
 	return "", nil, nil
 }
+
+// TestReActAgent_RunStream_MaxStepsForcedSummary 达到最大步数时不应吐"已达到最大步数限制"废话,
+// 而是强制做一次无工具 LLM 调用(tools=[]),让模型基于已收集信息产出报告。
+//
+// 场景:MaxSteps=2,前 2 轮都调工具(模拟子 Agent 卡循环),第 3 轮(汇总轮)给纯文本回答。
+// 验证:最终 Final 是汇总轮的内容,而非"已达到最大步数限制";且汇总轮 LLM 调用时 tools 为空。
+func TestReActAgent_RunStream_MaxStepsForcedSummary(t *testing.T) {
+	llm := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			// round1: 调工具
+			{
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "get_current_time", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round2: 再调工具(达 MaxSteps=2)
+			{
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "get_current_time", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round3: 汇总轮(无工具,纯文本报告)
+			{
+				{ContentDelta: "基于已有信息:当前时间已查询。"},
+				{FinishReason: "stop"},
+				{Done: true},
+			},
+		},
+	}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "get_current_time", DisplayLabel: "查询了当前时间",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "10:30", nil
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           2,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "查时间"},
+	})
+	require.NoError(t, err)
+	events := drainEvents(t, ch)
+
+	// 找最后一个 Final 事件
+	var finalContent string
+	for _, e := range events {
+		if e.Type == AgentEventFinal {
+			finalContent = e.Content
+		}
+	}
+	require.NotEmpty(t, finalContent, "应有 Final 事件")
+	assert.Contains(t, finalContent, "基于已有信息", "达 MaxSteps 应强制汇总产出报告,而非废话")
+	assert.NotContains(t, finalContent, "已达到最大步数限制", "不应再吐废话兜底文案")
+	// 汇总轮调了 3 次 LLM(2 轮工具 + 1 轮汇总)
+	assert.Equal(t, 3, llm.callCount, "应额外做一次无工具汇总调用")
+}
+
+// captureToolsLLMClient 包装 mockStreamingLLMClient,记录每次调用传入的 tools,
+// 供 MaxStepsForcedSummary 测试断言汇总轮 tools 为空。
+type captureToolsLLMClient struct {
+	*mockStreamingLLMClient
+	toolsPerCall [][]map[string]interface{}
+}
+
+func (c *captureToolsLLMClient) ChatCompletionStream(
+	ctx context.Context,
+	messages []map[string]interface{},
+	tools []map[string]interface{},
+) (<-chan LLMStreamChunk, error) {
+	// 深拷贝 tools 快照(避免被复用)
+	snap := make([]map[string]interface{}, len(tools))
+	copy(snap, tools)
+	c.toolsPerCall = append(c.toolsPerCall, snap)
+	return c.mockStreamingLLMClient.ChatCompletionStream(ctx, messages, tools)
+}
+
+// TestReActAgent_RunStream_MaxStepsSummaryNoTools 达 MaxSteps 的汇总轮必须用空 tools 调 LLM,
+// 强制模型只能产出文本报告(不能再调工具继续循环)。
+func TestReActAgent_RunStream_MaxStepsSummaryNoTools(t *testing.T) {
+	inner := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "get_current_time", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "get_current_time", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ContentDelta: "汇总报告"}, {FinishReason: "stop"}, {Done: true}},
+		},
+	}
+	llm := &captureToolsLLMClient{mockStreamingLLMClient: inner}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "get_current_time",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) { return "t", nil },
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           2,
+		Timeout:            5 * time.Second,
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	require.Len(t, llm.toolsPerCall, 3, "应 3 次调用(2 工具轮 + 1 汇总轮)")
+	assert.NotEmpty(t, llm.toolsPerCall[0], "前 2 轮应带工具")
+	assert.NotEmpty(t, llm.toolsPerCall[1], "前 2 轮应带工具")
+	assert.Empty(t, llm.toolsPerCall[2], "汇总轮 tools 必须为空,强制只产出报告")
+}
