@@ -66,15 +66,38 @@ func newHookChain(hooks []RoundHook) RoundHook {
 	return &hookChain{hooks: hooks}
 }
 
-// BeforeRound 链式:每个 hook 在上一个输出上再过滤。
+// BeforeRound 并行过滤:每个 hook 独立基于全量 rt.Tools 过滤,取交集。
+// 熔断移除 X、权限移除 Y -> 最终两者都不在。比"链式传递"更简单且无状态污染。
 func (c *hookChain) BeforeRound(rt *Runtime) []map[string]interface{} {
-	tools := rt.Tools
-	for _, h := range c.hooks {
-		// 把当前过滤结果放回 rt(供下一个 hook 读取一致)
-		rt.Tools = tools
-		tools = h.BeforeRound(rt)
+	if len(c.hooks) == 0 {
+		return rt.Tools
 	}
-	return tools
+	// 每个 hook 过滤结果转 name set,取各 hook 都保留的(name 在所有结果集里)。
+	keep := make(map[string]int) // name -> 被保留的 hook 数
+	for _, h := range c.hooks {
+		filtered := h.BeforeRound(rt)
+		for _, t := range filtered {
+			if fn, ok := t["function"].(map[string]interface{}); ok {
+				if n, ok := fn["name"].(string); ok {
+					keep[n]++
+				}
+			}
+		}
+	}
+	out := make([]map[string]interface{}, 0, len(rt.Tools))
+	for _, t := range rt.Tools {
+		name := ""
+		if fn, ok := t["function"].(map[string]interface{}); ok {
+			if n, ok := fn["name"].(string); ok {
+				name = n
+			}
+		}
+		// noop hook(返回全量)时 keep[name] 会达 len(hooks);只要所有 hook 都保留即留在结果
+		if keep[name] == len(c.hooks) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // OnLLMResult 广播:每个 hook 都调,任一返回 proceed=false 即停止。
