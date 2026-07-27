@@ -32,9 +32,9 @@ type call struct {
 	goal string
 }
 
-func (m *mockRunner) Run(ctx context.Context, _ int64, _ int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
+func (m *mockRunner) Run(ctx context.Context, _ int64, _ int64, card domainagent.SubAgentCard, spec domainagent.TaskSpec, onStep func(StepRecord)) (string, error) {
 	m.mu.Lock()
-	m.calls = append(m.calls, call{card: card, goal: goal})
+	m.calls = append(m.calls, call{card: card, goal: spec.Goal})
 	m.mu.Unlock()
 	if m.delay > 0 {
 		select {
@@ -110,7 +110,7 @@ func TestSubAgentService_StartTask_Success(t *testing.T) {
 	runner := &mockRunner{artifact: "Go 1.24 要点:① 泛型 ② ...", delay: 20 * time.Millisecond}
 	svc, repo, stepRepo := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", "研究 Go 1.24")
+	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"))
 	require.NoError(t, err)
 	assert.NotZero(t, taskID)
 
@@ -137,7 +137,7 @@ func TestSubAgentService_StartTask_RunnerError(t *testing.T) {
 	runner := &mockRunner{err: errors.New("llm timeout"), delay: 20 * time.Millisecond}
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 1, "researcher", "goal")
+	taskID, err := svc.StartTask(context.Background(), 1, "researcher", domainagent.NewTaskSpec("goal"))
 	require.NoError(t, err)
 
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
@@ -150,7 +150,7 @@ func TestSubAgentService_StartTask_EmptyArtifact(t *testing.T) {
 	runner := &mockRunner{artifact: "   ", delay: 20 * time.Millisecond} // 空白产出
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, _ := svc.StartTask(context.Background(), 1, "researcher", "goal")
+	taskID, _ := svc.StartTask(context.Background(), 1, "researcher", domainagent.NewTaskSpec("goal"))
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
 	require.NotNil(t, task.ErrorMsg)
 	assert.Contains(t, *task.ErrorMsg, "未产出有效结果")
@@ -164,7 +164,7 @@ type incrementalMockRunner struct {
 	artifact     string
 }
 
-func (m *incrementalMockRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, onStep func(StepRecord)) (string, error) {
+func (m *incrementalMockRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ domainagent.TaskSpec, onStep func(StepRecord)) (string, error) {
 	if onStep != nil {
 		onStep(m.onStepRecord)
 	}
@@ -189,7 +189,7 @@ func TestSubAgentService_StepsSavedIncrementally(t *testing.T) {
 	}
 	svc, repo, stepRepo := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", "g")
+	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, err)
 
 	// 任务 running 中就应能从 DB 查到 onStep 实时落的步骤(不等结束)
@@ -222,7 +222,7 @@ func TestSubAgentService_StepsSavedIncrementally(t *testing.T) {
 func TestSubAgentService_StartTask_UnregisteredType(t *testing.T) {
 	svc, _, _ := setupSubAgentService(t, &mockRunner{})
 
-	_, err := svc.StartTask(context.Background(), 1, "nonexistent", "goal")
+	_, err := svc.StartTask(context.Background(), 1, "nonexistent", domainagent.NewTaskSpec("goal"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not registered")
 }
@@ -231,17 +231,17 @@ func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{artifact: "result"})
 
 	// 直接造任务(不经 StartTask,避免异步)
-	t1 := domainagent.NewAgentTask(1, "researcher", "g1")
+	t1 := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g1"))
 	require.NoError(t, repo.Create(t1))
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, strPtrService("a1"), nil))
 
-	t2 := domainagent.NewAgentTask(1, "researcher", "g2")
+	t2 := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g2"))
 	require.NoError(t, repo.Create(t2))
 	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, strPtrService("a2"), nil))
 	require.NoError(t, repo.MarkReported(t2.ID)) // 已汇报
 
 	// 别的用户的任务
-	t3 := domainagent.NewAgentTask(2, "researcher", "g3")
+	t3 := domainagent.NewAgentTask(2, "researcher", domainagent.NewTaskSpec("g3"))
 	require.NoError(t, repo.Create(t3))
 	require.NoError(t, repo.UpdateStatus(t3.ID, domainagent.TaskStatusCompleted, strPtrService("a3"), nil))
 
@@ -253,7 +253,7 @@ func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
 
 func TestSubAgentService_MarkReported(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
-	task := domainagent.NewAgentTask(1, "researcher", "g")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))
 
@@ -266,7 +266,7 @@ func TestSubAgentService_MarkReported(t *testing.T) {
 func TestSubAgentService_QueryTask(t *testing.T) {
 	svc, repo, stepRepo := setupSubAgentService(t, &mockRunner{artifact: "result"})
 
-	task := domainagent.NewAgentTask(1, "researcher", "研究 Go 1.24")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 	// 落 2 步(关联 task_id)
@@ -294,10 +294,10 @@ func TestSubAgentService_QueryTask(t *testing.T) {
 func TestSubAgentService_ListUserTasks(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	for i := 0; i < 3; i++ {
-		tk := domainagent.NewAgentTask(1, "researcher", "g")
+		tk := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 		require.NoError(t, repo.Create(tk))
 	}
-	tk2 := domainagent.NewAgentTask(2, "researcher", "other")
+	tk2 := domainagent.NewAgentTask(2, "researcher", domainagent.NewTaskSpec("other"))
 	require.NoError(t, repo.Create(tk2))
 
 	list, err := svc.ListUserTasks(1, 10)
@@ -311,7 +311,7 @@ func TestSubAgentService_ListUserTasks(t *testing.T) {
 // TestSubAgentService_CancelTask_Pending pending 任务直接取消(没起 runner)。
 func TestSubAgentService_CancelTask_Pending(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
-	task := domainagent.NewAgentTask(1, "researcher", "g")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task)) // pending
 
 	require.NoError(t, svc.CancelTask(1, task.ID))
@@ -322,7 +322,7 @@ func TestSubAgentService_CancelTask_Pending(t *testing.T) {
 // TestSubAgentService_CancelTask_TerminalRejected 已结束任务不可取消。
 func TestSubAgentService_CancelTask_TerminalRejected(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
-	task := domainagent.NewAgentTask(1, "researcher", "g")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))
 
@@ -337,7 +337,7 @@ func TestSubAgentService_CancelTask_RunningTriggersCtxCancel(t *testing.T) {
 	runner := &ctxCaptureRunner{proceed: proceed, artifact: "result"}
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 1, "researcher", "g")
+	taskID, err := svc.StartTask(context.Background(), 1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, err)
 	// 等 runner 启动(running 状态 + cancel 注册)
 	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusRunning, 2*time.Second)
@@ -356,7 +356,7 @@ func TestSubAgentService_CancelTask_RunningTriggersCtxCancel(t *testing.T) {
 // TestSubAgentService_UpdateTask_Pending pending 改 goal。
 func TestSubAgentService_UpdateTask_Pending(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
-	task := domainagent.NewAgentTask(1, "researcher", "旧 goal")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("旧 goal"))
 	require.NoError(t, repo.Create(task))
 
 	require.NoError(t, svc.UpdateTask(1, task.ID, "新 goal", ""))
@@ -368,7 +368,7 @@ func TestSubAgentService_UpdateTask_Pending(t *testing.T) {
 // TestSubAgentService_UpdateTask_RunningAppendNote running 追加 notes。
 func TestSubAgentService_UpdateTask_RunningAppendNote(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{artifact: "result"})
-	task := domainagent.NewAgentTask(1, "researcher", "g")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 
@@ -383,7 +383,7 @@ func TestSubAgentService_UpdateTask_RunningAppendNote(t *testing.T) {
 // TestSubAgentService_UpdateTask_TerminalRejected 已结束任务不可更新。
 func TestSubAgentService_UpdateTask_TerminalRejected(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
-	task := domainagent.NewAgentTask(1, "researcher", "g")
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, strPtrService("err")))
 
@@ -399,7 +399,7 @@ type ctxCaptureRunner struct {
 	gotCtx   context.Context
 }
 
-func (r *ctxCaptureRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, _ func(StepRecord)) (string, error) {
+func (r *ctxCaptureRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ domainagent.TaskSpec, _ func(StepRecord)) (string, error) {
 	r.gotCtx = ctx
 	select {
 	case <-r.proceed:

@@ -34,7 +34,7 @@ func TestQueryTaskTool_Single(t *testing.T) {
 	svc, repo, stepRepo := setupTaskToolsTest(t)
 	tool := CreateQueryTaskTool(svc)
 
-	task := domainagent.NewAgentTask(42, "researcher", "研究 Go 1.24")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"))
 	require.NoError(t, repo.Create(task))
 	// 落 1 步
 	s := mustNewStep(task.ID, 42)
@@ -53,7 +53,7 @@ func TestQueryTaskTool_List(t *testing.T) {
 	svc, repo, _ := setupTaskToolsTest(t)
 	tool := CreateQueryTaskTool(svc)
 	for i := 0; i < 3; i++ {
-		require.NoError(t, repo.Create(domainagent.NewAgentTask(42, "researcher", "g")))
+		require.NoError(t, repo.Create(domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))))
 	}
 
 	ctx := withUserID(context.Background(), 42)
@@ -66,7 +66,7 @@ func TestQueryTaskTool_List(t *testing.T) {
 func TestQueryTaskTool_NotOwned(t *testing.T) {
 	svc, repo, _ := setupTaskToolsTest(t)
 	tool := CreateQueryTaskTool(svc)
-	task := domainagent.NewAgentTask(42, "researcher", "g")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 
 	ctx := withUserID(context.Background(), 999)
@@ -78,7 +78,7 @@ func TestQueryTaskTool_NotOwned(t *testing.T) {
 func TestCancelTaskTool_Pending(t *testing.T) {
 	svc, repo, _ := setupTaskToolsTest(t)
 	tool := CreateCancelTaskTool(svc)
-	task := domainagent.NewAgentTask(42, "researcher", "g")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 
 	ctx := withUserID(context.Background(), 42)
@@ -105,7 +105,7 @@ func TestCancelTaskTool_MissingArgs(t *testing.T) {
 func TestUpdateTaskTool_PendingGoal(t *testing.T) {
 	svc, repo, _ := setupTaskToolsTest(t)
 	tool := CreateUpdateTaskTool(svc)
-	task := domainagent.NewAgentTask(42, "researcher", "旧")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("旧"))
 	require.NoError(t, repo.Create(task))
 
 	ctx := withUserID(context.Background(), 42)
@@ -124,7 +124,7 @@ func TestUpdateTaskTool_PendingGoal(t *testing.T) {
 func TestUpdateTaskTool_RunningNote(t *testing.T) {
 	svc, repo, _ := setupTaskToolsTest(t)
 	tool := CreateUpdateTaskTool(svc)
-	task := domainagent.NewAgentTask(42, "researcher", "g")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 
@@ -144,7 +144,7 @@ func TestUpdateTaskTool_RunningNote(t *testing.T) {
 func TestUpdateTaskTool_NoGoalNoNote(t *testing.T) {
 	svc, _, _ := setupTaskToolsTest(t)
 	tool := CreateUpdateTaskTool(svc)
-	task := domainagent.NewAgentTask(42, "researcher", "g")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))
 	ctx := withUserID(context.Background(), 42)
 	// 需先建任务(否则 update 会因任务不存在报错,混淆测试)
 	// 这里直接传空 goal/note 测参数校验

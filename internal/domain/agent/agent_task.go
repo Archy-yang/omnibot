@@ -15,12 +15,14 @@ type AgentTask struct {
 	ID           int64      `gorm:"primaryKey;autoIncrement"`
 	UserID       int64      `gorm:"index;not null"`         // 归属用户(任务按用户隔离)
 	SubAgentType string     `gorm:"size:50;not null"`       // 子 Agent 类型标识,如 "researcher"
-	Goal         string     `gorm:"type:text;not null"`     // 主 Agent 生成的委托目标(已填入子 Agent prompt)
+	Goal         string     `gorm:"type:text;not null"`     // 委托目标(冗余存,task_spec.Goal 的快捷访问;兼容老代码)
 	Status       string     `gorm:"size:20;not null;index"` // pending / running / completed / failed / cancelled
 	Artifact     *string    `gorm:"type:text"`              // 子 Agent 最终产出,completed 时填
 	ErrorMsg     *string    `gorm:"type:text"`              // failed 时填
 	Reported     bool       `gorm:"not null;default:false"` // 是否已汇报给主 Agent(C 模式核心字段)
 	Notes        []string   `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
+	TaskSpec     TaskSpec   `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
+	ParentTaskID *int64     `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
 	CreatedAt    time.Time  `gorm:"not null"`
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
@@ -51,11 +53,13 @@ func (t *AgentTask) IsTerminal() bool {
 }
 
 // NewAgentTask 创建一个 pending 状态的新任务。
-func NewAgentTask(userID int64, subAgentType, goal string) *AgentTask {
+// taskSpec 任务包(含 goal+背景+交付物+完成标准);为兼容老路径,goal 单独冗余存一份。
+func NewAgentTask(userID int64, subAgentType string, taskSpec TaskSpec) *AgentTask {
 	return &AgentTask{
 		UserID:       userID,
 		SubAgentType: subAgentType,
-		Goal:         goal,
+		Goal:         taskSpec.Goal, // 冗余快捷访问
+		TaskSpec:     taskSpec,
 		Status:       TaskStatusPending,
 		CreatedAt:    time.Now(),
 	}

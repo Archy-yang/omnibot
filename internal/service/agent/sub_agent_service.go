@@ -20,13 +20,13 @@ import (
 // SubAgentRunner 子 Agent 执行器接口:按 card 的 prompt+工具集跑一次 Agent,返回最终产出。
 // 生产实现见 subAgentRunnerImpl(用 ReActAgent + 系统默认 LLM);测试可 mock。
 type SubAgentRunner interface {
-	// Run 按 card 配置执行子 Agent。goal 已填入 card.PromptTemplate 生成 system prompt。
+	// Run 按 card 配置执行子 Agent。taskSpec 任务包(含 goal+背景+交付物+完成标准)注入 system prompt。
 	// userID 用于查用户 LLM 配置(方案3:优先用户配置,无则系统默认)。
 	// taskID 用于装配 NoteInjectionHook(running 态 update_task 追加的 notes 注入子 Agent 上下文)。
 	// onStep:每产生一步(LLM调用/工具调用)立即回调,供上层实时落 agent_steps--
 	// 任务 running 中即可观测执行过程,而非等结束批量落。nil 时跳过回调(测试可用)。
 	// 返回子 Agent 的最终回复(FinalResponse)作为 Artifact。
-	Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (artifact string, err error)
+	Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (artifact string, err error)
 }
 
 // SubAgentService 后台子 Agent 任务服务(08 技术方案 §4.3)。
@@ -63,13 +63,13 @@ func NewSubAgentService(
 }
 
 // StartTask 建任务 + 起 goroutine 后台执行,立即返回 task_id(异步,不阻塞调用方)。
-// subAgentType 未注册返回 error(早失败,不静默)。
-func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentType, goal string) (int64, error) {
+// subAgentType 未注册返回 error(早失败,不静默)。taskSpec 为任务包(含 goal+背景+交付物+完成标准)。
+func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentType string, taskSpec domainagent.TaskSpec) (int64, error) {
 	if _, ok := s.registry.Get(subAgentType); !ok {
 		return 0, fmt.Errorf("sub agent %q not registered", subAgentType)
 	}
 
-	task := domainagent.NewAgentTask(userID, subAgentType, goal)
+	task := domainagent.NewAgentTask(userID, subAgentType, taskSpec)
 	if err := s.taskRepo.Create(task); err != nil {
 		return 0, fmt.Errorf("create agent task: %w", err)
 	}
@@ -143,7 +143,7 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		}
 	}
 
-	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, card, task.Goal, onStep)
+	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, card, task.TaskSpec, onStep)
 
 	// 识别取消 vs 真失败:若 ctx 被 cancel(外部 CancelTask 触发),置 cancelled 而非 failed。
 	if ctx.Err() == context.Canceled {

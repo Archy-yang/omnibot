@@ -63,6 +63,33 @@ func TestCreateDelegateTool_ExecuteStartsTask(t *testing.T) {
 	assert.Equal(t, "pending", parsed["status"])
 }
 
+// TestCreateDelegateTool_PassesTaskSpec delegate 传 deliverables/criteria 应落进 task.TaskSpec。
+func TestCreateDelegateTool_PassesTaskSpec(t *testing.T) {
+	tool, svc, _ := setupDelegateToolTest(t)
+
+	ctx := withUserID(context.Background(), 42)
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"sub_agent_type": "researcher",
+		"goal":           "研究 Go 框架",
+		"deliverables": []interface{}{
+			map[string]interface{}{"name": "candidate_list", "description": "候选框架列表"},
+			map[string]interface{}{"name": "recommendation", "description": "推荐"},
+		},
+		"completion_criteria": []interface{}{"至少比较三个", "给出推荐"},
+		"background":          map[string]interface{}{"project": "omnibot"},
+	})
+	require.NoError(t, err)
+
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
+	taskID := int64(parsed["task_id"].(float64))
+
+	// 查回 task,验证 TaskSpec 落库
+	summary, err := svc.QueryTask(42, taskID)
+	require.NoError(t, err)
+	assert.Equal(t, "研究 Go 框架", summary.Goal)
+}
+
 func TestCreateDelegateTool_ExecuteNoUserID(t *testing.T) {
 	tool, _, _ := setupDelegateToolTest(t)
 	// ctx 不带 userID

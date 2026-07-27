@@ -27,7 +27,7 @@ import (
 // runner 仅用于构造 SubAgentService,不会被实际调用。
 type webMockRunner struct{}
 
-func (w *webMockRunner) Run(_ context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, _ func(agentpkg.StepRecord)) (string, error) {
+func (w *webMockRunner) Run(_ context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ domainagent.TaskSpec, _ func(agentpkg.StepRecord)) (string, error) {
 	return "r", nil
 }
 
@@ -56,10 +56,10 @@ func TestHandleListTasks_CompletedUnreported(t *testing.T) {
 	handler, repo := setupAgentTaskHandlerTest(t)
 
 	art := "result"
-	t1 := domainagent.NewAgentTask(42, "researcher", "g1")
+	t1 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g1"))
 	require.NoError(t, repo.Create(t1))
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
-	t2 := domainagent.NewAgentTask(42, "researcher", "g2")
+	t2 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g2"))
 	require.NoError(t, repo.Create(t2))
 	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, &art, nil))
 	require.NoError(t, repo.MarkReported(t2.ID))
@@ -90,10 +90,10 @@ func TestHandleListTasks_UserIsolation(t *testing.T) {
 	handler, repo := setupAgentTaskHandlerTest(t)
 
 	art := "r"
-	t1 := domainagent.NewAgentTask(1, "researcher", "g1")
+	t1 := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g1"))
 	require.NoError(t, repo.Create(t1))
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
-	t2 := domainagent.NewAgentTask(2, "researcher", "g2")
+	t2 := domainagent.NewAgentTask(2, "researcher", domainagent.NewTaskSpec("g2"))
 	require.NoError(t, repo.Create(t2))
 	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, &art, nil))
 
@@ -130,7 +130,7 @@ func TestHandleReportTask_NotFound(t *testing.T) {
 func TestHandleReportTask_ForbiddenNotOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo := setupAgentTaskHandlerTest(t)
-	t1 := domainagent.NewAgentTask(1, "researcher", "g")
+	t1 := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(t1))
 	art := "r"
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
@@ -147,7 +147,7 @@ func TestHandleReportTask_ForbiddenNotOwner(t *testing.T) {
 func TestHandleReportTask_AlreadyReported(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo := setupAgentTaskHandlerTest(t)
-	t1 := domainagent.NewAgentTask(42, "researcher", "g")
+	t1 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"))
 	require.NoError(t, repo.Create(t1))
 	art := "r"
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
@@ -165,7 +165,7 @@ func TestHandleReportTask_AlreadyReported(t *testing.T) {
 func TestHandleReportTask_NotCompleted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo := setupAgentTaskHandlerTest(t)
-	t1 := domainagent.NewAgentTask(42, "researcher", "g") // pending 状态
+	t1 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g")) // pending 状态
 	require.NoError(t, repo.Create(t1))
 
 	router := gin.New()
@@ -203,7 +203,7 @@ func TestHandleListTaskSteps_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo, stepRepo := setupAgentTaskStepsHandlerTest(t)
 
-	t1 := domainagent.NewAgentTask(42, "researcher", "g1")
+	t1 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g1"))
 	require.NoError(t, repo.Create(t1))
 
 	// 插 2 条步骤:llm_call(seq0) + tool_call(seq1)
@@ -242,7 +242,7 @@ func TestHandleListTaskSteps_ForbiddenNotOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo, _ := setupAgentTaskStepsHandlerTest(t)
 
-	t1 := domainagent.NewAgentTask(1, "researcher", "g") // 属主 user 1
+	t1 := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g")) // 属主 user 1
 	require.NoError(t, repo.Create(t1))
 
 	router := gin.New()
@@ -302,7 +302,7 @@ func TestHandleReportTask_PersistsReportMessage(t *testing.T) {
 	}}
 	handler, repo, msgSvc := setupReportHandlerTest(t, agentSvc)
 
-	t1 := domainagent.NewAgentTask(42, "researcher", "研究 Go 1.24")
+	t1 := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"))
 	require.NoError(t, repo.Create(t1))
 	art := "old artifact"
 	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))

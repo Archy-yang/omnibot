@@ -45,7 +45,7 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
 
 	// 造一个 completed 未汇报任务
-	task := domainagent.NewAgentTask(42, "researcher", "研究 Go 1.24")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"))
 	require.NoError(t, repo.Create(task))
 	art := "Go 1.24 要点"
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &art, nil))
