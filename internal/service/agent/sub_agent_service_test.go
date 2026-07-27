@@ -32,7 +32,7 @@ type call struct {
 	goal string
 }
 
-func (m *mockRunner) Run(ctx context.Context, _ int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
+func (m *mockRunner) Run(ctx context.Context, _ int64, _ int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, call{card: card, goal: goal})
 	m.mu.Unlock()
@@ -164,7 +164,7 @@ type incrementalMockRunner struct {
 	artifact     string
 }
 
-func (m *incrementalMockRunner) Run(ctx context.Context, _ int64, _ domainagent.SubAgentCard, _ string, onStep func(StepRecord)) (string, error) {
+func (m *incrementalMockRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, onStep func(StepRecord)) (string, error) {
 	if onStep != nil {
 		onStep(m.onStepRecord)
 	}
@@ -261,5 +261,154 @@ func TestSubAgentService_MarkReported(t *testing.T) {
 	got, _ := svc.GetTask(task.ID)
 	assert.True(t, got.Reported)
 }
+
+// TestSubAgentService_QueryTask 查单个任务概要(状态+goal+步骤数)。属主校验。
+func TestSubAgentService_QueryTask(t *testing.T) {
+	svc, repo, stepRepo := setupSubAgentService(t, &mockRunner{artifact: "result"})
+
+	task := domainagent.NewAgentTask(1, "researcher", "研究 Go 1.24")
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	// 落 2 步(关联 task_id)
+	s1 := conversation.NewLLMStep(1, "req", "resp", "", "success", 10)
+	s2 := conversation.NewToolStep(1, "rss_reader", "{}", "ok", "success", 5)
+	tid := task.ID
+	s1.TaskID = &tid
+	s2.TaskID = &tid
+	require.NoError(t, stepRepo.CreateBatch([]*conversation.AgentStep{s1, s2}))
+
+	// 属主正确
+	summary, err := svc.QueryTask(1, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, summary.ID)
+	assert.Equal(t, domainagent.TaskStatusRunning, summary.Status)
+	assert.Equal(t, "研究 Go 1.24", summary.Goal)
+	assert.Equal(t, 2, summary.StepCount)
+
+	// 属主错误
+	_, err = svc.QueryTask(999, task.ID)
+	assert.ErrorIs(t, err, ErrTaskNotOwned)
+}
+
+// TestSubAgentService_ListUserTasks 列出用户任务(倒序),不含其他用户。
+func TestSubAgentService_ListUserTasks(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	for i := 0; i < 3; i++ {
+		tk := domainagent.NewAgentTask(1, "researcher", "g")
+		require.NoError(t, repo.Create(tk))
+	}
+	tk2 := domainagent.NewAgentTask(2, "researcher", "other")
+	require.NoError(t, repo.Create(tk2))
+
+	list, err := svc.ListUserTasks(1, 10)
+	require.NoError(t, err)
+	assert.Len(t, list, 3)
+	for _, s := range list {
+		assert.Equal(t, int64(1), s.UserID)
+	}
+}
+
+// TestSubAgentService_CancelTask_Pending pending 任务直接取消(没起 runner)。
+func TestSubAgentService_CancelTask_Pending(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task)) // pending
+
+	require.NoError(t, svc.CancelTask(1, task.ID))
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, domainagent.TaskStatusCancelled, got.Status)
+}
+
+// TestSubAgentService_CancelTask_TerminalRejected 已结束任务不可取消。
+func TestSubAgentService_CancelTask_TerminalRejected(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))
+
+	err := svc.CancelTask(1, task.ID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "已结束")
+}
+
+// TestSubAgentService_CancelTask_RunningTriggersCtxCancel running 任务取消应触发 ctx 取消。
+func TestSubAgentService_CancelTask_RunningTriggersCtxCancel(t *testing.T) {
+	proceed := make(chan struct{})
+	runner := &ctxCaptureRunner{proceed: proceed, artifact: "result"}
+	svc, repo, _ := setupSubAgentService(t, runner)
+
+	taskID, err := svc.StartTask(context.Background(), 1, "researcher", "g")
+	require.NoError(t, err)
+	// 等 runner 启动(running 状态 + cancel 注册)
+	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusRunning, 2*time.Second)
+
+	// 取消 running 任务
+	require.NoError(t, svc.CancelTask(1, taskID))
+	// 放行 runner(它应因 ctx 取消已返回,这里 close 防止卡住)
+	close(proceed)
+	time.Sleep(50 * time.Millisecond)
+
+	got, _ := repo.GetByID(taskID)
+	// 取消后应为 cancelled(而非 failed)
+	assert.Equal(t, domainagent.TaskStatusCancelled, got.Status)
+}
+
+// TestSubAgentService_UpdateTask_Pending pending 改 goal。
+func TestSubAgentService_UpdateTask_Pending(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", "旧 goal")
+	require.NoError(t, repo.Create(task))
+
+	require.NoError(t, svc.UpdateTask(1, task.ID, "新 goal", ""))
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, "新 goal", got.Goal)
+	assert.Empty(t, got.Notes)
+}
+
+// TestSubAgentService_UpdateTask_RunningAppendNote running 追加 notes。
+func TestSubAgentService_UpdateTask_RunningAppendNote(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{artifact: "result"})
+	task := domainagent.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+
+	require.NoError(t, svc.UpdateTask(1, task.ID, "", "补充信息1"))
+	got, _ := repo.GetByID(task.ID)
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, "补充信息1", got.Notes[0])
+	// goal 不变(空 goal 不覆盖)
+	assert.Equal(t, "g", got.Goal)
+}
+
+// TestSubAgentService_UpdateTask_TerminalRejected 已结束任务不可更新。
+func TestSubAgentService_UpdateTask_TerminalRejected(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, strPtrService("err")))
+
+	err := svc.UpdateTask(1, task.ID, "new", "note")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "已结束")
+}
+
+// ctxCaptureRunner 捕获 runner 收到的 ctx,供 cancel 测试断言 ctx 被取消。
+type ctxCaptureRunner struct {
+	proceed  chan struct{}
+	artifact string
+	gotCtx   context.Context
+}
+
+func (r *ctxCaptureRunner) Run(ctx context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, _ func(StepRecord)) (string, error) {
+	r.gotCtx = ctx
+	select {
+	case <-r.proceed:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return r.artifact, nil
+}
+
+// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。定义在 service 层,测试这里复用。
 
 func strPtrService(s string) *string { return &s }

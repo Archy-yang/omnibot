@@ -27,7 +27,7 @@ import (
 // runner 仅用于构造 SubAgentService,不会被实际调用。
 type webMockRunner struct{}
 
-func (w *webMockRunner) Run(_ context.Context, _ int64, _ domainagent.SubAgentCard, _ string, _ func(agentpkg.StepRecord)) (string, error) {
+func (w *webMockRunner) Run(_ context.Context, _ int64, _ int64, _ domainagent.SubAgentCard, _ string, _ func(agentpkg.StepRecord)) (string, error) {
 	return "r", nil
 }
 

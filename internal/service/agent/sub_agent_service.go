@@ -22,10 +22,11 @@ import (
 type SubAgentRunner interface {
 	// Run 按 card 配置执行子 Agent。goal 已填入 card.PromptTemplate 生成 system prompt。
 	// userID 用于查用户 LLM 配置(方案3:优先用户配置,无则系统默认)。
+	// taskID 用于装配 NoteInjectionHook(running 态 update_task 追加的 notes 注入子 Agent 上下文)。
 	// onStep:每产生一步(LLM调用/工具调用)立即回调,供上层实时落 agent_steps--
 	// 任务 running 中即可观测执行过程,而非等结束批量落。nil 时跳过回调(测试可用)。
 	// 返回子 Agent 的最终回复(FinalResponse)作为 Artifact。
-	Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (artifact string, err error)
+	Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (artifact string, err error)
 }
 
 // SubAgentService 后台子 Agent 任务服务(08 技术方案 §4.3)。
@@ -38,6 +39,11 @@ type SubAgentService struct {
 	registry *SubAgentRegistry
 	runner   SubAgentRunner
 	stepRepo chatrepo.AgentStepRepository // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
+
+	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
+	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
+	cancelMu       sync.Mutex
+	activeCancels  map[int64]context.CancelFunc
 }
 
 // NewSubAgentService 创建子 Agent 服务。
@@ -48,10 +54,11 @@ func NewSubAgentService(
 	stepRepo chatrepo.AgentStepRepository,
 ) *SubAgentService {
 	return &SubAgentService{
-		taskRepo: taskRepo,
-		registry: registry,
-		runner:   runner,
-		stepRepo: stepRepo,
+		taskRepo:       taskRepo,
+		registry:       registry,
+		runner:         runner,
+		stepRepo:       stepRepo,
+		activeCancels:  make(map[int64]context.CancelFunc),
 	}
 }
 
@@ -74,6 +81,8 @@ func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentT
 
 // executeTask 跑子 Agent,写 Artifact,更新状态。goroutine 内执行,panic 兜底。
 func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.AgentTask) {
+	// 注销 activeCancels(无论成功/失败/panic/cancel 都要清理)
+	defer s.unregisterCancel(task.ID)
 	defer func() {
 		if r := recover(); r != nil {
 			logger.ErrorWithFields("sub agent: panic in executeTask",
@@ -92,6 +101,12 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		return
 	}
 
+	// 启动前检查:若已被 cancel(pending 态被取消),直接置 cancelled 跳过执行。
+	cur, err := s.taskRepo.GetByID(task.ID)
+	if err == nil && cur.Status == domainagent.TaskStatusCancelled {
+		return
+	}
+
 	// running
 	if err := s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil); err != nil {
 		logger.ErrorWithFields("sub agent: update to running failed",
@@ -99,9 +114,10 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		return
 	}
 
-	// 带 card.Timeout 执行
+	// 带 card.Timeout 执行,且 ctx 可被外部 cancel(CancelTask 触发)。
 	ctx, cancel := context.WithTimeout(context.Background(), card.Timeout)
 	defer cancel()
+	s.registerCancel(task.ID, cancel)
 
 	// onStep:每产生一步(LLM调用/工具调用)立即落 agent_steps(task_id 关联,自增 seq)。
 	// 使任务 running 中即可查到执行过程,而非等结束批量落。落库失败仅记日志,不阻断执行。
@@ -127,13 +143,22 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		}
 	}
 
-	artifact, err := s.runner.Run(ctx, task.UserID, card, task.Goal, onStep)
-	if err != nil {
-		errMsg := sanitizeSubAgentError(err)
+	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, card, task.Goal, onStep)
+
+	// 识别取消 vs 真失败:若 ctx 被 cancel(外部 CancelTask 触发),置 cancelled 而非 failed。
+	if ctx.Err() == context.Canceled {
+		_ = s.taskRepo.Cancel(task.ID)
+		logger.InfoWithFields("sub agent: task cancelled",
+			zap.Int64("task_id", task.ID),
+			zap.String("sub_agent", task.SubAgentType))
+		return
+	}
+	if runErr != nil {
+		errMsg := sanitizeSubAgentError(runErr)
 		logger.ErrorWithFields("sub agent: run failed",
 			zap.Int64("task_id", task.ID),
 			zap.String("sub_agent", task.SubAgentType),
-			zap.Error(err),
+			zap.Error(runErr),
 		)
 		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
 		return // 步骤已随 onStep 实时落库,无需再批量落
@@ -164,6 +189,143 @@ func (s *SubAgentService) MarkReported(taskID int64) error {
 // GetTask 取单个任务(供 report 接口用)。
 func (s *SubAgentService) GetTask(taskID int64) (*domainagent.AgentTask, error) {
 	return s.taskRepo.GetByID(taskID)
+}
+
+// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:只给状态/goal 摘要/步骤数。
+type TaskSummary struct {
+	ID         int64   `json:"id"`
+	UserID     int64   `json:"-"`
+	SubAgent   string  `json:"sub_agent"`
+	Goal       string  `json:"goal"`
+	Status     string  `json:"status"`
+	StepCount  int     `json:"step_count"`
+	Reported   bool    `json:"reported"`
+	Artifact   *string `json:"artifact,omitempty"` // completed 时给摘要
+}
+
+// QueryTask 查单个任务概要。属主校验:只能查自己的任务。
+func (s *SubAgentService) QueryTask(userID, taskID int64) (*TaskSummary, error) {
+	task, err := s.taskRepo.GetByID(taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.UserID != userID {
+		return nil, ErrTaskNotOwned
+	}
+	return s.toSummary(task)
+}
+
+// ListUserTasks 列出该用户最近的任务概要(倒序)。供 query_task 工具无 task_id 时调用。
+func (s *SubAgentService) ListUserTasks(userID int64, limit int) ([]*TaskSummary, error) {
+	tasks, err := s.taskRepo.ListByUser(userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*TaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		sm, err := s.toSummary(t)
+		if err != nil {
+			continue
+		}
+		out = append(out, sm)
+	}
+	return out, nil
+}
+
+// toSummary 把 AgentTask 转概要,含步骤数(从 stepRepo 查)。
+func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, error) {
+	sm := &TaskSummary{
+		ID: task.ID, UserID: task.UserID, SubAgent: task.SubAgentType,
+		Goal: task.Goal, Status: task.Status, Reported: task.Reported, Artifact: task.Artifact,
+	}
+	if s.stepRepo != nil {
+		steps, err := s.stepRepo.ListByTaskID(task.ID)
+		if err == nil {
+			sm.StepCount = len(steps)
+		}
+	}
+	return sm, nil
+}
+
+// CancelTask 取消任务。pending/running 可取消;已结束(completed/failed/cancelled)拒绝。
+// running 态:触发 activeCancels[id]() 让 runner ctx 取消,executeTask 识别后置 cancelled。
+// pending 态:直接 repo.Cancel(executeTask 启动时检查状态会跳过)。
+func (s *SubAgentService) CancelTask(userID, taskID int64) error {
+	task, err := s.taskRepo.GetByID(taskID)
+	if err != nil {
+		return err
+	}
+	if task.UserID != userID {
+		return ErrTaskNotOwned
+	}
+	if task.IsTerminal() {
+		return fmt.Errorf("任务已结束(状态:%s),不可取消", task.Status)
+	}
+	// running:触发 ctx 取消,executeTask 会识别 ctx.Canceled 置 cancelled
+	s.cancelMu.Lock()
+	cancelFn, ok := s.activeCancels[taskID]
+	s.cancelMu.Unlock()
+	if ok && task.Status == domainagent.TaskStatusRunning {
+		cancelFn()
+		return nil
+	}
+	// pending(还没起 runner):直接置 cancelled,executeTask 启动时检查会跳过
+	return s.taskRepo.Cancel(taskID)
+}
+
+// UpdateTask 更新/补充任务信息。按状态分:
+//   - pending:改 goal(任务还没跑,直接更新)
+//   - running:追加 notes(补充信息,子 Agent 下轮经 NoteInjectionHook 注入上下文)
+//   - 已结束:拒绝
+// goal 空串不改;note 空串不追加(按需调用)。
+func (s *SubAgentService) UpdateTask(userID, taskID int64, goal, note string) error {
+	task, err := s.taskRepo.GetByID(taskID)
+	if err != nil {
+		return err
+	}
+	if task.UserID != userID {
+		return ErrTaskNotOwned
+	}
+	if task.IsTerminal() {
+		return fmt.Errorf("任务已结束(状态:%s),不可更新", task.Status)
+	}
+	switch task.Status {
+	case domainagent.TaskStatusPending:
+		if strings.TrimSpace(goal) != "" {
+			if err := s.taskRepo.UpdateGoal(taskID, goal); err != nil {
+				return fmt.Errorf("update goal: %w", err)
+			}
+		}
+		if strings.TrimSpace(note) != "" {
+			if err := s.taskRepo.AppendNote(taskID, note); err != nil {
+				return fmt.Errorf("append note: %w", err)
+			}
+		}
+	case domainagent.TaskStatusRunning:
+		if strings.TrimSpace(goal) != "" {
+			return fmt.Errorf("running 任务不可改 goal,请用 note 补充信息")
+		}
+		if strings.TrimSpace(note) != "" {
+			if err := s.taskRepo.AppendNote(taskID, note); err != nil {
+				return fmt.Errorf("append note: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// registerCancel 注册 running 任务的 cancel 函数(供 CancelTask 触发)。
+func (s *SubAgentService) registerCancel(taskID int64, cancel context.CancelFunc) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.activeCancels[taskID] = cancel
+}
+
+// unregisterCancel 注销 cancel 函数(executeTask 结束时调,无论成功/失败/cancel)。
+func (s *SubAgentService) unregisterCancel(taskID int64) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	delete(s.activeCancels, taskID)
 }
 
 // ErrTaskNotOwned 任务不属于该用户(属主校验失败)。

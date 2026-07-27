@@ -7,6 +7,7 @@ import (
 	"time"
 
 	domainagent "omnibot/internal/domain/agent"
+	repoagent "omnibot/internal/repository/agent"
 )
 
 // SubAgentLLMConfigProvider 子 Agent 的用户 LLM 配置查询接口(方案3)。
@@ -28,26 +29,30 @@ type subAgentRunnerImpl struct {
 	defaultSyncClient   LLMClient
 	globalToolRegistry  *ToolRegistry // 全局工具池,子 Agent 工具从这里选
 	llmConfigProvider   SubAgentLLMConfigProvider
+	taskRepo            repoagent.AgentTaskRepository // 注入:装配 NoteInjectionHook 读 task.Notes
 }
 
 // NewSubAgentRunner 创建生产 SubAgentRunner。
 // defaultClient 需同时实现 LLMClient 和 StreamingLLMClient(如 OpenAILLMClient)。
 // llmConfigProvider 可为 nil(此时子 Agent 一律用系统默认)。
+// taskRepo 可为 nil(此时不装配 NoteInjectionHook,running 态 update 的 notes 不注入)。
 func NewSubAgentRunner(
 	defaultSyncClient LLMClient,
 	defaultStreamClient StreamingLLMClient,
 	globalToolRegistry *ToolRegistry,
 	llmConfigProvider SubAgentLLMConfigProvider,
+	taskRepo repoagent.AgentTaskRepository,
 ) SubAgentRunner {
 	return &subAgentRunnerImpl{
 		defaultStreamClient: defaultStreamClient,
 		defaultSyncClient:   defaultSyncClient,
 		globalToolRegistry:  globalToolRegistry,
 		llmConfigProvider:   llmConfigProvider,
+		taskRepo:             taskRepo,
 	}
 }
 
-func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
+func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, goal string, onStep func(StepRecord)) (string, error) {
 	// 1. 构造子 Agent 独立 ToolRegistry(从全局池选 card.Tools 指定的工具)
 	subToolRegistry := NewToolRegistry()
 	for _, toolName := range card.Tools {
@@ -87,17 +92,22 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, userID int64, card domaina
 	}
 	// 用 AgentService 聚合 Run(内部 drain RunStream,产生 Records + FinalResponse)。
 	// 不能直接用 ReActAgent.Run(老路径不产生 Records,导致子 Agent 步骤落不了库)。
-	// 子 Agent 装配执行链 hook:熔断(抑制对失败工具的无限重试)+ 强制汇总(MaxSteps 兜底出报告)。
+	// 子 Agent 装配执行链 hook:熔断(抑制对失败工具的无限重试)+ 强制汇总(MaxSteps 兜底出报告)
+	// + notes 注入(running 态 update_task 追加的补充信息,子 Agent 下轮读到并入推理)。
+	hooks := []RoundHook{
+		NewCircuitBreakerHook(ToolFailureThreshold),
+		NewForceSummaryHook(streamClient),
+	}
+	if r.taskRepo != nil {
+		hooks = append(hooks, NewNoteInjectionHook(taskID, r.taskRepo))
+	}
 	svc := NewAgentService(AgentServiceConfig{
 		LLMClient:          syncClient,
 		StreamingLLMClient: streamClient,
 		ToolRegistry:       subToolRegistry,
 		MaxSteps:           maxSteps,
 		SystemPrompt:       systemPrompt,
-		Hooks: []RoundHook{
-			NewCircuitBreakerHook(ToolFailureThreshold),
-			NewForceSummaryHook(streamClient),
-		},
+		Hooks:              hooks,
 	})
 
 	// 5. 子 Agent 独立上下文:只有 system(已含 goal)+ 一条 user 触发。

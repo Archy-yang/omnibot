@@ -136,4 +136,45 @@ func TestAgentTaskRepository_ListByUser(t *testing.T) {
 	// 倒序(最新在前)
 }
 
+// TestAgentTaskRepository_Cancel 取消任务:置 cancelled + cancelled_at。
+func TestAgentTaskRepository_Cancel(t *testing.T) {
+	db := setupAgentTaskTestDB(t)
+	repo := NewAgentTaskRepository(db)
+	task := domain.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task))
+
+	require.NoError(t, repo.Cancel(task.ID))
+	got, err := repo.GetByID(task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TaskStatusCancelled, got.Status)
+	assert.NotNil(t, got.CancelledAt)
+}
+
+// TestAgentTaskRepository_UpdateGoal 改 goal(pending 态 update_task 用)。
+func TestAgentTaskRepository_UpdateGoal(t *testing.T) {
+	db := setupAgentTaskTestDB(t)
+	repo := NewAgentTaskRepository(db)
+	task := domain.NewAgentTask(1, "researcher", "旧 goal")
+	require.NoError(t, repo.Create(task))
+
+	require.NoError(t, repo.UpdateGoal(task.ID, "新 goal"))
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, "新 goal", got.Goal)
+}
+
+// TestAgentTaskRepository_AppendNote 追加 notes(running 态补充信息)。
+func TestAgentTaskRepository_AppendNote(t *testing.T) {
+	db := setupAgentTaskTestDB(t)
+	repo := NewAgentTaskRepository(db)
+	task := domain.NewAgentTask(1, "researcher", "g")
+	require.NoError(t, repo.Create(task))
+
+	require.NoError(t, repo.AppendNote(task.ID, "补充1"))
+	require.NoError(t, repo.AppendNote(task.ID, "补充2"))
+	got, _ := repo.GetByID(task.ID)
+	require.Len(t, got.Notes, 2)
+	assert.Equal(t, "补充1", got.Notes[0])
+	assert.Equal(t, "补充2", got.Notes[1])
+}
+
 func strPtr(s string) *string { return &s }

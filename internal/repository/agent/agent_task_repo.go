@@ -18,6 +18,12 @@ type AgentTaskRepository interface {
 	ListCompletedUnreported(userID int64) ([]*agent.AgentTask, error)
 	// ListByUser 列出该用户的任务(按创建时间倒序,limit 限上限)。
 	ListByUser(userID int64, limit int) ([]*agent.AgentTask, error)
+	// Cancel 取消任务:置 cancelled + cancelled_at。
+	Cancel(id int64) error
+	// UpdateGoal 改 goal(pending 态 update_task 用)。
+	UpdateGoal(id int64, goal string) error
+	// AppendNote 追加补充信息到 Notes(running 态 update_task 用)。
+	AppendNote(id int64, note string) error
 }
 
 // GormAgentTaskRepository GORM 实现
@@ -96,4 +102,32 @@ func (r *GormAgentTaskRepository) ListByUser(userID int64, limit int) ([]*agent.
 		return nil, err
 	}
 	return tasks, nil
+}
+
+// Cancel 取消任务:置 cancelled + cancelled_at。
+func (r *GormAgentTaskRepository) Cancel(id int64) error {
+	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":       agent.TaskStatusCancelled,
+		"cancelled_at": gorm.Expr("CURRENT_TIMESTAMP"),
+	}).Error
+}
+
+// UpdateGoal 改 goal(pending 态 update_task 用)。
+func (r *GormAgentTaskRepository) UpdateGoal(id int64, goal string) error {
+	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).
+		Update("goal", goal).Error
+}
+
+// AppendNote 追加补充信息到 Notes。Notes 是 JSON 序列化字段(serializer:json),
+// 单列 Update/Updates(map) 不走 serializer,需读出现有值手动 append,再用结构体 Updates 写回
+// (结构体字段才触发 serializer:json 正确 marshal 为 JSON 字符串)。
+func (r *GormAgentTaskRepository) AppendNote(id int64, note string) error {
+	var t agent.AgentTask
+	if err := r.db.Where("id = ?", id).First(&t).Error; err != nil {
+		return err
+	}
+	t.Notes = append(t.Notes, note)
+	// 只更新 notes 列:Select 限定,走 serializer 正确 marshal。
+	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).
+		Select("notes").Updates(t).Error
 }

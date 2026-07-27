@@ -186,10 +186,14 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
 	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
-	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider)
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
 	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo)
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
 	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
+	// 任务管理工具:主 Agent 对派出去的任务可查(query)/补充(update)/取消(cancel)。
+	agentToolRegistry.Register(agentpkg.CreateQueryTaskTool(subAgentSvc))
+	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
+	agentToolRegistry.Register(agentpkg.CreateCancelTaskTool(subAgentSvc))
 
 	// 主 Agent 服务:system prompt 含 delegate 派活 + 汇报引导(08 §4.4),toolRegistry 含 delegate
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
