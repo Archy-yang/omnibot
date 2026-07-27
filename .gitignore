@@ -6,3 +6,4 @@ graphify-out/
 configs/config.yaml
 *.db
 smoke_p2.db
+configs/config.smoke.yaml
