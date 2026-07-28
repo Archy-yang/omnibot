@@ -32,7 +32,7 @@ func setupDelegateToolTest(t *testing.T) (Tool, *SubAgentService, *SubAgentRegis
 		Timeout:        5 * time.Second,
 	}))
 	// stub runner:立即返回 artifact(不真跑 LLM)
-	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"}, chatrepo.NewAgentStepRepository(db))
+	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"}, chatrepo.NewAgentStepRepository(db), nil)
 	tool := CreateDelegateTool(registry, svc)
 	return tool, svc, registry
 }

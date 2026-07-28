@@ -38,7 +38,8 @@ type SubAgentService struct {
 	taskRepo repoagent.AgentTaskRepository
 	registry *SubAgentRegistry
 	runner   SubAgentRunner
-	stepRepo chatrepo.AgentStepRepository // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
+	stepRepo chatrepo.AgentStepRepository       // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
+	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -47,17 +48,20 @@ type SubAgentService struct {
 }
 
 // NewSubAgentService 创建子 Agent 服务。
+// artifactRepo 可为 nil(此时不落结构化 artifact,仅存 task.Artifact 文本,兼容老路径)。
 func NewSubAgentService(
 	taskRepo repoagent.AgentTaskRepository,
 	registry *SubAgentRegistry,
 	runner SubAgentRunner,
 	stepRepo chatrepo.AgentStepRepository,
+	artifactRepo repoagent.ArtifactRepository,
 ) *SubAgentService {
 	return &SubAgentService{
 		taskRepo:       taskRepo,
 		registry:       registry,
 		runner:         runner,
 		stepRepo:       stepRepo,
+		artifactRepo:   artifactRepo,
 		activeCancels:  make(map[int64]context.CancelFunc),
 	}
 }
@@ -174,6 +178,15 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		logger.ErrorWithFields("sub agent: update to completed failed",
 			zap.Int64("task_id", task.ID), zap.Error(err))
 	}
+	// 落结构化 artifact(独立表,#18)。子 Agent 产出当前是自由文本,包装为 markdown artifact。
+	// task.Artifact 仍存文本(向后兼容)。artifactRepo 为 nil 时跳过(老路径)。
+	if s.artifactRepo != nil {
+		art := domainagent.NewMarkdownArtifact(task.ID, "result", artifact)
+		if err := s.artifactRepo.Create(art); err != nil {
+			logger.ErrorWithFields("sub agent: save artifact failed",
+				zap.Int64("task_id", task.ID), zap.Error(err))
+		}
+	}
 }
 
 // GetCompletedUnreported 返回该用户已完成但未汇报的任务(含 failed,失败也要汇报)。
@@ -189,6 +202,19 @@ func (s *SubAgentService) MarkReported(taskID int64) error {
 // GetTask 取单个任务(供 report 接口用)。
 func (s *SubAgentService) GetTask(taskID int64) (*domainagent.AgentTask, error) {
 	return s.taskRepo.GetByID(taskID)
+}
+
+// GetTaskArtifact 取任务的结构化产物(#18)。无产物或 artifactRepo 未装配返回 nil。
+// 主 Agent 据此按 schema 字段取用,而非解析 task.Artifact 自由文本。
+func (s *SubAgentService) GetTaskArtifact(taskID int64) (*domainagent.Artifact, error) {
+	if s.artifactRepo == nil {
+		return nil, nil
+	}
+	art, err := s.artifactRepo.GetByTaskID(taskID)
+	if err != nil {
+		return nil, nil // 无产物返回 nil(不报错,调用方按 nil 处理)
+	}
+	return art, nil
 }
 
 // TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:只给状态/goal 摘要/步骤数。

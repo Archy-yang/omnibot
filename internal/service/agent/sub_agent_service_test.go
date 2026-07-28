@@ -68,11 +68,16 @@ func setupSubAgentServiceTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}))
+	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}, &domainagent.Artifact{}))
 	return db
 }
 
 func setupSubAgentService(t *testing.T, runner SubAgentRunner) (*SubAgentService, *repoagent.GormAgentTaskRepository, chatrepo.AgentStepRepository) {
+	return setupSubAgentServiceWithArtifact(t, runner, false)
+}
+
+// setupSubAgentServiceWithArtifact 可选是否装配 artifactRepo(测 artifact 落库时 withArtifact=true)。
+func setupSubAgentServiceWithArtifact(t *testing.T, runner SubAgentRunner, withArtifact bool) (*SubAgentService, *repoagent.GormAgentTaskRepository, chatrepo.AgentStepRepository) {
 	db := setupSubAgentServiceTestDB(t)
 	repo := repoagent.NewAgentTaskRepository(db).(*repoagent.GormAgentTaskRepository)
 	registry := NewSubAgentRegistry()
@@ -86,7 +91,11 @@ func setupSubAgentService(t *testing.T, runner SubAgentRunner) (*SubAgentService
 		Timeout:        5 * time.Second,
 	}))
 	stepRepo := chatrepo.NewAgentStepRepository(db)
-	svc := NewSubAgentService(repo, registry, runner, stepRepo)
+	var artifactRepo repoagent.ArtifactRepository
+	if withArtifact {
+		artifactRepo = repoagent.NewArtifactRepository(db)
+	}
+	svc := NewSubAgentService(repo, registry, runner, stepRepo, artifactRepo)
 	return svc, repo, stepRepo
 }
 
@@ -131,6 +140,28 @@ func TestSubAgentService_StartTask_Success(t *testing.T) {
 	assert.Nil(t, steps[0].MessageID, "子 Agent 步骤 MessageID 应为 nil")
 	require.NotNil(t, steps[0].TaskID)
 	assert.Equal(t, taskID, *steps[0].TaskID)
+}
+
+// TestSubAgentService_ArtifactPersisted 任务完成时应落结构化 artifact(独立表)。
+// 兼容:task.Artifact 文本仍存。artifactRepo 装配时双写。
+func TestSubAgentService_ArtifactPersisted(t *testing.T) {
+	runner := &mockRunner{artifact: "# 报告\n内容", delay: 20 * time.Millisecond}
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, runner, true)
+
+	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, err)
+	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
+
+	// 查 artifact 表
+	art, err := svc.artifactRepo.GetByTaskID(taskID)
+	require.NoError(t, err)
+	assert.Equal(t, taskID, art.TaskID)
+	assert.Equal(t, domainagent.ArtifactContentTypeMarkdown, art.ContentType)
+	assert.Equal(t, "# 报告\n内容", art.Text())
+	// task.Artifact 文本仍存(向后兼容)
+	task, _ := repo.GetByID(taskID)
+	require.NotNil(t, task.Artifact)
+	assert.Equal(t, "# 报告\n内容", *task.Artifact)
 }
 
 func TestSubAgentService_StartTask_RunnerError(t *testing.T) {

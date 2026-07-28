@@ -64,7 +64,7 @@ func stepsDiagSetup(t *testing.T, llm StreamingLLMClient) (*SubAgentService, *re
 
 	// 真实 runner:用 mock 流式 LLM(noopSyncLLM 作 sync 占位,流式路径不会用到)
 	runner := NewSubAgentRunner(noopSyncLLM{}, llm, globalReg, nil, nil)
-	svc := NewSubAgentService(taskRepo, registry, runner, stepRepo)
+	svc := NewSubAgentService(taskRepo, registry, runner, stepRepo, nil)
 	return svc, taskRepo, stepRepo
 }
 
