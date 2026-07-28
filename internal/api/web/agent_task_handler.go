@@ -139,7 +139,7 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 	}
 
 	// 构造汇报上下文:system(回执+汇报指令) + user(虚拟触发)
-	instruction := agentpkg.BuildReportInstruction(h.registry, []*domainagent.AgentTask{task})
+	instruction := agentpkg.BuildReportInstruction(h.registry, []*domainagent.AgentTask{task}, true)
 	// 注:局部变量命名为 reportConversation,避免遮蔽 conversation 包导入(下方累积 segments/steps 要用)。
 	reportConversation := []map[string]interface{}{
 		{"role": "system", "content": instruction},

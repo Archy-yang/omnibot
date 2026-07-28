@@ -402,7 +402,7 @@ func (s *SubAgentService) GetPendingReportContext(userID int64) (instruction str
 	if err != nil || len(unreported) == 0 {
 		return "", nil
 	}
-	instruction = BuildReportInstruction(s.registry, unreported)
+	instruction = BuildReportInstruction(s.registry, unreported, false)
 	for _, t := range unreported {
 		taskIDs = append(taskIDs, t.ID)
 	}
