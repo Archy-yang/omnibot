@@ -35,6 +35,9 @@ type MessageService interface {
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
+	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask 落库主动汇报。
+	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -78,6 +81,9 @@ type Handler struct {
 	llmConfigService LLMConfigService
 	memoryService    MemoryService
 	agentService     AgentService
+	// 后台 Agent 框架(08 §4.5 前置汇报兜底)。nil 时不启用前置汇报(向后兼容)。
+	subAgentSvc      *agentpkg.SubAgentService
+	subAgentRegistry *agentpkg.SubAgentRegistry
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -97,6 +103,13 @@ func NewHandler(
 		memoryService:    memoryService,
 		agentService:     agentService,
 	}
+}
+
+// SetSubAgentSupport 注入后台 Agent 框架依赖(前置汇报兜底用)。
+// 未调用时 subAgentSvc 为 nil,Handler 行为与之前一致(无前置汇报)。
+func (h *Handler) SetSubAgentSupport(svc *agentpkg.SubAgentService, registry *agentpkg.SubAgentRegistry) {
+	h.subAgentSvc = svc
+	h.subAgentRegistry = registry
 }
 
 // SendMessageRequest 发送消息请求体
@@ -132,11 +145,13 @@ type GetHistoryResponse struct {
 
 // MessageDTO represents a message in the response
 type MessageDTO struct {
-	ID        int64                          `json:"id"`
-	Role      string                         `json:"role"`
-	Content   string                         `json:"content"`
-	Segments  []conversation.MessageSegment  `json:"segments,omitempty"` // v1.5.4：Agent 思考过程片段，无则省略
-	CreatedAt string                         `json:"created_at"`
+	ID        int64                         `json:"id"`
+	Role      string                        `json:"role"`
+	Content   string                        `json:"content"`
+	Segments  []conversation.MessageSegment `json:"segments,omitempty"` // v1.5.4：Agent 思考过程片段，无则省略
+	Kind      string                        `json:"kind,omitempty"`     // 消息种类:"report"=子任务汇报,空省略=普通对话
+	TaskID    *int64                        `json:"task_id,omitempty"`  // 汇报消息关联的任务 ID(Kind=report 时有)
+	CreatedAt string                        `json:"created_at"`
 }
 
 // HandleGetHistory gets message history for the current user
@@ -186,6 +201,8 @@ func (h *Handler) HandleGetHistory(c *gin.Context) {
 			Role:      msg.Role,
 			Content:   msg.Content,
 			Segments:  msg.Segments,
+			Kind:      msg.Kind,
+			TaskID:    msg.TaskID,
 			CreatedAt: msg.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -488,6 +505,17 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		ctxMessages = []llm.ChatMessage{{Role: "user", Content: req.Content}}
 	}
 
+	// 后台 Agent 框架前置汇报兜底(08 §4.5):查未汇报任务,有则把回执注入上下文,
+	// 主 Agent 会先汇报再回应当前消息。汇报在流结束后标记 reported(防重复)。
+	var reportedTaskIDs []int64
+	if h.subAgentSvc != nil {
+		instruction, taskIDs := h.subAgentSvc.GetPendingReportContext(userID)
+		if instruction != "" {
+			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
+			reportedTaskIDs = taskIDs
+		}
+	}
+
 	// 选择流式 LLM 客户端：优先使用用户自定义配置（OpenAI 兼容协议）
 	activeStreamClient := h.agentService.DefaultStreamingLLMClient()
 	userConfig, hasCustomConfig, err := h.llmConfigService.GetFullConfigForUser(userID)
@@ -533,6 +561,10 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	var steps []*conversation.AgentStep
 	seq := 0
 	stepModel := ""
+	// toolCallsAccum 累积主 Agent 调用的工具配对(规范改造),落 Message.ToolCalls 供跨轮重建。
+	// 按 tool_call_id 索引:ToolCall 事件存 id/name/args,ToolResult 事件回填 result。
+	toolCallsAccum := map[string]*conversation.ToolCallPair{}
+	var toolCallOrder []string // 保持顺序
 	if hasCustomConfig && userConfig != nil {
 		stepModel = userConfig.Model
 	}
@@ -556,6 +588,15 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 				Tool:  ev.ToolName,
 				Label: ev.ToolLabel,
 			})
+			// 规范改造:累积工具调用配对(落 Message.ToolCalls 供跨轮重建)
+			if ev.ToolCallID != "" {
+				if _, exists := toolCallsAccum[ev.ToolCallID]; !exists {
+					toolCallsAccum[ev.ToolCallID] = &conversation.ToolCallPair{
+						ID: ev.ToolCallID, Name: ev.ToolName, Arguments: ev.ToolArguments,
+					}
+					toolCallOrder = append(toolCallOrder, ev.ToolCallID)
+				}
+			}
 			data, _ := json.Marshal(map[string]string{
 				"tool":  ev.ToolName,
 				"label": ev.ToolLabel,
@@ -572,6 +613,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 				if segments[i].Type == "tool" && segments[i].Result == "" {
 					segments[i].Result = sanitized
 					break
+				}
+			}
+			// 规范改造:回填工具调用配对的 result(用脱敏值,和展示一致)
+			if ev.ToolCallID != "" {
+				if p, ok := toolCallsAccum[ev.ToolCallID]; ok {
+					p.Result = sanitized
 				}
 			}
 			// v1.5.5：append 一个 tool_call 步骤。Response 用原始未脱敏值（含真实错误），
@@ -642,18 +689,50 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 
 	// 落库：带 segments 的助手消息（v1.5.4），刷新后历史能还原完整思考过程。
 	// 思考模式改造后 content 只含最终回复;segments 完整保留(思考+最终)供思考块回看。
-	if err := h.messageService.SaveAssistantMessageWithSegments(c.Request.Context(), userID, finalContent, segments, steps); err != nil {
+	// 规范改造:toolCalls 序列化落 Message.ToolCalls,供跨轮重建工具调用配对。
+	var toolCallsJSON *string
+	if len(toolCallOrder) > 0 {
+		pairs := make([]conversation.ToolCallPair, 0, len(toolCallOrder))
+		for _, id := range toolCallOrder {
+			if p, ok := toolCallsAccum[id]; ok {
+				pairs = append(pairs, *p)
+			}
+		}
+		if b, err := json.Marshal(pairs); err == nil {
+			s := string(b)
+			toolCallsJSON = &s
+		}
+	}
+	if err := h.messageService.SaveAssistantMessageWithToolCalls(c.Request.Context(), userID, finalContent, segments, toolCallsJSON, steps); err != nil {
 		logger.ErrorWithFields("Failed to save assistant message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
 	}
+
+	// 后台 Agent 框架:前置汇报兜底标记 reported(08 §4.5)。流式已把汇报推给用户,
+	// 标记这些任务已汇报,防轮询/下次前置重复汇报。
+	for _, tid := range reportedTaskIDs {
+		if err := h.subAgentSvc.MarkReported(tid); err != nil {
+			logger.ErrorWithFields("Failed to mark task reported",
+				zap.Int64("task_id", tid), zap.Error(err))
+		}
+	}
 }
 
+// toAgentMessages 把 llm.ChatMessage 转成 agent 包期望的 []map[string]interface{}(OpenAI 格式)。
+// 规范改造:支持 tool_calls(assistant 调工具) + tool_call_id(tool 结果配对)。
 func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 	items := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
-		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
+		m := map[string]interface{}{"role": msg.Role, "content": msg.Content}
+		if len(msg.ToolCalls) > 0 {
+			m["tool_calls"] = msg.ToolCalls
+		}
+		if msg.ToolCallID != "" {
+			m["tool_call_id"] = msg.ToolCallID
+		}
+		items = append(items, m)
 	}
 	return items
 }
@@ -663,27 +742,11 @@ func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 // 这里只负责按序 stamp Seq 并补 Model(agent 包拿不到模型名)。MessageID 由
 // MessageService.SaveAssistantMessageWithSegments 在落消息后回写,本函数不管。
 //
+// recordsToAgentSteps 主 Agent 步骤转换(委托 agent.StepRecordsToAgentSteps 公共函数)。
 // 返回 nil 表示无运行链路(records 为空),上层 SaveAssistantMessageWithSegments 收到
 // 空切片会跳过写步骤,语义安全。
 func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model string) []*conversation.AgentStep {
-	if len(records) == 0 {
-		return nil
-	}
-	steps := make([]*conversation.AgentStep, 0, len(records))
-	for i, r := range records {
-		var step *conversation.AgentStep
-		switch r.Kind {
-		case agentpkg.StepKindLLMCall:
-			step = conversation.NewLLMStep(userID, r.Request, r.Response, model, r.Status, r.DurationMs)
-		case agentpkg.StepKindToolCall:
-			step = conversation.NewToolStep(userID, r.Tool, r.Request, r.Response, r.Status, r.DurationMs)
-		default:
-			continue // 未知 kind 跳过,防御未来扩展
-		}
-		step.Seq = i
-		steps = append(steps, step)
-	}
-	return steps
+	return agentpkg.StepRecordsToAgentSteps(records, userID, model)
 }
 
 // ========== 长期记忆接口 ==========

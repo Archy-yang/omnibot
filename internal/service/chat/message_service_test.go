@@ -272,7 +272,7 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 		t.Fatalf("expected 2 steps, got %d", len(chain))
 	}
 	// MessageID 关联 + 按 seq 有序：llm_call → tool_call
-	if chain[0].MessageID != savedMsgID || chain[0].Kind != conversation.StepKindLLMCall {
+	if chain[0].MessageID == nil || *chain[0].MessageID != savedMsgID || chain[0].Kind != conversation.StepKindLLMCall {
 		t.Errorf("step[0] = %+v, want llm_call linked to msg %d", chain[0], savedMsgID)
 	}
 	if chain[1].Kind != conversation.StepKindToolCall {
@@ -284,5 +284,63 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 	}
 	if chain[1].Status != conversation.StepStatusError {
 		t.Errorf("Status = %q", chain[1].Status)
+	}
+}
+
+// TestMessageService_BuildContextMessages_RebuildsToolCallsPair 规范改造:
+// assistant 消息带 ToolCalls 时,BuildContextMessages 应展开成 OpenAI 配对序列
+// assistant(tool_calls) -> tool(result) -> assistant(最终回复),让下一轮 LLM 能看到调过工具。
+func TestMessageService_BuildContextMessages_RebuildsToolCallsPair(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	// 造一条带 tool_calls 的 assistant 消息(模拟主 Agent 调了 delegate)
+	toolCallsJSON := `[{"id":"call_1","name":"delegate","arguments":"{\"sub_agent_type\":\"researcher\",\"goal\":\"研究X\"}","result":"{\"task_id\":7,\"status\":\"pending\"}"}]`
+	msg := conversation.NewAssistantMessageWithSegments(123, "已安排研究员处理X,稍后汇报", nil)
+	msg.ToolCalls = &toolCallsJSON
+	require.NoError(t, msgRepo.Create(msg))
+
+	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "下一个问题")
+	require.NoError(t, err)
+
+	// 期望序列:assistant(tool_calls) + tool(result) + assistant(最终回复) + user(当前)
+	// 找到带 tool_calls 的 assistant
+	var foundToolCalls, foundTool bool
+	for _, m := range ctxMsgs {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			foundToolCalls = true
+			require.Len(t, m.ToolCalls, 1)
+			fn := m.ToolCalls[0]["function"].(map[string]interface{})
+			assert.Equal(t, "delegate", fn["name"])
+		}
+		if m.Role == "tool" {
+			foundTool = true
+			assert.Equal(t, "call_1", m.ToolCallID)
+			assert.Contains(t, m.Content, "task_id")
+		}
+	}
+	assert.True(t, foundToolCalls, "应展开出带 tool_calls 的 assistant 消息")
+	assert.True(t, foundTool, "应展开出 tool 消息(工具结果)")
+	// 最终回复仍在
+	assert.Contains(t, ctxMsgs[len(ctxMsgs)-1].Content, "下一个问题")
+}
+
+// TestMessageService_BuildContextMessages_NoToolCallsForPlainAssistant 规范改造:
+// 普通 assistant 消息(无 ToolCalls)不展开,只取 content。
+func TestMessageService_BuildContextMessages_NoToolCallsForPlainAssistant(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	msgRepo.Create(conversation.NewUserMessage(123, "你好", ""))
+	msgRepo.Create(conversation.NewAssistantMessage(123, "你好,有什么可以帮你"))
+
+	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "下一个问题")
+	require.NoError(t, err)
+	// 不应有 tool role 消息
+	for _, m := range ctxMsgs {
+		assert.NotEqual(t, "tool", m.Role, "普通消息不应展开 tool")
+		assert.Empty(t, m.ToolCalls, "普通 assistant 不应有 tool_calls")
 	}
 }

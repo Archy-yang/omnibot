@@ -11,8 +11,9 @@ import "context"
 //   - delta.tool_calls 存在 → ToolCallDelta（同一轮可能多个 tool call，用 Index 区分）
 //   - finish_reason 非空 → FinishReason 设值；data: [DONE] 单独触发 Done=true
 type LLMStreamChunk struct {
-	ContentDelta  string         // 文本 token 增量
-	ToolCallDelta *ToolCallDelta // 工具调用增量（指针：nil 表示本 chunk 不是工具增量）
+	ContentDelta   string         // 文本 token 增量
+	ReasoningDelta string         // deepseek 思考模式:思考过程增量(千帆要求多轮回传)
+	ToolCallDelta  *ToolCallDelta // 工具调用增量（指针：nil 表示本 chunk 不是工具增量）
 	FinishReason  string         // "stop" / "tool_calls" / "length" 等
 	Done          bool           // true 表示 [DONE] 信号，channel 即将关闭
 	Error         error          // 解析或网络错误，发生即终止流
@@ -112,6 +113,7 @@ type AgentEvent struct {
 	ToolResult string
 	// 工具与 LLM 步骤共用的记录字段（v1.5.5）
 	ToolArguments  string // 工具步骤：原始 arguments JSON
+	ToolCallID     string // 工具步骤:tool_call ID(OpenAI 配对用,规范改造)
 	StepStatus     string // success/error/not_found
 	StepDurationMs int64  // 本步耗时（毫秒）
 	// LLM 调用步骤专用（v1.5.5）

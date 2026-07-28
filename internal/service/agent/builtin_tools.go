@@ -340,3 +340,58 @@ func getUserIDFromContext(ctx context.Context) int64 {
 	}
 	return 0
 }
+
+// CreateDelegateTool 创建 delegate 工具(08 §4.4):主 Agent 通过它派活给子 Agent。
+//
+// 工具描述动态包含已注册子 Agent 的能力(从 registry.DelegateToolDescription 拼入),
+// 主 Agent LLM 据此决定是否派活 + 派给谁。
+//
+// Execute 调 SubAgentService.StartTask,**立即返回** task_id(异步,不等子 Agent)。
+// 工具结果给主 Agent LLM,让其生成自然语言确认("已安排X处理,稍后汇报")回用户。
+//
+// userID 从 ctx 取(主 Agent RunStream 已通过 withUserID 注入)。
+func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
+	return Tool{
+		Name:        "delegate",
+		DisplayLabel: "安排了子任务",
+		Description: fmt.Sprintf(
+			"把耗时任务委派给子 Agent 后台执行(不阻塞当前对话)。可用子 Agent:\n%s\n"+
+				"派活后立即返回,子 Agent 后台跑,完成后再向用户汇报。适合需要多步检索/研究的任务。",
+			registry.DelegateToolDescription(),
+		),
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"sub_agent_type": map[string]interface{}{
+					"type":        "string",
+					"description": "子 Agent 类型,如 researcher",
+				},
+				"goal": map[string]interface{}{
+					"type":        "string",
+					"description": "委托目标:清晰描述要让子 Agent 做什么,作为它的任务目标",
+				},
+			},
+			"required": []string{"sub_agent_type", "goal"},
+		},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			subAgentType, _ := args["sub_agent_type"].(string)
+			goal, _ := args["goal"].(string)
+			if subAgentType == "" || goal == "" {
+				return "", fmt.Errorf("sub_agent_type and goal are required")
+			}
+
+			userID := getUserIDFromContext(ctx)
+			if userID == 0 {
+				return "", fmt.Errorf("delegate: no user id in context")
+			}
+
+			taskID, err := svc.StartTask(ctx, userID, subAgentType, goal)
+			if err != nil {
+				return "", fmt.Errorf("派活失败: %w", err)
+			}
+
+			// 立即返回 task_id(异步),主 Agent LLM 据此回用户"已安排X处理"
+			return fmt.Sprintf(`{"task_id": %d, "status": "pending", "message": "已安排子 Agent 处理,稍后汇报"}`, taskID), nil
+		},
+	}
+}

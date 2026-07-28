@@ -41,8 +41,8 @@ func TestNewLLMStep(t *testing.T) {
 		t.Errorf("Tool should be empty for llm_call, got %q", step.Tool)
 	}
 	// MessageID/Seq 构造时未知，由上层 stamp
-	if step.MessageID != 0 || step.Seq != 0 {
-		t.Errorf("MessageID/Seq should be 0 at construction, got %d/%d", step.MessageID, step.Seq)
+	if step.MessageID != nil || step.Seq != 0 {
+		t.Errorf("MessageID/Seq should be nil/0 at construction, got %v/%d", step.MessageID, step.Seq)
 	}
 	if step.CreatedAt.IsZero() {
 		t.Error("CreatedAt should be set")

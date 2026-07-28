@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniBot - 首页</title>
+    <style id="theme-vars">
+/* OmniBot v1.10.0 品牌样式 — 基于实际代码提取 */
+:root {
+  /* 主强调色 */
+  --color-accent: #10a37f;
+  --color-accent-hover: #0d8c6d;
+  --color-accent-light: rgba(16, 163, 127, 0.08);
+
+  /* 输入框聚焦蓝 */
+  --color-focus-blue: #2080f0;
+  --color-focus-blue-light: rgba(32, 128, 240, 0.1);
+  --color-focus-blue-hover: #4dabff;
+
+  /* 背景色 */
+  --color-bg-main: #ffffff;
+  --color-bg-sidebar: #f9f9f9;
+  --color-bg-user-msg: #f4f4f4;
+  --color-bg-input: #ffffff;
+  --color-bg-code: #f4f4f4;
+
+  /* 文字色 */
+  --color-text-primary: #0d0d0d;
+  --color-text-secondary: #6e6e80;
+  --color-text-tertiary: #8e8ea0;
+  --color-text-hint: #9ca3af;
+
+  /* 边框色 */
+  --color-border: #e5e5e5;
+  --color-border-input: #e5e7eb;
+
+  /* 按钮色 */
+  --color-btn-send-active: #000000;
+  --color-btn-send-disabled: #e5e5e5;
+  --color-icon: #5d5d6e;
+
+  /* Toast */
+  --color-toast-bg: #1a1a1a;
+  --color-toast-text: #f4f4f5;
+
+  /* 辅助头像 */
+  --color-avatar-user: #5436da;
+  --color-avatar-assistant-start: #2080f0;
+  --color-avatar-assistant-end: #4dabff;
+  --color-avatar-user-sidebar: #5b9bd5;
+  --color-logo: #19c37d;
+
+  /* 语义色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  --color-link: #2563eb;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 22px;
+  --radius-full: 9999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* 过渡 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-accent: var(--color-accent);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-background); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+
+  <!-- 顶部导航栏 -->
+  <nav class="top-nav">
+    <!-- 左侧品牌标识 -->
+    <div class="brand">
+      <!-- Logo：16x16 绿色圆形 + 白色图标 -->
+      <div class="brand-logo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <!-- 抽象对话气泡图标 -->
+          <path d="M12 2C6.48 2 2 5.58 2 10c0 2.06 1.06 3.92 2.75 5.26L4 18l3.08-1.54C8.62 16.82 10.28 17 12 17c5.52 0 10-3.58 10-8s-4.48-7-10-7z" fill="#ffffff"/>
+          <!-- 大脑/思维节点 -->
+          <circle cx="9" cy="9" r="1.5" fill="#ffffff"/>
+          <circle cx="15" cy="9" r="1.5" fill="#ffffff"/>
+          <line x1="10.5" y1="9" x2="13.5" y2="9" stroke="#ffffff" stroke-width="1"/>
+        </svg>
+      </div>
+      <span class="brand-name">OmniBot</span>
+    </div>
+    <!-- 右侧导航按钮 -->
+    <div class="nav-actions">
+      <!-- 记忆按钮 -->
+      <button class="nav-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <!-- 脑/书签图标 -->
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2 2 0 0 1-2-2V6.5a.5.5 0 0 0-.5-.5H4a2 2 0 0 1 0-4h5.5z"/>
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2 2 0 0 0 2-2V6.5a.5.5 0 0 1 .5-.5H20a2 2 0 0 0 0-4h-5.5z"/>
+        </svg>
+        <span>记忆</span>
+      </button>
+      <!-- 设置按钮 -->
+      <button class="nav-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1.08z"/>
+        </svg>
+        <span>设置</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- 主内容区：垂直居中的欢迎区 + 底部输入区 -->
+  <main class="main-area">
+
+    <!-- 空状态欢迎区 -->
+    <div class="welcome-section">
+
+      <!-- 品牌图标 40x40 绿色圆形 -->
+      <div class="welcome-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <!-- 抽象对话气泡图标（放大版） -->
+          <path d="M12 2C6.48 2 2 5.58 2 10c0 2.06 1.06 3.92 2.75 5.26L4 18l3.08-1.54C8.62 16.82 10.28 17 12 17c5.52 0 10-3.58 10-8s-4.48-7-10-7z" fill="#ffffff"/>
+          <circle cx="9" cy="9" r="1.5" fill="#ffffff"/>
+          <circle cx="15" cy="9" r="1.5" fill="#ffffff"/>
+          <line x1="10.5" y1="9" x2="13.5" y2="9" stroke="#ffffff" stroke-width="1"/>
+        </svg>
+      </div>
+
+      <!-- 欢迎语 -->
+      <h1 class="welcome-title">你好，我是 OmniBot</h1>
+
+      <!-- 副标题 -->
+      <p class="welcome-subtitle">你的私人助理，写代码、查资料、聊天，随时告诉我</p>
+
+    </div>
+
+    <!-- 底部输入区域 -->
+    <div class="input-section">
+      <!-- 输入框容器 -->
+      <div class="input-container">
+        <textarea rows="1" placeholder="有什么可以帮你的？"></textarea>
+        <!-- 底部工具栏 -->
+        <div class="input-toolbar">
+          <div class="toolbar-left"></div>
+          <div class="toolbar-right">
+            <!-- 发送按钮（禁用态灰色） -->
+            <button class="send-btn" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 向上箭头 -->
+                <line x1="12" y1="19" x2="12" y2="5"/>
+                <polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- 免责提示 -->
+      <p class="input-disclaimer">OmniBot 可能会犯错，请核实重要信息</p>
+    </div>
+
+  </main>
+
+  <style>
+    /* ========== 全局重置与基础样式 ========== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #171717;
+      overflow: hidden;
+      height: 100vh;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ========== 顶部导航栏 ========== */
+    .top-nav {
+      height: 52px;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      background: #ffffff;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    /* 左侧品牌标识 */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* 品牌 Logo 图标 */
+    .brand-logo {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #10a37f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* 品牌名称 */
+    .brand-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: #171717;
+      line-height: 1;
+    }
+
+    /* 右侧导航按钮组 */
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    /* 导航按钮（文字 + 图标） */
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      color: #666666;
+      font-family: inherit;
+      padding: 4px 0;
+      transition: color 150ms ease;
+    }
+
+    .nav-btn:hover {
+      color: #171717;
+    }
+
+    .nav-btn svg {
+      flex-shrink: 0;
+    }
+
+    /* ========== 主内容区 ========== */
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* ========== 空状态欢迎区 ========== */
+    .welcome-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* 品牌图标 40x40 绿色圆形 */
+    .welcome-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #10a37f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* 欢迎语标题 */
+    .welcome-title {
+      font-size: 22px;
+      font-weight: 600;
+      color: #171717;
+      line-height: 1.3;
+    }
+
+    /* 副标题 */
+    .welcome-subtitle {
+      font-size: 14px;
+      color: #999999;
+      line-height: 1.4;
+    }
+
+
+    /* ========== 底部输入区域 ========== */
+    .input-section {
+      padding: 0 20px 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* 输入框容器 */
+    .input-container {
+      max-width: 680px;
+      width: 100%;
+      border: 1px solid #e5e5e5;
+      border-radius: 12px;
+      background: #ffffff;
+      padding: 10px 14px;
+      transition: border-color 150ms ease;
+    }
+
+    .input-container:hover {
+      border-color: #d0d0d0;
+    }
+
+    /* 输入文本框 */
+    .input-container textarea {
+      width: 100%;
+      border: none;
+      outline: none;
+      resize: none;
+      font-family: inherit;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #171717;
+      background: transparent;
+      min-height: 24px;
+      max-height: 200px;
+    }
+
+    .input-container textarea::placeholder {
+      color: #999999;
+    }
+
+    /* 底部工具栏 */
+    .input-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+    }
+
+    .toolbar-left {
+      /* 左侧占位 */
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+    }
+
+    /* 发送按钮（禁用态） */
+    .send-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      cursor: not-allowed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #d0d0d0;
+    }
+
+    /* 底部免责提示 */
+    .input-disclaimer {
+      font-size: 11px;
+      color: #bbbbbb;
+      text-align: center;
+      margin-top: 8px;
+    }
+  </style>
+
+</body>
+</html>

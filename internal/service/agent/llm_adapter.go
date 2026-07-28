@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"omnibot/pkg/logger"
+
+	"go.uber.org/zap"
 )
 
 // OpenAILLMClient 基于 OpenAI 协议的 LLM 客户端
@@ -55,54 +59,98 @@ type agentResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// ChatCompletion 实现 LLMClient 接口
-func (c *OpenAILLMClient) ChatCompletion(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}) (string, []map[string]interface{}, error) {
-	reqBody := agentRequest{
-		Model:    c.model,
-		Messages: messages,
-		Tools:    tools,
-		Stream:   false,
-	}
+// 限流重试:LLM 提供方 429 / TPM/RPM 限流是瞬态错误,指数退避重试而非直接让整个 Agent 任务失败。
+// 子 Agent 后台跑,重试等待可接受;主 Agent 受益但会多等几秒。仅对限流类错误重试,其他错误立即返回。
+const rateLimitMaxRetries = 3
 
-	jsonBody, err := json.Marshal(reqBody)
+// rateLimitBaseDelay 用 var(非 const)便于测试调小加速重试;生产为 1s。
+var rateLimitBaseDelay = 1 * time.Second
+
+// isRateLimitError 判断是否限流类可重试错误:HTTP 429,或错误文案含 rate limit/TPM/RPM/quota。
+func isRateLimitError(statusCode int, err error) bool {
+	if statusCode == 429 {
+		return true
+	}
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		return strings.Contains(msg, "rate limit") || strings.Contains(msg, "tpm") ||
+			strings.Contains(msg, "rpm") || strings.Contains(msg, "quota")
+	}
+	return false
+}
+
+// rateLimitSleep 限流退避等待:第 attempt 次重试前等 baseDelay * 2^attempt(1s/2s/4s)。
+// 返回 false 表示已达重试上限不再等待。等待期间响应 ctx 取消。
+func rateLimitSleep(ctx context.Context, attempt int) bool {
+	if attempt >= rateLimitMaxRetries {
+		return false
+	}
+	delay := rateLimitBaseDelay * (1 << attempt)
+	logger.WarnWithFields("llm rate limited, backing off before retry",
+		zap.Int("attempt", attempt+1),
+		zap.Duration("delay", delay),
+	)
+	select {
+	case <-time.After(delay):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// ChatCompletion 实现 LLMClient 接口。限流(429/TPM)时指数退避重试,避免单次限流让整个任务失败。
+func (c *OpenAILLMClient) ChatCompletion(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}) (string, []map[string]interface{}, error) {
+	jsonBody, err := json.Marshal(agentRequest{
+		Model: c.model, Messages: messages, Tools: tools, Stream: false,
+	})
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal request: %w", err)
 	}
-
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
+
+	for attempt := 0; ; attempt++ {
+		content, toolCalls, status, callErr := c.chatCompletionOnce(ctx, url, jsonBody)
+		if callErr == nil {
+			return content, toolCalls, nil
+		}
+		if !isRateLimitError(status, callErr) || !rateLimitSleep(ctx, attempt) {
+			return "", nil, callErr
+		}
+	}
+}
+
+// chatCompletionOnce 执行一次非流式 chat completion 请求。返回 httpStatus 供上层判断限流(0=未拿到响应)。
+func (c *OpenAILLMClient) chatCompletionOnce(ctx context.Context, url string, jsonBody []byte) (string, []map[string]interface{}, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", nil, fmt.Errorf("create request: %w", err)
+		return "", nil, 0, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("send request: %w", err)
+		return "", nil, 0, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", nil, fmt.Errorf("read response: %w", err)
+		return "", nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
 	}
 
 	var agentResp agentResponse
 	if err := json.Unmarshal(body, &agentResp); err != nil {
-		return "", nil, fmt.Errorf("decode response: %w", err)
+		return "", nil, resp.StatusCode, fmt.Errorf("decode response: %w", err)
 	}
-
 	if agentResp.Error != nil {
-		return "", nil, fmt.Errorf("API error: %s", agentResp.Error.Message)
+		return "", nil, resp.StatusCode, fmt.Errorf("API error: %s", agentResp.Error.Message)
 	}
-
 	if len(agentResp.Choices) == 0 {
-		return "", nil, fmt.Errorf("no choices in response")
+		return "", nil, resp.StatusCode, fmt.Errorf("no choices in response")
 	}
-
 	choice := agentResp.Choices[0]
-	return choice.Message.Content, choice.Message.ToolCalls, nil
+	return choice.Message.Content, choice.Message.ToolCalls, resp.StatusCode, nil
 }
 
 // streamingChunk 对应 OpenAI SSE 流中一行 `data: {...}` 的 JSON 结构。
@@ -112,8 +160,9 @@ type streamingChunk struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"` // deepseek 思考模式:思考增量,千帆要求多轮回传
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -156,24 +205,33 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 	}
 
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+	// 限流(429/TPM)时指数退避重试流打开;流已开始后的错误不重试(避免重复输出)。
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// 同步把 body 读完，给上层一个能定位问题的错误信息
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		r, err := c.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("send request: %w", err)
+		}
+		if r.StatusCode < 200 || r.StatusCode >= 300 {
+			// 同步把 body 读完，给上层一个能定位问题的错误信息
+			body, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			statusErr := fmt.Errorf("API error %d: %s", r.StatusCode, strings.TrimSpace(string(body)))
+			if isRateLimitError(r.StatusCode, statusErr) && rateLimitSleep(ctx, attempt) {
+				continue
+			}
+			return nil, statusErr
+		}
+		resp = r
+		break
 	}
 
 	out := make(chan LLMStreamChunk, 16)
@@ -223,6 +281,9 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 
 			if choice.Delta.Content != "" {
 				out <- LLMStreamChunk{ContentDelta: choice.Delta.Content}
+			}
+			if choice.Delta.ReasoningContent != "" {
+				out <- LLMStreamChunk{ReasoningDelta: choice.Delta.ReasoningContent}
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				out <- LLMStreamChunk{

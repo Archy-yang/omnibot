@@ -16,8 +16,10 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
+	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	userRepo "omnibot/internal/repository/user"
@@ -32,6 +34,36 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"go.uber.org/zap"
 )
+
+// researcherSystemPrompt 研究员子 Agent 的 system prompt。
+//
+// 设计目标:在 ReAct「每轮决定是否再次调用工具」这个决策点上,显式约束收敛,
+// 避免 web_fetcher 对 JS 渲染页面拿不到正文时,模型反复换 URL 重试直至跑满 MaxSteps
+// (见 task 15:15 轮 web_fetcher,最后吐"已达到最大步数限制",检索全白做)。
+//
+// 三条收敛规则:
+//  1. 每轮工具调用前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
+//     够了就立即产出报告,不要再调工具。
+//  2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,不要继续重试--
+//     改换思路或基于已收集信息汇总。绝不反复重试同类失败。
+//  3. 信息不足也能产出报告:基于已有来源如实汇总,明确标注哪些部分未能查证,
+//     绝不空转到最后一句"已达到最大步数限制"。
+var researcherSystemPrompt = `你是一名研究员。目标:{goal}。
+
+工作方式:用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。
+
+== 收敛规则(每轮决策是否再次调工具时必须遵守)==
+1. 调用工具前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
+   信息够就立即产出报告,不要再调工具。宁可早出报告,不要多检索。
+2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,
+   立即停止重试该工具,改换思路或基于已有信息汇总。绝不反复重试同类失败。
+3. 信息不足也必须产出报告:基于已有来源如实汇总,对未能查证的部分明确标注"未能查证",
+   绝不空转到步数耗尽。一份基于部分来源的报告,远好过跑满步数却啥也没产出。
+
+== web_fetcher 注意事项==
+web_fetcher 对 JS 渲染页面(SPA,如首页/活动页)常只能抓到导航菜单而非正文。
+若一次抓取结果是导航菜单、空正文、或乱码,视为该页面无效,不要继续换该站点的
+其他 URL 重试--改用 search_memories/search_history 查历史,或基于已有信息汇总。`
 
 func init() {
 	channelfactory.Register(channelweb.NewChannel())
@@ -113,12 +145,24 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Web 聊天 API 路由
 	// 创建 Agent 服务
+	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按 card.Tools 选
+	globalToolRegistry := agentpkg.NewToolRegistry()
+	globalToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
+	globalToolRegistry.Register(agentpkg.CreateCalculatorTool())
+	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
+	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
+	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
+	globalToolRegistry.Register(agentpkg.CreateWebFetcherTool())
+	globalToolRegistry.Register(agentpkg.CreateWebReaderTool())
+
+	// agentToolRegistry:主 Agent 工具集。方向B--移除抓取类(rss/web_fetcher/web_reader),
+	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具仍在
+	// globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
 	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
 	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
 	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
 	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
-	agentToolRegistry.Register(agentpkg.CreateRSSReaderTool())
 
 	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
 	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
@@ -126,13 +170,49 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		agentTimeout = 30 * time.Second
 	}
 	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+
+	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
+	// 先于 agentSvc 装配,因 delegate 工具 + 主 Agent system prompt 依赖子 Agent 框架。
+	agentTaskRepo := agentRepo.NewAgentTaskRepository(dbConn.GetGormDB())
+	subAgentRegistry := agentpkg.NewSubAgentRegistry()
+	subAgentRegistry.Register(domainagent.SubAgentCard{
+		Type:           "researcher",
+		Name:           "研究员",
+		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
+		PromptTemplate: researcherSystemPrompt,
+		Tools:          []string{"rss_reader", "web_fetcher", "web_reader", "search_memories", "search_history"},
+		MaxSteps:       15,
+		Timeout:        180 * time.Second,
+	})
+	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
+	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo)
+	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
+	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
+	// 任务管理工具:主 Agent 对派出去的任务可查(query)/补充(update)/取消(cancel)。
+	agentToolRegistry.Register(agentpkg.CreateQueryTaskTool(subAgentSvc))
+	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
+	agentToolRegistry.Register(agentpkg.CreateCancelTaskTool(subAgentSvc))
+
+	// 主 Agent 服务:system prompt 含 delegate 派活 + 汇报引导(08 §4.4),toolRegistry 含 delegate
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
 		LLMClient:          agentLLMClient,
 		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
 		ToolRegistry:       agentToolRegistry,
+		SystemPrompt:       agentpkg.MainAgentSystemPrompt(true),
+		// 主 Agent 同样装配执行链:熔断(工具连失败抑制)+ 强制汇总(MaxSteps 兜底出报告,不吐废话)。
+		Hooks: []agentpkg.RoundHook{
+			agentpkg.NewCircuitBreakerHook(agentpkg.ToolFailureThreshold),
+			agentpkg.NewForceSummaryHook(agentLLMClient),
+		},
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
+	webHandler.SetSubAgentSupport(subAgentSvc, subAgentRegistry)
+
+	// 后台 Agent 任务接口(08 §4.7):轮询 + report
+	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, subAgentRegistry, llmConfigSvc, msgSvc)
 
 	// v2.1: 邮箱密码认证装配
 	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
@@ -163,11 +243,20 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		chatAPIGroup.POST("/messages/agent/stream", webHandler.HandleSendMessageAgentStream)
 	}
 
+	// 后台 Agent 任务接口(08 §4.7):前端轮询 + 触发汇报
+	agentTaskGroup := r.Group("/api/v1/agent")
+	agentTaskGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		agentTaskGroup.GET("/tasks", agentTaskHandler.HandleListTasks)
+		agentTaskGroup.GET("/tasks/:id/steps", agentTaskHandler.HandleListTaskSteps)
+		agentTaskGroup.POST("/tasks/:id/report", agentTaskHandler.HandleReportTask)
+	}
+
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc)
+	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -235,6 +324,7 @@ func startFeishuChannel(
 	msgSvc chatService.MessageService,
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
+	subAgentSvc *agentpkg.SubAgentService,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -254,6 +344,7 @@ func startFeishuChannel(
 	sender := channelfeishu.NewLarkSender(larkClient)
 
 	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
+	handler.SetSubAgentReporter(subAgentSvc)
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)
@@ -269,4 +360,21 @@ func startFeishuChannel(
 			logger.ErrorWithFields("feishu: long connection ended with error", zap.Error(err))
 		}
 	}()
+}
+
+// subAgentLLMConfigAdapter 适配 userService.LLMConfigService -> agentpkg.SubAgentLLMConfigProvider。
+// 方案3:子 Agent 优先用用户自定义 LLM 配置,无配置时 runner 内部回落系统默认。
+type subAgentLLMConfigAdapter struct {
+	svc userService.LLMConfigService
+}
+
+func (a *subAgentLLMConfigAdapter) GetFullConfig(userID int64) (apiKey, baseURL, model string, hasConfig bool, err error) {
+	cfg, has, e := a.svc.GetFullConfigForUser(userID)
+	if e != nil {
+		return "", "", "", false, e
+	}
+	if !has || cfg == nil {
+		return "", "", "", false, nil
+	}
+	return cfg.APIKey, cfg.BaseURL, cfg.Model, true, nil
 }

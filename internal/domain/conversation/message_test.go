@@ -97,3 +97,22 @@ func TestMessage_NewAssistantMessageWithSegments(t *testing.T) {
 		t.Error("Expected CreatedAt to be set")
 	}
 }
+
+// TestNewReportMessage_SetsKindAndTaskID 汇报消息必须 Kind=report + 关联 task_id,
+// 以便前端按徽标区分渲染、且能追溯到对应后台任务。
+func TestNewReportMessage_SetsKindAndTaskID(t *testing.T) {
+	msg := NewReportMessage(7, 99, "调研结果:Go 1.24 支持泛型", nil)
+
+	if msg.Role != RoleAssistant {
+		t.Errorf("Expected Role %s, got %s", RoleAssistant, msg.Role)
+	}
+	if msg.Kind != KindReport {
+		t.Errorf("Expected Kind %s, got %q", KindReport, msg.Kind)
+	}
+	if msg.TaskID == nil || *msg.TaskID != 99 {
+		t.Errorf("Expected TaskID 99, got %v", msg.TaskID)
+	}
+	if msg.Content != "调研结果:Go 1.24 支持泛型" {
+		t.Errorf("Expected Content, got %q", msg.Content)
+	}
+}

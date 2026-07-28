@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniBot V2.0 - 登录</title>
+    <style id="theme-vars">
+/* OmniBot v1.10.0 品牌样式 — 基于实际代码提取 */
+:root {
+  /* 主强调色 */
+  --color-accent: #10a37f;
+  --color-accent-hover: #0d8c6d;
+  --color-accent-light: rgba(16, 163, 127, 0.08);
+
+  /* 输入框聚焦蓝 */
+  --color-focus-blue: #2080f0;
+  --color-focus-blue-light: rgba(32, 128, 240, 0.1);
+  --color-focus-blue-hover: #4dabff;
+
+  /* 背景色 */
+  --color-bg-main: #ffffff;
+  --color-bg-sidebar: #f9f9f9;
+  --color-bg-user-msg: #f4f4f4;
+  --color-bg-input: #ffffff;
+  --color-bg-code: #f4f4f4;
+
+  /* 文字色 */
+  --color-text-primary: #0d0d0d;
+  --color-text-secondary: #6e6e80;
+  --color-text-tertiary: #8e8ea0;
+  --color-text-hint: #9ca3af;
+
+  /* 边框色 */
+  --color-border: #e5e5e5;
+  --color-border-input: #e5e7eb;
+
+  /* 按钮色 */
+  --color-btn-send-active: #000000;
+  --color-btn-send-disabled: #e5e5e5;
+  --color-icon: #5d5d6e;
+
+  /* Toast */
+  --color-toast-bg: #1a1a1a;
+  --color-toast-text: #f4f4f5;
+
+  /* 辅助头像 */
+  --color-avatar-user: #5436da;
+  --color-avatar-assistant-start: #2080f0;
+  --color-avatar-assistant-end: #4dabff;
+  --color-avatar-user-sidebar: #5b9bd5;
+  --color-logo: #19c37d;
+
+  /* 语义色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  --color-link: #2563eb;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 22px;
+  --radius-full: 9999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* 过渡 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-accent: var(--color-accent);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-background); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <!-- 品牌标识 -->
+        <div class="brand-icon">
+            <span>O</span>
+        </div>
+
+        <!-- 登录卡片 -->
+        <div class="login-card">
+            <!-- 标题区 -->
+            <div class="card-title">登录 OmniBot</div>
+            <div class="card-subtitle">登录以继续使用你的私人助理</div>
+
+            <!-- 邮箱输入框 -->
+            <div class="form-group">
+                <div class="form-label">邮箱地址</div>
+                <input class="form-input" type="email" placeholder="you@example.com">
+            </div>
+
+            <!-- 密码输入框 -->
+            <div class="form-group">
+                <div class="form-label">
+                    <span>密码</span>
+                    <a href="#">忘记密码？</a>
+                </div>
+                <div class="password-wrapper">
+                    <input class="form-input" type="password" value="12345678" placeholder="输入密码">
+                    <button class="password-toggle" title="显示/隐藏密码">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 登录按钮 -->
+            <button class="btn-login">登录</button>
+
+            <!-- 分隔线 -->
+            <div class="divider">
+                <div class="divider-line"></div>
+                <span class="divider-text">或</span>
+                <div class="divider-line"></div>
+            </div>
+
+            <!-- 其他登录方式 -->
+            <button class="btn-other">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                使用其他方式登录
+            </button>
+
+            <!-- 注册引导 -->
+            <div class="signup-hint">
+                还没有账号？<a href="#">注册</a>
+            </div>
+        </div>
+
+        <!-- 底部信息 -->
+        <div class="footer">
+            <div class="footer-version">OmniBot v1.10.0</div>
+            <div class="footer-links">
+                <a href="#">隐私政策</a> · <a href="#">服务条款</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 密码显示/隐藏切换 -->
+    <script>
+        const toggleBtn = document.querySelector('.password-toggle');
+        const passwordInput = document.querySelector('.password-wrapper .form-input');
+        let visible = false;
+
+        toggleBtn.addEventListener('click', function () {
+            visible = !visible;
+            passwordInput.type = visible ? 'text' : 'password';
+            /* 切换图标：睁眼 / 闭眼 */
+            this.innerHTML = visible
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        });
+    </script>
+
+    <style>
+        /* ========== 全局重置 ========== */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: #fafafa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            font-size: 15px;
+            line-height: 1.6;
+            color: #171717;
+        }
+
+        /* ========== 页面容器 ========== */
+        .page {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ========== 品牌图标 ========== */
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: #10a37f;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 24px;
+        }
+
+        .brand-icon span {
+            font-size: 20px;
+            font-weight: 700;
+            color: #ffffff;
+            line-height: 1;
+        }
+
+        /* ========== 登录卡片 ========== */
+        .login-card {
+            background: #ffffff;
+            border-radius: 12px;
+            width: 380px;
+            padding: 32px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+
+        /* 标题 */
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #171717;
+            margin-bottom: 4px;
+        }
+
+        .card-subtitle {
+            font-size: 13px;
+            color: #999;
+            margin-bottom: 24px;
+        }
+
+        /* ========== 表单字段 ========== */
+        .form-group {
+            margin-bottom: 0;
+        }
+
+        .form-group + .form-group {
+            margin-top: 16px;
+        }
+
+        .form-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            color: #666;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .form-label a {
+            font-size: 12px;
+            color: #10a37f;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .form-label a:hover {
+            text-decoration: underline;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #171717;
+            background: #ffffff;
+            outline: none;
+            transition: border-color 150ms ease, box-shadow 150ms ease;
+            font-family: inherit;
+        }
+
+        .form-input::placeholder {
+            color: #bbb;
+        }
+
+        .form-input:focus {
+            border-color: #10a37f;
+            box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+        }
+
+        /* 密码输入框容器 */
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper .form-input {
+            padding-right: 40px;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 150ms ease;
+        }
+
+        .password-toggle:hover {
+            background: #f5f5f5;
+        }
+
+        .password-toggle svg {
+            width: 16px;
+            height: 16px;
+            color: #999;
+        }
+
+        /* ========== 登录按钮 ========== */
+        .btn-login {
+            width: 100%;
+            padding: 10px;
+            background: #171717;
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 150ms ease;
+            font-family: inherit;
+            margin-top: 24px;
+        }
+
+        .btn-login:hover {
+            background: #333;
+        }
+
+        /* ========== 分隔线 ========== */
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .divider-line {
+            flex: 1;
+            height: 1px;
+            background: #f0f0f0;
+        }
+
+        .divider-text {
+            font-size: 12px;
+            color: #ccc;
+            white-space: nowrap;
+        }
+
+        /* ========== 其他登录方式按钮 ========== */
+        .btn-other {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #e5e5e5;
+            background: #ffffff;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
+            transition: background 150ms ease, border-color 150ms ease;
+            font-family: inherit;
+            margin-top: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-other:hover {
+            background: #f9f9f9;
+            border-color: #d0d0d0;
+        }
+
+        .btn-other svg {
+            width: 16px;
+            height: 16px;
+            color: #999;
+            flex-shrink: 0;
+        }
+
+        /* ========== 注册引导 ========== */
+        .signup-hint {
+            text-align: center;
+            font-size: 13px;
+            color: #999;
+            margin-top: 20px;
+        }
+
+        .signup-hint a {
+            color: #10a37f;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .signup-hint a:hover {
+            text-decoration: underline;
+        }
+
+        /* ========== 底部信息 ========== */
+        .footer {
+            margin-top: 32px;
+            text-align: center;
+        }
+
+        .footer-version {
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        .footer-links {
+            font-size: 12px;
+            color: #ccc;
+            margin-top: 4px;
+        }
+
+        .footer-links a {
+            color: #ccc;
+            text-decoration: none;
+            cursor: pointer;
+            transition: color 150ms ease;
+        }
+
+        .footer-links a:hover {
+            color: #999;
+        }
+    </style>
+</body>
+</html>

@@ -12,6 +12,9 @@ type AgentServiceConfig struct {
 	ToolRegistry       *ToolRegistry
 	MaxSteps           int
 	SystemPrompt       string
+	// Hooks 可插拔执行链(熔断/强制汇总等)。子 Agent 应装配[熔断+强制汇总];
+	// 主 Agent 可不传(纯推理)或按需装配。nil=无机制(纯 ReAct 推理)。
+	Hooks []RoundHook
 }
 
 // AgentService 封装 ReActAgent,供 API 层调用。
@@ -25,6 +28,7 @@ type AgentService struct {
 	toolRegistry        *ToolRegistry
 	maxSteps            int
 	systemPrompt        string
+	hooks               []RoundHook
 }
 
 // NewAgentService 创建 Agent 服务。
@@ -35,6 +39,7 @@ func NewAgentService(config AgentServiceConfig) *AgentService {
 		toolRegistry:        config.ToolRegistry,
 		maxSteps:            config.MaxSteps,
 		systemPrompt:        config.SystemPrompt,
+		hooks:               config.Hooks,
 	}
 }
 
@@ -121,8 +126,14 @@ func (s *AgentService) Run(
 		}
 	}
 
+	// err 时也返回已收集的 records(不丢执行过程):RunStream 失败前已 emit 的 llm_call/tool_call
+	// 步骤对复盘至关重要,尤其子 Agent 失败任务--否则 executeTask 拿到 nil records 落不了库,
+	// 与「失败也落步骤」矛盾。
 	if streamErr != nil {
-		return nil, fmt.Errorf("agent stream error: %w", streamErr)
+		return &AgentResult{
+			FinalResponse: finalContent,
+			Records:       records,
+		}, fmt.Errorf("agent stream error: %w", streamErr)
 	}
 	// finalContent 由 AgentEventFinal 提供;未收到 Final(异常路径)回落 doneFallback。
 	if finalContent == "" {
@@ -162,6 +173,7 @@ func (s *AgentService) runStreamWithClient(
 		ToolRegistry:       s.toolRegistry,
 		MaxSteps:           s.maxSteps,
 		SystemPrompt:       s.systemPrompt,
+		Hooks:              s.hooks,
 	})
 	return agent.RunStream(withUserID(ctx, userID), conversation)
 }

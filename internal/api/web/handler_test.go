@@ -47,14 +47,19 @@ func (m *mockUserService) GetOrCreateByChannel(channelType, channelUserID string
 }
 
 type mockMessageService struct {
-	savedUserContent     string
+	savedUserContent      string
 	savedAssistantContent string
-	savedSegments        []conversation.MessageSegment
-	savedSteps           []*conversation.AgentStep
-	listMessages         []*conversation.Message
-	listErr              error
-	listCalledLimit      int
-	listCalledBefore     int64
+	savedSegments         []conversation.MessageSegment
+	savedSteps            []*conversation.AgentStep
+	listMessages          []*conversation.Message
+	listErr               error
+	listCalledLimit       int
+	listCalledBefore      int64
+	reportSaved           bool
+	savedReportTaskID     int64
+	savedReportContent    string
+	savedReportSegments   []conversation.MessageSegment
+	savedReportSteps      []*conversation.AgentStep
 }
 
 func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
@@ -71,6 +76,22 @@ func (m *mockMessageService) SaveAssistantMessageWithSegments(ctx context.Contex
 	m.savedAssistantContent = content
 	m.savedSegments = segments
 	m.savedSteps = steps
+	return nil
+}
+
+func (m *mockMessageService) SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error {
+	m.savedAssistantContent = content
+	m.savedSegments = segments
+	m.savedSteps = steps
+	return nil
+}
+
+func (m *mockMessageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+	m.reportSaved = true
+	m.savedReportTaskID = taskID
+	m.savedReportContent = content
+	m.savedReportSegments = segments
+	m.savedReportSteps = steps
 	return nil
 }
 
@@ -109,12 +130,12 @@ func (m *mockLLMClient) StreamChatCompletion(ctx context.Context, messages []llm
 
 // LLMConfigService mock
 type mockLLMConfigService struct {
-	hasConfig    bool
-	configView   *LLMConfigView
-	fullConfig   *FullLLMConfig
-	updateErr    error
-	clearErr     error
-	lastUpdate   UpdateConfigRequest
+	hasConfig  bool
+	configView *LLMConfigView
+	fullConfig *FullLLMConfig
+	updateErr  error
+	clearErr   error
+	lastUpdate UpdateConfigRequest
 }
 
 func (m *mockLLMConfigService) GetConfigView(userID int64) (*LLMConfigView, error) {
@@ -716,6 +737,8 @@ type mockAgentService struct {
 	runErr    error
 	streamErr error
 	runResult *agentpkg.AgentResult
+	// 捕获 RunStream 收到的 conversation(前置汇报测试用)
+	capturedStreamConversation []map[string]interface{}
 }
 
 func (m *mockAgentService) Run(
@@ -742,6 +765,7 @@ func (m *mockAgentService) RunStream(
 	if m.streamErr != nil {
 		return nil, m.streamErr
 	}
+	m.capturedStreamConversation = conversation
 	ch := make(chan agentpkg.AgentEvent, len(m.events))
 	for _, e := range m.events {
 		ch <- e

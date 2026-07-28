@@ -76,6 +76,17 @@ func (m *mockMessageService) SaveAssistantMessageWithSegments(
 	return nil
 }
 
+func (m *mockMessageService) SaveAssistantMessageWithToolCalls(
+	ctx context.Context, userID int64, content string,
+	segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep,
+) error {
+	m.saveAsstCalled++
+	m.savedAsstContent = content
+	m.savedSegments = segments
+	m.savedSteps = steps
+	return nil
+}
+
 type mockAgentService struct {
 	result       *agentpkg.AgentResult
 	err          error

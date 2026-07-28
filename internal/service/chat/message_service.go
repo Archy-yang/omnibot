@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +44,13 @@ type MessageService interface {
 	// steps 为该轮的有序执行步骤（LLM 调用 + 工具调用），保存消息后 stamp MessageID 批量落库；
 	// 为空时不写。步骤落库失败不影响消息持久化（仅记日志）。
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	// SaveAssistantMessageWithToolCalls 同上,并支持规范改造:toolCalls 为工具调用配对 JSON
+	// (nil 表示无工具调用),落 Message.ToolCalls 供跨轮重建上下文。
+	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
+
+	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask
+	// 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报。
+	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 
 	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
 	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
@@ -55,9 +63,9 @@ type LongTermMemoryProvider interface {
 }
 
 type messageService struct {
-	msgRepo      chatrepo.MessageRepository
-	memorySvc    LongTermMemoryProvider
-	stepRepo     chatrepo.AgentStepRepository
+	msgRepo   chatrepo.MessageRepository
+	memorySvc LongTermMemoryProvider
+	stepRepo  chatrepo.AgentStepRepository
 }
 
 // NewMessageService 创建消息服务
@@ -91,6 +99,38 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 	result = append(result, memoryMessages...)
 
 	for _, msg := range messages {
+		// 规范改造:assistant 消息若带 ToolCalls(调过工具),展开成 OpenAI 配对序列:
+		// assistant(tool_calls) -> tool(result, tool_call_id) x N -> assistant(最终回复)
+		// 这样下一轮 LLM 能看到"之前调过工具",避免历史只剩纯文本导致不调工具。
+		if msg.Role == conversation.RoleAssistant && msg.ToolCalls != nil {
+			pairs, err := parseToolCalls(*msg.ToolCalls)
+			if err == nil && len(pairs) > 0 {
+				// assistant(tool_calls) 消息(content 空,tool_calls 带调用)
+				toolCalls := make([]map[string]interface{}, 0, len(pairs))
+				for _, p := range pairs {
+					toolCalls = append(toolCalls, map[string]interface{}{
+						"id":   p.ID,
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      p.Name,
+							"arguments": p.Arguments,
+						},
+					})
+				}
+				result = append(result, llm.ChatMessage{
+					Role:      conversation.RoleAssistant,
+					ToolCalls: toolCalls,
+				})
+				// 每个 tool result 一条 tool 消息
+				for _, p := range pairs {
+					result = append(result, llm.ChatMessage{
+						Role:       conversation.RoleTool,
+						Content:    p.Result,
+						ToolCallID: p.ID,
+					})
+				}
+			}
+		}
 		result = append(result, llm.ChatMessage{
 			Role:    msg.Role,
 			Content: msg.Content,
@@ -173,12 +213,59 @@ func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, u
 	// 运行步骤链是辅助记录：消息已落库成功，步骤落库失败不应让整次保存失败，仅记日志。
 	if s.stepRepo != nil && len(steps) > 0 {
 		for _, step := range steps {
-			step.MessageID = msg.ID
+			step.MessageID = &msg.ID
 			step.UserID = userID
 		}
 		if err := s.stepRepo.CreateBatch(steps); err != nil {
 			logger.ErrorWithFields("Failed to save agent steps",
 				zap.Int64("user_id", userID),
+				zap.Int64("message_id", msg.ID),
+				zap.Error(err),
+			)
+		}
+	}
+	return nil
+}
+
+// SaveAssistantMessageWithToolCalls 同 SaveAssistantMessageWithSegments,并设 ToolCalls(规范改造)。
+func (s *messageService) SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error {
+	msg := conversation.NewAssistantMessageWithSegments(userID, content, segments)
+	msg.ToolCalls = toolCalls
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+	if s.stepRepo != nil && len(steps) > 0 {
+		for _, step := range steps {
+			step.MessageID = &msg.ID
+			step.UserID = userID
+		}
+		if err := s.stepRepo.CreateBatch(steps); err != nil {
+			logger.ErrorWithFields("Failed to save agent steps",
+				zap.Int64("user_id", userID),
+				zap.Int64("message_id", msg.ID),
+				zap.Error(err),
+			)
+		}
+	}
+	return nil
+}
+
+// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),并落 Agent 运行步骤链。
+// 供 HandleReportTask 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报(不再只是前端内存里的一闪而过)。
+func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+	msg := conversation.NewReportMessage(userID, taskID, content, segments)
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+	if s.stepRepo != nil && len(steps) > 0 {
+		for _, step := range steps {
+			step.MessageID = &msg.ID
+			step.UserID = userID
+		}
+		if err := s.stepRepo.CreateBatch(steps); err != nil {
+			logger.ErrorWithFields("Failed to save report agent steps",
+				zap.Int64("user_id", userID),
+				zap.Int64("task_id", taskID),
 				zap.Int64("message_id", msg.ID),
 				zap.Error(err),
 			)
@@ -200,4 +287,25 @@ func (s *messageService) ListByUser(ctx context.Context, userID int64, limit int
 		return s.msgRepo.GetByUserIDBefore(userID, before, limit)
 	}
 	return s.msgRepo.GetRecentByUserID(userID, limit)
+}
+
+// toolCallPair Message.ToolCalls JSON 的解析结构(规范改造)。
+type toolCallPair struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Result    string `json:"result"`
+}
+
+// parseToolCalls 解析 Message.ToolCalls JSON 字段。
+// 失败返回 error(调用方降级为不展开配对,仅用 content)。
+func parseToolCalls(s string) ([]toolCallPair, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var pairs []toolCallPair
+	if err := json.Unmarshal([]byte(s), &pairs); err != nil {
+		return nil, err
+	}
+	return pairs, nil
 }

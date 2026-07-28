@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniBot V2.0 - 设置面板</title>
+    <style id="theme-vars">
+/* OmniBot v1.10.0 品牌样式 — 基于实际代码提取 */
+:root {
+  /* 主强调色 */
+  --color-accent: #10a37f;
+  --color-accent-hover: #0d8c6d;
+  --color-accent-light: rgba(16, 163, 127, 0.08);
+
+  /* 输入框聚焦蓝 */
+  --color-focus-blue: #2080f0;
+  --color-focus-blue-light: rgba(32, 128, 240, 0.1);
+  --color-focus-blue-hover: #4dabff;
+
+  /* 背景色 */
+  --color-bg-main: #ffffff;
+  --color-bg-sidebar: #f9f9f9;
+  --color-bg-user-msg: #f4f4f4;
+  --color-bg-input: #ffffff;
+  --color-bg-code: #f4f4f4;
+
+  /* 文字色 */
+  --color-text-primary: #0d0d0d;
+  --color-text-secondary: #6e6e80;
+  --color-text-tertiary: #8e8ea0;
+  --color-text-hint: #9ca3af;
+
+  /* 边框色 */
+  --color-border: #e5e5e5;
+  --color-border-input: #e5e7eb;
+
+  /* 按钮色 */
+  --color-btn-send-active: #000000;
+  --color-btn-send-disabled: #e5e5e5;
+  --color-icon: #5d5d6e;
+
+  /* Toast */
+  --color-toast-bg: #1a1a1a;
+  --color-toast-text: #f4f4f5;
+
+  /* 辅助头像 */
+  --color-avatar-user: #5436da;
+  --color-avatar-assistant-start: #2080f0;
+  --color-avatar-assistant-end: #4dabff;
+  --color-avatar-user-sidebar: #5b9bd5;
+  --color-logo: #19c37d;
+
+  /* 语义色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  --color-link: #2563eb;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 22px;
+  --radius-full: 9999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* 过渡 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-accent: var(--color-accent);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-background); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+    <!-- 模拟主页面背景 -->
+    <div class="mock-page">
+        <!-- 顶部导航栏 -->
+        <nav class="mock-nav">
+            <div class="mock-nav-brand">
+                <span class="brand-dot"></span>
+                <span>OmniBot</span>
+            </div>
+            <div class="mock-nav-actions">
+                <button class="mock-nav-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    记忆
+                </button>
+                <button class="mock-nav-btn active">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    设置
+                </button>
+            </div>
+        </nav>
+        <!-- 主内容区 -->
+        <div class="mock-content">
+            <span class="mock-content-hint">设置面板预览</span>
+        </div>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div class="overlay"></div>
+
+    <!-- 右侧抽屉 -->
+    <div class="drawer">
+        <!-- 标题栏 -->
+        <div class="drawer-header">
+            <span class="drawer-title">设置</span>
+            <button class="drawer-close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- 内容区域 -->
+        <div class="drawer-body">
+            <!-- 区块一：模型配置 -->
+            <div class="section-title">模型配置</div>
+
+            <!-- 配置状态提示 -->
+            <div class="config-hint">
+                <span class="config-hint-dot"></span>
+                <span class="config-hint-text">当前使用系统默认配置，修改后仅对你生效</span>
+            </div>
+
+            <!-- 服务商 -->
+            <div class="form-field">
+                <label class="form-label" for="provider">服务商</label>
+                <select class="form-select" id="provider">
+                    <optgroup label="OpenAI 兼容模式">
+                        <option value="openai" selected>OpenAI</option>
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="aliyun">阿里云百炼</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <!-- 模型名称 -->
+            <div class="form-field">
+                <label class="form-label" for="model-name">模型名称</label>
+                <input class="form-input" id="model-name" type="text" placeholder="如 gpt-4o、deepseek-chat">
+            </div>
+
+            <!-- API Key -->
+            <div class="form-field">
+                <label class="form-label" for="api-key">API Key</label>
+                <div class="password-wrapper">
+                    <input class="form-input" id="api-key" type="password" value="sk-••••••••••••3fKm" readonly>
+                    <button class="password-toggle" title="显示/隐藏">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Base URL -->
+            <div class="form-field">
+                <label class="form-label" for="base-url">Base URL</label>
+                <input class="form-input" id="base-url" type="text" placeholder="留空使用默认地址">
+            </div>
+
+            <!-- Temperature -->
+            <div class="form-field">
+                <label class="form-label">Temperature</label>
+                <div class="temperature-field">
+                    <input class="temperature-slider" type="range" min="0" max="2" step="0.1" value="0.7">
+                    <span class="temperature-value">0.7</span>
+                </div>
+            </div>
+
+            <!-- Max Tokens -->
+            <div class="form-field">
+                <label class="form-label" for="max-tokens">Max Tokens</label>
+                <input class="form-input" id="max-tokens" type="number" placeholder="4096">
+            </div>
+
+            <!-- 底部按钮区 -->
+            <div class="form-actions">
+                <button class="btn btn-cancel">取消</button>
+                <button class="btn btn-save">保存</button>
+            </div>
+
+            <!-- 区块二：关于 -->
+            <div class="section-about">
+                <div class="section-title">关于</div>
+
+                <!-- 应用信息 -->
+                <div class="app-info">
+                    <div class="app-name">OmniBot</div>
+                    <div class="app-version">v1.10.0</div>
+                    <div class="app-desc">全平台智能助手，自带长期记忆</div>
+                </div>
+
+                <!-- 已接入入口 -->
+                <div class="entry-label">已接入入口</div>
+
+                <div class="entry-item">
+                    <div class="entry-info">
+                        <div class="entry-name">Web 网页</div>
+                        <div class="entry-desc">浏览器端聊天 + 设置 + 长期记忆管理</div>
+                    </div>
+                    <span class="entry-badge">已接入</span>
+                </div>
+
+                <div class="entry-item">
+                    <div class="entry-info">
+                        <div class="entry-name">微信公众号</div>
+                        <div class="entry-desc">订阅号被动回复 + 文本命令</div>
+                    </div>
+                    <span class="entry-badge">已接入</span>
+                </div>
+
+                <div class="entry-item">
+                    <div class="entry-info">
+                        <div class="entry-name">飞书机器人</div>
+                        <div class="entry-desc">长连接 IM 单聊 + 跨入口记忆共享</div>
+                    </div>
+                    <span class="entry-badge">已接入</span>
+                </div>
+
+                <!-- 源码链接 -->
+                <div class="source-link">
+                    源码仓库 · <a href="#">github.com/...</a>
+                </div>
+            </div>
+
+            <!-- 底部留白 -->
+            <div class="drawer-footer-spacer"></div>
+        </div>
+    </div>
+
+    <!-- 交互脚本：Temperature 滑块实时更新、密码切换、关闭抽屉 -->
+    <script>
+        /* Temperature 滑块实时数值更新 */
+        const slider = document.querySelector('.temperature-slider');
+        const sliderValue = document.querySelector('.temperature-value');
+        slider.addEventListener('input', function () {
+            sliderValue.textContent = this.value;
+        });
+
+        /* 密码可见性切换 */
+        const toggleBtn = document.querySelector('.password-toggle');
+        const apiKeyInput = document.getElementById('api-key');
+        let isPasswordVisible = false;
+        toggleBtn.addEventListener('click', function () {
+            isPasswordVisible = !isPasswordVisible;
+            apiKeyInput.type = isPasswordVisible ? 'text' : 'password';
+            /* 切换图标：睁眼/闭眼 */
+            this.innerHTML = isPasswordVisible
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        });
+
+        /* 关闭抽屉 */
+        const overlay = document.querySelector('.overlay');
+        const closeBtn = document.querySelector('.drawer-close');
+        const drawer = document.querySelector('.drawer');
+
+        function closeDrawer() {
+            drawer.style.transition = 'transform 200ms ease';
+            drawer.style.transform = 'translateX(100%)';
+            overlay.style.transition = 'opacity 150ms ease';
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                drawer.style.display = 'none';
+                overlay.style.display = 'none';
+            }, 200);
+        }
+
+        closeBtn.addEventListener('click', closeDrawer);
+        overlay.addEventListener('click', closeDrawer);
+    </script>
+
+    <style>
+        /* ========== 全局重置与基础样式 ========== */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            height: 100vh;
+            overflow: hidden;
+            background: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            font-size: 15px;
+            line-height: 1.6;
+            color: #171717;
+        }
+
+        /* ========== 模拟主页面背景 ========== */
+        .mock-page {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: #fafafa;
+        }
+
+        /* 顶部导航栏 */
+        .mock-nav {
+            height: 52px;
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            background: #ffffff;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .mock-nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #171717;
+        }
+
+        .mock-nav-brand .brand-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10a37f;
+        }
+
+        .mock-nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .mock-nav-btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            font-size: 13px;
+            color: #666;
+            cursor: pointer;
+            transition: background 150ms ease;
+        }
+
+        .mock-nav-btn:hover {
+            background: #f5f5f5;
+        }
+
+        .mock-nav-btn.active {
+            background: #f5f5f5;
+            color: #171717;
+        }
+
+        /* 主内容区 */
+        .mock-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mock-content-hint {
+            font-size: 14px;
+            color: #ccc;
+            letter-spacing: 0.5px;
+        }
+
+        /* ========== 遮罩层 ========== */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.2);
+            z-index: 100;
+            animation: fadeIn 150ms ease forwards;
+        }
+
+        /* ========== 右侧抽屉 ========== */
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+
+        .drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 400px;
+            height: 100vh;
+            background: #ffffff;
+            border-left: 1px solid #f0f0f0;
+            z-index: 101;
+            display: flex;
+            flex-direction: column;
+            animation: slideIn 200ms ease forwards;
+            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.06);
+        }
+
+        /* 抽屉标题栏 */
+        .drawer-header {
+            padding: 20px 24px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .drawer-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #171717;
+        }
+
+        .drawer-close {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 150ms ease;
+        }
+
+        .drawer-close:hover {
+            background: #f5f5f5;
+        }
+
+        .drawer-close svg {
+            width: 16px;
+            height: 16px;
+            color: #999;
+        }
+
+        /* 抽屉内容区域 */
+        .drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 24px 32px;
+        }
+
+        /* ========== 区块标题 ========== */
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #171717;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #f0f0f0;
+            margin-bottom: 16px;
+        }
+
+        /* ========== 模型配置区块 ========== */
+
+        /* 配置状态提示条 */
+        .config-hint {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .config-hint-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10a37f;
+            flex-shrink: 0;
+        }
+
+        .config-hint-text {
+            font-size: 13px;
+            color: #888;
+            line-height: 1.5;
+        }
+
+        /* 表单字段 */
+        .form-field {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            color: #999;
+            margin-bottom: 6px;
+        }
+
+        .form-input,
+        .form-select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #171717;
+            background: #ffffff;
+            outline: none;
+            transition: border-color 150ms ease;
+            font-family: inherit;
+        }
+
+        .form-input:focus,
+        .form-select:focus {
+            border-color: #2080f0;
+            box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.1);
+        }
+
+        .form-input::placeholder {
+            color: #bbb;
+        }
+
+        .form-select {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 32px;
+            cursor: pointer;
+        }
+
+        /* API Key 密码输入框 */
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper .form-input {
+            padding-right: 40px;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 150ms ease;
+        }
+
+        .password-toggle:hover {
+            background: #f5f5f5;
+        }
+
+        .password-toggle svg {
+            width: 16px;
+            height: 16px;
+            color: #999;
+        }
+
+        /* Temperature 滑块 */
+        .temperature-field {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .temperature-slider {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            background: #e5e5e5;
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .temperature-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #10a37f;
+            border: 2px solid #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+            cursor: pointer;
+            transition: transform 100ms ease;
+        }
+
+        .temperature-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+
+        .temperature-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #10a37f;
+            border: 2px solid #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+            cursor: pointer;
+        }
+
+        .temperature-value {
+            font-size: 13px;
+            color: #666;
+            min-width: 28px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* 底部按钮区 */
+        .form-actions {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            border: none;
+            cursor: pointer;
+            transition: all 150ms ease;
+            font-family: inherit;
+        }
+
+        .btn-cancel {
+            background: #f5f5f5;
+            color: #666;
+        }
+
+        .btn-cancel:hover {
+            background: #ebebeb;
+        }
+
+        .btn-save {
+            background: #171717;
+            color: #ffffff;
+        }
+
+        .btn-save:hover {
+            background: #333;
+        }
+
+        /* ========== 关于区块 ========== */
+        .section-about {
+            margin-top: 24px;
+        }
+
+        .app-info {
+            margin-bottom: 16px;
+        }
+
+        .app-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: #171717;
+        }
+
+        .app-version {
+            font-size: 13px;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        .app-desc {
+            font-size: 13px;
+            color: #999;
+            margin-top: 4px;
+        }
+
+        /* 已接入入口 */
+        .entry-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #999;
+            margin-bottom: 8px;
+        }
+
+        .entry-item {
+            padding: 10px 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .entry-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .entry-info {
+            flex: 1;
+        }
+
+        .entry-name {
+            font-size: 13px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .entry-desc {
+            font-size: 12px;
+            color: #999;
+            margin-top: 1px;
+        }
+
+        .entry-badge {
+            background: #e8f5e9;
+            color: #10a37f;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            flex-shrink: 0;
+            margin-left: 12px;
+        }
+
+        /* 源码链接 */
+        .source-link {
+            margin-top: 16px;
+            font-size: 13px;
+            color: #999;
+        }
+
+        .source-link a {
+            color: #10a37f;
+            text-decoration: none;
+            transition: opacity 150ms ease;
+        }
+
+        .source-link a:hover {
+            opacity: 0.8;
+        }
+
+        /* 底部留白 */
+        .drawer-footer-spacer {
+            height: 32px;
+        }
+
+        /* ========== 滚动条美化 ========== */
+        .drawer-body::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .drawer-body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .drawer-body::-webkit-scrollbar-thumb {
+            background: #e0e0e0;
+            border-radius: 2px;
+        }
+
+        .drawer-body::-webkit-scrollbar-thumb:hover {
+            background: #ccc;
+        }
+    </style>
+</body>
+</html>

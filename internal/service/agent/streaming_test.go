@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -458,6 +459,195 @@ func TestReActAgent_RunStream_ToolError(t *testing.T) {
 	assert.Contains(t, events[3].ToolResult, context.DeadlineExceeded.Error())
 }
 
+// TestReActAgent_RunStream_ToolCircuitBreaker 同一工具连续失败达阈值后熔断:
+// 模型再次调用该工具时不再执行 Execute,直接返回熔断提示,迫使模型改路子。
+//
+// 场景:failing_tool 连续 error 3 次 -> 第 4 次调用被熔断(Execute 不应被调用第 4 次)。
+// 熔断后 ToolResult 携带禁用提示,status 为 error。
+// 这是抑制子 Agent 无限循环的硬约束(见 task 16/17:web_reader 连失败仍换 URL 重试)。
+func TestReActAgent_RunStream_ToolCircuitBreaker(t *testing.T) {
+	// 5 轮都调 failing_tool,第 6 轮给文本回答结束
+	toolRound := []LLMStreamChunk{
+		{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "failing_tool", ArgumentsDelta: "{}"}},
+		{FinishReason: "tool_calls"},
+		{Done: true},
+	}
+	rounds := make([][]LLMStreamChunk, 0, 6)
+	for i := 0; i < 5; i++ {
+		rounds = append(rounds, append([]LLMStreamChunk{}, toolRound...))
+	}
+	rounds = append(rounds, []LLMStreamChunk{{ContentDelta: "放弃工具,直接回答"}, {FinishReason: "stop"}, {Done: true}})
+	llm := &mockStreamingLLMClient{rounds: rounds}
+
+	execCount := 0
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "failing_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			execCount++
+			return "", fmt.Errorf("HTTP 401")
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	require.NoError(t, err)
+	events := drainEvents(t, ch)
+
+	// 前 3 次真执行 Execute(连续失败 3 次触发熔断),第 4、5 次被熔断不执行
+	assert.Equal(t, 3, execCount, "连续失败 3 次后熔断,后续调用不应再执行 Execute")
+
+	// 找熔断后的 ToolResult(第 4 次起),应含禁用提示
+	var breakerResult string
+	toolResultCount := 0
+	for _, e := range events {
+		if e.Type == AgentEventToolResult && e.ToolName == "failing_tool" {
+			toolResultCount++
+			if toolResultCount == 4 { // 第 4 次 = 熔断后第一次
+				breakerResult = e.ToolResult
+			}
+		}
+	}
+	require.NotEmpty(t, breakerResult, "应存在第 4 次 ToolResult(熔断后)")
+	assert.Contains(t, breakerResult, "已连续失败", "熔断提示应说明连续失败")
+	assert.Contains(t, breakerResult, "已禁用", "熔断后应提示已禁用")
+}
+
+// TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess 工具成功一次应清零连续失败计数,
+// 不误熔断偶尔失败的工具。
+func TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess(t *testing.T) {
+	// round1: error, round2: error, round3: success(清零), round4: error, round5: error,
+	// round6: error(此时才达 3 次连续失败熔断), round7: 文本结束
+	mkRound := func() []LLMStreamChunk {
+		return []LLMStreamChunk{
+			{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "flaky", ArgumentsDelta: "{}"}},
+			{FinishReason: "tool_calls"},
+			{Done: true},
+		}
+	}
+	rounds := [][]LLMStreamChunk{mkRound(), mkRound(), mkRound(), mkRound(), mkRound(), mkRound()}
+	rounds = append(rounds, []LLMStreamChunk{{ContentDelta: "ok"}, {FinishReason: "stop"}, {Done: true}})
+	llm := &mockStreamingLLMClient{rounds: rounds}
+
+	callIdx := 0
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "flaky",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			callIdx++
+			// 第 1,2 次 error;第 3 次 success;第 4,5,6 次 error(第 6 次达连续 3 次熔断)
+			if callIdx == 3 {
+				return "ok", nil
+			}
+			return "", fmt.Errorf("err")
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	// 第 3 次 success 清零,所以第 4,5,6 次失败才构成"连续 3 次"-> 第 6 次后熔断
+	// 前 6 次都真执行(3 失败 + 1 成功 + 2 失败 = 还没连续 3 次),第 6 次执行后达 3 次连续失败
+	// 第 7 轮若再调会熔断,但第 7 轮是文本结束,无更多工具调用
+	// 所以 Execute 应被调用 6 次(全部真执行,无熔断跳过)
+	assert.Equal(t, 6, callIdx, "中间 success 清零计数,6 次都应真执行,无熔断跳过")
+}
+
+// TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools 熔断后该工具应从后续轮次
+// 发给 LLM 的 tools 列表移除(硬约束),模型看不到就调不了,而非只在调用时返回提示(软约束)。
+// 见 task 18:熔断提示返回了但模型仍反复调 web_reader。
+func TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools(t *testing.T) {
+	// round1-3: 调 failing_tool 连续失败 3 次 -> 熔断
+	// round4: 模型被迫转调 other_tool(因为 failing_tool 已从 tools 移除,看不到)
+	// round5: 文本结束
+	mkFailingRound := func() []LLMStreamChunk {
+		return []LLMStreamChunk{
+			{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c", Name: "failing_tool", ArgumentsDelta: "{}"}},
+			{FinishReason: "tool_calls"},
+			{Done: true},
+		}
+	}
+	inner := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			mkFailingRound(), mkFailingRound(), mkFailingRound(),
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "other_tool", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ContentDelta: "done"}, {FinishReason: "stop"}, {Done: true}},
+		},
+	}
+	llm := &captureToolsLLMClient{mockStreamingLLMClient: inner}
+
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "failing_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "", fmt.Errorf("err")
+		},
+	})
+	registry.Register(Tool{
+		Name: "other_tool",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "ok", nil
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           10,
+		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewCircuitBreakerHook(ToolFailureThreshold)},
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	require.GreaterOrEqual(t, len(llm.toolsPerCall), 4, "应至少 4 轮调用")
+	// round1-3 都含 failing_tool(还在累计失败)
+	hasFailing := func(tools []map[string]interface{}) bool {
+		for _, t := range tools {
+			if fn, ok := t["function"].(map[string]interface{}); ok {
+				if n, _ := fn["name"].(string); n == "failing_tool" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// 前 3 轮(失败累计中)failing_tool 还在 tools 里(第 3 轮调用时还没达阈值,执行后才达)
+	// 第 4 轮(round4,索引3)起 failing_tool 应被移除
+	for i, tc := range llm.toolsPerCall {
+		if i >= 3 {
+			assert.False(t, hasFailing(tc), "round %d: 熔断后 failing_tool 应从 tools 移除", i+1)
+		}
+	}
+	assert.False(t, hasFailing(llm.toolsPerCall[3]), "round4 熔断后 failing_tool 应已从 tools 移除")
+}
+
 // noopSyncLLM 仅用于满足 ReActAgentConfig.LLMClient 必填，流式路径不会调用它。
 type noopSyncLLM struct{}
 
@@ -467,4 +657,125 @@ func (noopSyncLLM) ChatCompletion(
 	tools []map[string]interface{},
 ) (string, []map[string]interface{}, error) {
 	return "", nil, nil
+}
+
+// TestReActAgent_RunStream_MaxStepsForcedSummary 达到最大步数时不应吐"已达到最大步数限制"废话,
+// 而是强制做一次无工具 LLM 调用(tools=[]),让模型基于已收集信息产出报告。
+//
+// 场景:MaxSteps=2,前 2 轮都调工具(模拟子 Agent 卡循环),第 3 轮(汇总轮)给纯文本回答。
+// 验证:最终 Final 是汇总轮的内容,而非"已达到最大步数限制";且汇总轮 LLM 调用时 tools 为空。
+func TestReActAgent_RunStream_MaxStepsForcedSummary(t *testing.T) {
+	llm := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			// round1: 调工具
+			{
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "get_current_time", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round2: 再调工具(达 MaxSteps=2)
+			{
+				{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "get_current_time", ArgumentsDelta: "{}"}},
+				{FinishReason: "tool_calls"},
+				{Done: true},
+			},
+			// round3: 汇总轮(无工具,纯文本报告)
+			{
+				{ContentDelta: "基于已有信息:当前时间已查询。"},
+				{FinishReason: "stop"},
+				{Done: true},
+			},
+		},
+	}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "get_current_time", DisplayLabel: "查询了当前时间",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "10:30", nil
+		},
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           2,
+		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewForceSummaryHook(llm)},
+	})
+
+	ch, err := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "查时间"},
+	})
+	require.NoError(t, err)
+	events := drainEvents(t, ch)
+
+	// 找最后一个 Final 事件
+	var finalContent string
+	for _, e := range events {
+		if e.Type == AgentEventFinal {
+			finalContent = e.Content
+		}
+	}
+	require.NotEmpty(t, finalContent, "应有 Final 事件")
+	assert.Contains(t, finalContent, "基于已有信息", "达 MaxSteps 应强制汇总产出报告,而非废话")
+	assert.NotContains(t, finalContent, "已达到最大步数限制", "不应再吐废话兜底文案")
+	// 汇总轮调了 3 次 LLM(2 轮工具 + 1 轮汇总)
+	assert.Equal(t, 3, llm.callCount, "应额外做一次无工具汇总调用")
+}
+
+// captureToolsLLMClient 包装 mockStreamingLLMClient,记录每次调用传入的 tools,
+// 供 MaxStepsForcedSummary 测试断言汇总轮 tools 为空。
+type captureToolsLLMClient struct {
+	*mockStreamingLLMClient
+	toolsPerCall [][]map[string]interface{}
+}
+
+func (c *captureToolsLLMClient) ChatCompletionStream(
+	ctx context.Context,
+	messages []map[string]interface{},
+	tools []map[string]interface{},
+) (<-chan LLMStreamChunk, error) {
+	// 深拷贝 tools 快照(避免被复用)
+	snap := make([]map[string]interface{}, len(tools))
+	copy(snap, tools)
+	c.toolsPerCall = append(c.toolsPerCall, snap)
+	return c.mockStreamingLLMClient.ChatCompletionStream(ctx, messages, tools)
+}
+
+// TestReActAgent_RunStream_MaxStepsSummaryNoTools 达 MaxSteps 的汇总轮必须用空 tools 调 LLM,
+// 强制模型只能产出文本报告(不能再调工具继续循环)。
+func TestReActAgent_RunStream_MaxStepsSummaryNoTools(t *testing.T) {
+	inner := &mockStreamingLLMClient{
+		rounds: [][]LLMStreamChunk{
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c1", Name: "get_current_time", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ToolCallDelta: &ToolCallDelta{Index: 0, ID: "c2", Name: "get_current_time", ArgumentsDelta: "{}"}}, {FinishReason: "tool_calls"}, {Done: true}},
+			{{ContentDelta: "汇总报告"}, {FinishReason: "stop"}, {Done: true}},
+		},
+	}
+	llm := &captureToolsLLMClient{mockStreamingLLMClient: inner}
+	registry := NewToolRegistry()
+	registry.Register(Tool{
+		Name: "get_current_time",
+		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) { return "t", nil },
+	})
+	agent := NewReActAgent(ReActAgentConfig{
+		LLMClient:          &noopSyncLLM{},
+		StreamingLLMClient: llm,
+		ToolRegistry:       registry,
+		MaxSteps:           2,
+		Timeout:            5 * time.Second,
+		Hooks:              []RoundHook{NewForceSummaryHook(llm)},
+	})
+
+	ch, _ := agent.RunStream(context.Background(), []map[string]interface{}{
+		{"role": "user", "content": "x"},
+	})
+	drainEvents(t, ch)
+
+	require.Len(t, llm.toolsPerCall, 3, "应 3 次调用(2 工具轮 + 1 汇总轮)")
+	assert.NotEmpty(t, llm.toolsPerCall[0], "前 2 轮应带工具")
+	assert.NotEmpty(t, llm.toolsPerCall[1], "前 2 轮应带工具")
+	assert.Empty(t, llm.toolsPerCall[2], "汇总轮 tools 必须为空,强制只产出报告")
 }

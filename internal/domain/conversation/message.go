@@ -39,12 +39,25 @@ type Message struct {
 	Content   string           `gorm:"type:text;not null"`     // 消息内容（纯文本投影，供复制/上下文/搜索）
 	MsgID     *string          `gorm:"size:100;uniqueIndex"`   // 微信消息 ID（用于去重，仅 user 消息有）
 	Segments  []MessageSegment `gorm:"serializer:json"`        // v1.5.4：Agent 思考过程有序片段，NULL 表示无（普通消息）
+	ToolCalls *string          `gorm:"type:text"`              // 规范改造:assistant 调工具的配对 JSON [{id,name,arguments,result}],NULL 表示无
+	Kind      string           `gorm:"size:20;index"`          // 消息种类:空串=普通对话;"report"=子任务汇报(主 Agent 主动汇报落库,前端按徽标区分)
+	TaskID    *int64           `gorm:"index"`                  // 汇报消息关联的后台任务 ID(Kind=report 时填,反向关联 agent_tasks)
 	CreatedAt time.Time        `gorm:"not null"`
 }
 
 // TableName 指定表名
 func (Message) TableName() string {
 	return "messages"
+}
+
+// ToolCallPair Message.ToolCalls JSON 的元素结构(规范改造)。
+// 主 Agent 调工具的配对:id/name/arguments(工具调用) + result(工具结果)。
+// 跨轮重建上下文时,展开成 assistant(tool_calls) -> tool(result) -> assistant(最终回复)。
+type ToolCallPair struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Result    string `json:"result"`
 }
 
 // NewUserMessage 创建用户消息。
@@ -82,5 +95,21 @@ func NewAssistantMessage(userID int64, content string) *Message {
 func NewAssistantMessageWithSegments(userID int64, content string, segments []MessageSegment) *Message {
 	msg := NewAssistantMessage(userID, content)
 	msg.Segments = segments
+	return msg
+}
+
+// 消息种类常量。空串 Kind 表示普通对话消息(向后兼容,老数据无需迁移);
+// KindReport 标记主 Agent 主动汇报子任务结果的消息(由 HandleReportTask 落库)。
+const (
+	KindReport = "report" // 子任务汇报消息
+)
+
+// NewReportMessage 创建一条子任务汇报消息(Kind=report,关联 task_id)。
+// content 是主 Agent 汇报的纯文本投影(供复制/上下文/搜索),segments 是按时序的展示片段
+// (汇报通常单轮,仅一段 final 文本;若汇报中调了工具则同款 text/tool 交错段)。
+func NewReportMessage(userID, taskID int64, content string, segments []MessageSegment) *Message {
+	msg := NewAssistantMessageWithSegments(userID, content, segments)
+	msg.Kind = KindReport
+	msg.TaskID = &taskID
 	return msg
 }

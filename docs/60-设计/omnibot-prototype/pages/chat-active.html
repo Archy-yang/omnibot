@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniBot - 聊天</title>
+    <style id="theme-vars">
+/* OmniBot v1.10.0 品牌样式 — 基于实际代码提取 */
+:root {
+  /* 主强调色 */
+  --color-accent: #10a37f;
+  --color-accent-hover: #0d8c6d;
+  --color-accent-light: rgba(16, 163, 127, 0.08);
+
+  /* 输入框聚焦蓝 */
+  --color-focus-blue: #2080f0;
+  --color-focus-blue-light: rgba(32, 128, 240, 0.1);
+  --color-focus-blue-hover: #4dabff;
+
+  /* 背景色 */
+  --color-bg-main: #ffffff;
+  --color-bg-sidebar: #f9f9f9;
+  --color-bg-user-msg: #f4f4f4;
+  --color-bg-input: #ffffff;
+  --color-bg-code: #f4f4f4;
+
+  /* 文字色 */
+  --color-text-primary: #0d0d0d;
+  --color-text-secondary: #6e6e80;
+  --color-text-tertiary: #8e8ea0;
+  --color-text-hint: #9ca3af;
+
+  /* 边框色 */
+  --color-border: #e5e5e5;
+  --color-border-input: #e5e7eb;
+
+  /* 按钮色 */
+  --color-btn-send-active: #000000;
+  --color-btn-send-disabled: #e5e5e5;
+  --color-icon: #5d5d6e;
+
+  /* Toast */
+  --color-toast-bg: #1a1a1a;
+  --color-toast-text: #f4f4f5;
+
+  /* 辅助头像 */
+  --color-avatar-user: #5436da;
+  --color-avatar-assistant-start: #2080f0;
+  --color-avatar-assistant-end: #4dabff;
+  --color-avatar-user-sidebar: #5b9bd5;
+  --color-logo: #19c37d;
+
+  /* 语义色 */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  --color-link: #2563eb;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 22px;
+  --radius-full: 9999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* 过渡 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-accent: var(--color-accent);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-background); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- ====== 侧边栏 ====== -->
+    <aside class="sidebar">
+
+      <!-- 顶部区域：Logo + 折叠按钮 -->
+      <div class="sidebar-top">
+        <!-- Logo 按钮：绿色花朵图标 -->
+        <button class="logo-btn">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <!-- ChatGPT 风格花朵图标 -->
+            <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364l2.0201-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4066-.6948zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0974-2.3616l2.603-1.5018 2.6032 1.5018v3.0036l-2.6032 1.5018-2.603-1.5018z" fill="#ffffff"/>
+          </svg>
+        </button>
+        <!-- 折叠按钮：双竖线+右竖线矩形 -->
+        <button class="collapse-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 菜单区域 -->
+      <nav class="sidebar-menu">
+        <!-- 新聊天 -->
+        <a class="menu-item" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          <span>新聊天</span>
+        </a>
+        <!-- 搜索聊天 -->
+        <a class="menu-item" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>搜索聊天</span>
+        </a>
+        <!-- 图片 -->
+        <a class="menu-item" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <span>图片</span>
+        </a>
+        <!-- 应用 -->
+        <a class="menu-item" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span>应用</span>
+        </a>
+        <!-- 设置 -->
+        <a class="menu-item" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>设置</span>
+        </a>
+      </nav>
+
+      <!-- 历史列表区域 -->
+      <div class="sidebar-history">
+        <div class="history-title">你的聊天</div>
+        <div class="history-item">Feishu 插件重复问题</div>
+        <div class="history-item">OpenClaw在中国应用</div>
+        <div class="history-item">macOS 系统数据解释</div>
+        <div class="history-item">Go版本升级方法</div>
+        <div class="history-item">Claude 配置 DeepSeek</div>
+      </div>
+
+      <!-- 底部用户信息区 -->
+      <div class="sidebar-user">
+        <button class="user-btn">
+          <!-- 用户头像 -->
+          <div class="user-avatar">U</div>
+          <!-- 用户名和版本 -->
+          <div class="user-info">
+            <span class="user-name">用户</span>
+            <span class="user-plan">免费版</span>
+          </div>
+        </button>
+      </div>
+
+    </aside>
+
+    <!-- ====== 主内容区 ====== -->
+    <main class="main-content">
+
+      <!-- 顶栏 -->
+      <div class="top-bar">
+        <!-- 模型选择器 -->
+        <div class="model-selector">
+          <span class="title">OmniBot</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </div>
+        <!-- 右侧占位 -->
+        <div class="top-bar-right"></div>
+        <!-- 对话气泡图标按钮 -->
+        <button class="chat-bubble-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 消息列表区域 -->
+      <div class="message-list">
+        <div class="message-area">
+
+          <!-- 消息 1：用户消息 -->
+          <div class="message user">
+            <div class="bubble">帮我写一个 Go 语言的 HTTP 中间件，用于记录请求日志</div>
+          </div>
+
+          <!-- 消息 2：助手消息 -->
+          <div class="message assistant">
+            <!-- 头部区域：头像 + 名称 -->
+            <div class="assistant-header">
+              <div class="assistant-avatar">O</div>
+              <span class="assistant-name">OmniBot</span>
+            </div>
+            <!-- 内容区 -->
+            <div class="assistant-body">
+              <p>好的，这是一个常见的 HTTP 请求日志中间件实现：</p>
+              <!-- 代码块 -->
+              <div class="code-block"><pre>func LoggingMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+
+        // 包装 ResponseWriter 以捕获状态码
+        wrapped := &amp;responseWriter{ResponseWriter: w, statusCode: 200}
+
+        next.ServeHTTP(wrapped, r)
+
+        log.Printf("[%s] %s %s %d %v",
+            r.Method, r.URL.Path,
+            r.Header.Get("Content-Type"),
+            wrapped.statusCode,
+            time.Since(start))
+    })
+}</pre></div>
+              <p>这个中间件的主要功能：</p>
+              <!-- 无序列表 -->
+              <ul>
+                <li>记录请求方法、路径、Content-Type</li>
+                <li>捕获响应状态码</li>
+                <li>计算请求处理耗时</li>
+              </ul>
+            </div>
+            <!-- 操作栏 -->
+            <div class="message-actions">
+              <!-- 复制按钮：双层方块图标 -->
+              <button class="action-btn" title="复制">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 消息 3：工具思考段 -->
+          <div class="tool-thinking">
+            <!-- 扳手图标 -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+            <span class="tool-text">正在调用 RSS Reader...</span>
+            <!-- 展开箭头（向下） -->
+            <svg class="tool-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+
+          <!-- 消息 4：助手继续回复 -->
+          <div class="message assistant">
+            <div class="assistant-body">
+              <p>根据搜索到的最新信息...</p>
+            </div>
+          </div>
+
+          <!-- 打字指示器 -->
+          <div class="typing-indicator">
+            <div class="typing-dots">
+              <div class="dot"></div>
+              <div class="dot"></div>
+              <div class="dot"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 底部输入区 -->
+      <div class="input-area">
+        <!-- 输入框容器 -->
+        <div class="input-container">
+          <textarea rows="1" placeholder="有问题，尽管问"></textarea>
+          <!-- 底部工具栏 -->
+          <div class="input-toolbar">
+            <div class="toolbar-left"></div>
+            <div class="toolbar-right">
+              <!-- 语音按钮 -->
+              <button class="voice-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
+              <!-- 发送按钮（激活态：黑色背景） -->
+              <button class="send-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- 底部免责提示 -->
+        <div class="input-disclaimer">AI可能会犯错，重要信息请核实</div>
+      </div>
+
+    </main>
+
+  </div>
+
+    <style>
+    /* 全局样式重置 */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+      font-size: 15px;
+      line-height: 1.7;
+      overflow: hidden;
+      height: 100vh;
+      color: #1a1a2e;
+    }
+
+    /* 主布局：左右 flex */
+    .app-layout {
+      display: flex;
+      height: 100%;
+      width: 100%;
+    }
+
+    /* ========== 侧边栏 ========== */
+    .sidebar {
+      width: 260px;
+      min-width: 260px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: #ffffff;
+      border-right: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    /* 侧边栏顶部区域 */
+    .sidebar-top {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+    }
+
+    /* Logo 按钮 */
+    .logo-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #10a37f;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* 折叠按钮 */
+    .collapse-btn {
+      width: 36px;
+      height: 36px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      color: #6e6e80;
+    }
+    .collapse-btn:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    /* 菜单区域 */
+    .sidebar-menu {
+      padding: 4px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    /* 单个菜单项 */
+    .menu-item {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #0d0d0d;
+      text-decoration: none;
+      transition: background 150ms;
+    }
+    .menu-item:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+    .menu-item svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+      color: #6e6e80;
+    }
+
+    /* 历史列表区域 */
+    .sidebar-history {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 8px 8px;
+    }
+
+    .history-title {
+      font-size: 12px;
+      color: #8e8ea0;
+      font-weight: 500;
+      padding: 0 12px;
+      margin-bottom: 6px;
+    }
+
+    /* 单条历史记录 */
+    .history-item {
+      font-size: 14px;
+      color: #0d0d0d;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 150ms;
+    }
+    .history-item:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    /* 底部用户信息区 */
+    .sidebar-user {
+      border-top: 1px solid rgba(0, 0, 0, 0.05);
+      padding: 8px;
+    }
+
+    .user-btn {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      width: 100%;
+      transition: background 150ms;
+    }
+    .user-btn:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    /* 用户头像 */
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #5b9bd5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    /* 用户信息文字 */
+    .user-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .user-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #0d0d0d;
+      line-height: 1.3;
+    }
+    .user-plan {
+      font-size: 12px;
+      color: #8e8ea0;
+      line-height: 1.3;
+    }
+
+    /* ========== 主内容区 ========== */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #ffffff;
+      position: relative;
+    }
+
+    /* 顶栏 */
+    .top-bar {
+      height: 56px;
+      min-height: 56px;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      padding: 0 12px;
+    }
+
+    .model-selector {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 8px;
+      transition: background 150ms;
+    }
+    .model-selector:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+    .model-selector .title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #0d0d0d;
+    }
+    .model-selector svg {
+      width: 16px;
+      height: 16px;
+      color: #6e6e80;
+    }
+
+    .top-bar-right {
+      flex: 1;
+    }
+
+    /* 对话气泡图标按钮 */
+    .chat-bubble-btn {
+      width: 36px;
+      height: 36px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6e6e80;
+    }
+    .chat-bubble-btn:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    /* ========== 消息列表区域 ========== */
+    .message-list {
+      flex: 1;
+      overflow-y: auto;
+      background: #ffffff;
+      padding: 16px 0 24px;
+    }
+
+    /* 消息区域容器（居中限制宽度） */
+    .message-area {
+      max-width: 768px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* 单条消息外层 */
+    .message {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 用户消息（右对齐） */
+    .message.user {
+      align-items: flex-end;
+    }
+
+    /* 用户消息气泡 */
+    .message.user .bubble {
+      background: #f4f4f4;
+      border-radius: 22px;
+      max-width: 75%;
+      padding: 10px 18px;
+      font-size: 15px;
+      color: #0d0d0d;
+      line-height: 1.6;
+    }
+
+    /* 助手消息 */
+    .message.assistant {
+      align-items: flex-start;
+    }
+
+    /* 助手消息头部（头像+名称） */
+    .assistant-header {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    /* 助手圆形头像 */
+    .assistant-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2080f0, #4dabff);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* 助手名称 */
+    .assistant-name {
+      font-size: 13px;
+      color: #6b7280;
+      font-weight: 500;
+    }
+
+    /* 助手消息内容区（左对齐，留出头像空间） */
+    .assistant-body {
+      padding-left: 42px;
+      font-size: 15px;
+      color: #0d0d0d;
+      line-height: 1.7;
+    }
+
+    /* 代码块 */
+    .code-block {
+      background: #f4f4f4;
+      border-radius: 8px;
+      padding: 16px;
+      font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+      font-size: 14px;
+      line-height: 1.6;
+      overflow-x: auto;
+      margin: 12px 0;
+      color: #0d0d0d;
+    }
+
+    /* 无序列表 */
+    .assistant-body ul {
+      list-style: none;
+      padding-left: 0;
+      margin: 8px 0 0 0;
+    }
+    .assistant-body ul li {
+      font-size: 16px;
+      color: #333;
+      line-height: 1.6;
+      padding: 2px 0;
+    }
+    .assistant-body ul li::before {
+      content: "•";
+      margin-right: 8px;
+      color: #333;
+    }
+
+    /* 操作栏（hover 显示） */
+    .message-actions {
+      display: flex;
+      flex-direction: row;
+      gap: 4px;
+      margin-top: 8px;
+      opacity: 0;
+      transition: opacity 150ms;
+    }
+    .message:hover .message-actions {
+      opacity: 1;
+    }
+
+    /* 复制按钮 */
+    .action-btn {
+      width: 30px;
+      height: 30px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6b7280;
+    }
+    .action-btn:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+    .action-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* 工具思考段 */
+    .tool-thinking {
+      padding: 8px 12px;
+      background: #f9fafb;
+      border-left: 2px solid #e5e7eb;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+    .tool-thinking svg {
+      width: 14px;
+      height: 14px;
+      color: #9ca3af;
+      flex-shrink: 0;
+    }
+    .tool-thinking .tool-text {
+      font-size: 13px;
+      color: #6b7280;
+      flex: 1;
+    }
+    .tool-thinking .tool-arrow {
+      width: 14px;
+      height: 14px;
+      color: #9ca3af;
+      flex-shrink: 0;
+    }
+
+    /* 打字指示器 */
+    .typing-indicator {
+      padding: 12px 24px;
+      max-width: 768px;
+      margin: 0 auto;
+    }
+    .typing-dots {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+      padding-left: 42px;
+    }
+    .typing-dots .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #8e8ea0;
+      animation: dot-bounce 1400ms ease-in-out infinite;
+    }
+    .typing-dots .dot:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    .typing-dots .dot:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    /* 打字指示器跳动动画 */
+    @keyframes dot-bounce {
+      0%, 60%, 100% {
+        opacity: 0.3;
+        transform: translateY(0);
+      }
+      30% {
+        opacity: 1;
+        transform: translateY(-3px);
+      }
+    }
+
+    /* ========== 底部输入区 ========== */
+    .input-area {
+      padding: 12px 24px 16px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* 输入框容器 */
+    .input-container {
+      max-width: 768px;
+      width: 100%;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 12px;
+      background: #ffffff;
+    }
+
+    /* 输入文本框 */
+    .input-container textarea {
+      width: 100%;
+      border: none;
+      outline: none;
+      resize: none;
+      font-family: inherit;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #0d0d0d;
+      background: transparent;
+      min-height: 24px;
+      max-height: 200px;
+    }
+    .input-container textarea::placeholder {
+      color: #9ca3af;
+    }
+
+    /* 底部工具栏 */
+    .input-toolbar {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+    }
+
+    .toolbar-left {
+      min-height: 32px;
+    }
+
+    .toolbar-right {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* 语音按钮 */
+    .voice-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9ca3af;
+    }
+    .voice-btn:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    /* 发送按钮（激活态：黑色） */
+    .send-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #000000;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+    }
+
+    /* 底部提示文字 */
+    .input-disclaimer {
+      font-size: 11px;
+      color: #9ca3af;
+      text-align: center;
+      margin-top: 12px;
+    }
+  </style>
+</body>
+</html>

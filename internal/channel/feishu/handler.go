@@ -33,6 +33,8 @@ type MessageHandler struct {
 	agentService     AgentService
 	llmConfigService LLMConfigService
 	sender           Sender
+	// 后台 Agent 框架前置汇报(08 §4.5)。nil 时不启用(向后兼容)。
+	subAgentReporter SubAgentReportProvider
 }
 
 // NewMessageHandler 创建飞书消息处理器。
@@ -50,6 +52,12 @@ func NewMessageHandler(
 		llmConfigService: cfg,
 		sender:           sender,
 	}
+}
+
+// SetSubAgentReporter 注入后台 Agent 框架前置汇报依赖(08 §4.5)。
+// 未调用时 subAgentReporter 为 nil,行为与之前一致(无前置汇报)。
+func (h *MessageHandler) SetSubAgentReporter(reporter SubAgentReportProvider) {
+	h.subAgentReporter = reporter
 }
 
 // fallbackReply 是 agent 执行失败时给用户的兜底文案——和 web 端「服务暂时不可用」对齐,
@@ -115,6 +123,17 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		ctxMessages = []llm.ChatMessage{{Role: "user", Content: in.Text}}
 	}
 
+	// 后台 Agent 框架前置汇报兜底(08 §4.5):查未汇报任务,有则把回执注入上下文,
+	// 主 Agent 同步 Run 时先汇报再回应当前消息。汇报后标记 reported(防重复)。
+	var reportedTaskIDs []int64
+	if h.subAgentReporter != nil {
+		instruction, taskIDs := h.subAgentReporter.GetPendingReportContext(userID)
+		if instruction != "" {
+			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
+			reportedTaskIDs = taskIDs
+		}
+	}
+
 	// 选 LLM:用户自定义配置优先(与 web 同步端点完全一致)
 	var activeLLMClient agentpkg.LLMClient
 	stepModel := ""
@@ -149,6 +168,15 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		)
 	}
 
+	// 后台 Agent 框架:前置汇报标记 reported(08 §4.5)。主 Agent 已在本次回复里汇报,
+	// 标记这些任务已汇报,防下次重复。
+	for _, tid := range reportedTaskIDs {
+		if err := h.subAgentReporter.MarkReported(tid); err != nil {
+			logger.ErrorWithFields("feishu: mark task reported failed",
+				zap.Int64("task_id", tid), zap.Error(err))
+		}
+	}
+
 	// 回复用户。发送失败仅记日志,不上抛——消息已落库,后续可通过历史查看。
 	// 用 SendMarkdown:Agent 输出几乎总是 markdown(加粗/列表/链接/代码块),
 	// 飞书纯文本消息不渲染,会让 `**bold**` 类符号在客户端原样显示——很丑;
@@ -169,36 +197,22 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 func toAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
 	items := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
-		items = append(items, map[string]interface{}{"role": msg.Role, "content": msg.Content})
+		m := map[string]interface{}{"role": msg.Role, "content": msg.Content}
+		if len(msg.ToolCalls) > 0 {
+			m["tool_calls"] = msg.ToolCalls
+		}
+		if msg.ToolCallID != "" {
+			m["tool_call_id"] = msg.ToolCallID
+		}
+		items = append(items, m)
 	}
 	return items
 }
 
-// recordsToAgentSteps 把 agent 聚合产出的 StepRecord 链转成可落库的 conversation.AgentStep
-// 链(同款语义,与 web handler 同名 helper 行为一致)。MessageID 由 service 层 stamp。
-//
-// v1.6 思考:helper 在 web 和 feishu 各一份是为保持包独立性(避免 feishu→web 反向依赖,
-// 也避免把存储型 entity conversation.AgentStep 拖进 agent 包语义)。逻辑稳定且只有几行,
-// 重复可接受;若未来出现第 3 个入口,再抽到 chat service 层不晚。
+// recordsToAgentSteps 主 Agent 步骤转换(委托 agent.StepRecordsToAgentSteps 公共函数)。
+// MessageID 由 service 层 stamp。
 func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model string) []*conversation.AgentStep {
-	if len(records) == 0 {
-		return nil
-	}
-	steps := make([]*conversation.AgentStep, 0, len(records))
-	for i, r := range records {
-		var step *conversation.AgentStep
-		switch r.Kind {
-		case agentpkg.StepKindLLMCall:
-			step = conversation.NewLLMStep(userID, r.Request, r.Response, model, r.Status, r.DurationMs)
-		case agentpkg.StepKindToolCall:
-			step = conversation.NewToolStep(userID, r.Tool, r.Request, r.Response, r.Status, r.DurationMs)
-		default:
-			continue
-		}
-		step.Seq = i
-		steps = append(steps, step)
-	}
-	return steps
+	return agentpkg.StepRecordsToAgentSteps(records, userID, model)
 }
 
 
