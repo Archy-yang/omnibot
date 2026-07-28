@@ -36,17 +36,28 @@ func (AgentTask) TableName() string {
 
 // 任务状态常量
 const (
-	TaskStatusPending   = "pending"
-	TaskStatusRunning   = "running"
-	TaskStatusCompleted = "completed"
-	TaskStatusFailed    = "failed"
-	TaskStatusCancelled = "cancelled" // 用户/主 Agent 取消(cancel_task)
+	TaskStatusPending       = "pending"
+	TaskStatusRunning       = "running"
+	TaskStatusCompleted     = "completed"
+	TaskStatusFailed        = "failed"
+	TaskStatusCancelled     = "cancelled"            // 用户/主 Agent 取消(cancel_task)
+	TaskStatusInputRequired = "input_required"       // 子 Agent 主动要输入(update_task 补后回 running)
 )
 
 // IsTerminal 判断状态是否终态(不可再 query/update/cancel)。
+// 注意:input_required 不是终态(补输入后回 running)。
 func (t *AgentTask) IsTerminal() bool {
 	switch t.Status {
 	case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		return true
+	}
+	return false
+}
+
+// IsActive 判断任务是否还在运行中(running 或 input_required,可补/可取消)。
+func (t *AgentTask) IsActive() bool {
+	switch t.Status {
+	case TaskStatusPending, TaskStatusRunning, TaskStatusInputRequired:
 		return true
 	}
 	return false

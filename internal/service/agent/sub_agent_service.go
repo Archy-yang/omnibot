@@ -174,6 +174,15 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		return
 	}
 
+	// 子 Agent 调 request_input 后任务已置 input_required(RequestInput 改了状态)。
+	// 此时 runner.Run 返回(本轮结束),不要覆盖成 completed--任务挂起等输入。
+	cur2, _ := s.taskRepo.GetByID(task.ID)
+	if cur2 != nil && cur2.Status == domainagent.TaskStatusInputRequired {
+		logger.InfoWithFields("sub agent: task suspended for input",
+			zap.Int64("task_id", task.ID))
+		return
+	}
+
 	if err := s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &artifact, nil); err != nil {
 		logger.ErrorWithFields("sub agent: update to completed failed",
 			zap.Int64("task_id", task.ID), zap.Error(err))
@@ -299,6 +308,17 @@ func (s *SubAgentService) CancelTask(userID, taskID int64) error {
 	return s.taskRepo.Cancel(taskID)
 }
 
+// RequestInput 子 Agent 主动要输入(#19):把任务置 input_required + 把问题存 Notes。
+// 子 Agent 调 request_input 工具时触发。任务挂起(子 Agent goroutine 本轮结束),
+// 主 Agent query 看到 input_required + 问题(读 Notes),问用户后用 UpdateTask 补答案。
+// 续跑靠主 Agent 重新 delegate 关联 parent_task_id 的新任务(不自动恢复,见 10-规划 §3)。
+func (s *SubAgentService) RequestInput(taskID int64, question string) error {
+	if err := s.taskRepo.AppendNote(taskID, "[需要输入] "+question); err != nil {
+		return fmt.Errorf("append note: %w", err)
+	}
+	return s.taskRepo.UpdateStatus(taskID, domainagent.TaskStatusInputRequired, nil, nil)
+}
+
 // UpdateTask 更新/补充任务信息。按状态分:
 //   - pending:改 goal(任务还没跑,直接更新)
 //   - running:追加 notes(补充信息,子 Agent 下轮经 NoteInjectionHook 注入上下文)
@@ -327,9 +347,12 @@ func (s *SubAgentService) UpdateTask(userID, taskID int64, goal, note string) er
 				return fmt.Errorf("append note: %w", err)
 			}
 		}
-	case domainagent.TaskStatusRunning:
+	case domainagent.TaskStatusRunning, domainagent.TaskStatusInputRequired:
+		// running 和 input_required 都可补 note(NoteInjectionHook 下轮读到)。
+		// input_required 补后状态保持(不自动回 running--子 Agent goroutine 已挂起,
+		// 续跑靠主 Agent 重新 delegate 关联 parent_task_id 的新任务,见 10-规划 §3)。
 		if strings.TrimSpace(goal) != "" {
-			return fmt.Errorf("running 任务不可改 goal,请用 note 补充信息")
+			return fmt.Errorf("运行中任务不可改 goal,请用 note 补充信息")
 		}
 		if strings.TrimSpace(note) != "" {
 			if err := s.taskRepo.AppendNote(taskID, note); err != nil {

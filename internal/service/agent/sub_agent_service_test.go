@@ -411,6 +411,73 @@ func TestSubAgentService_UpdateTask_RunningAppendNote(t *testing.T) {
 	assert.Equal(t, "g", got.Goal)
 }
 
+// TestSubAgentService_RequestInput 子 Agent 主动要输入:置 input_required + 问题存 Notes。
+func TestSubAgentService_RequestInput(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+
+	require.NoError(t, svc.RequestInput(task.ID, "你更关注自部署还是云服务?"))
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, domainagent.TaskStatusInputRequired, got.Status)
+	require.Len(t, got.Notes, 1)
+	assert.Contains(t, got.Notes[0], "需要输入")
+	assert.Contains(t, got.Notes[0], "自部署还是云服务")
+}
+
+// TestSubAgentService_UpdateTask_InputRequired input_required 态可补 note(和 running 同)。
+func TestSubAgentService_UpdateTask_InputRequired(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusInputRequired, nil, nil))
+
+	// 补 note 不报错(input_required 非终态)
+	require.NoError(t, svc.UpdateTask(1, task.ID, "", "自部署"))
+	got, _ := repo.GetByID(task.ID)
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, "自部署", got.Notes[0])
+}
+
+// TestSubAgentService_CancelTask_InputRequired input_required 态可取消(非终态)。
+func TestSubAgentService_CancelTask_InputRequired(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusInputRequired, nil, nil))
+
+	require.NoError(t, svc.CancelTask(1, task.ID))
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, domainagent.TaskStatusCancelled, got.Status)
+}
+
+// TestRequestInputTool 子 Agent 调 request_input 工具,任务置 input_required + 问题存 Notes。
+func TestRequestInputTool(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+	tool := CreateRequestInputTool(svc)
+	task := domainagent.NewAgentTask(1, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, repo.Create(task))
+
+	ctx := withTaskID(context.Background(), task.ID)
+	result, err := tool.Execute(ctx, map[string]interface{}{"question": "用 PostgreSQL 还是 MySQL?"})
+	require.NoError(t, err)
+	assert.Contains(t, result, "PostgreSQL 还是 MySQL")
+
+	got, _ := repo.GetByID(task.ID)
+	assert.Equal(t, domainagent.TaskStatusInputRequired, got.Status)
+	require.Len(t, got.Notes, 1)
+	assert.Contains(t, got.Notes[0], "PostgreSQL 还是 MySQL")
+}
+
+// TestRequestInputTool_NoTaskID 主 Agent(无 taskID)调 request_input 应报错。
+func TestRequestInputTool_NoTaskID(t *testing.T) {
+	svc, _, _ := setupSubAgentService(t, &mockRunner{})
+	tool := CreateRequestInputTool(svc)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{"question": "x"})
+	require.Error(t, err)
+}
+
 // TestSubAgentService_UpdateTask_TerminalRejected 已结束任务不可更新。
 func TestSubAgentService_UpdateTask_TerminalRejected(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})

@@ -119,9 +119,9 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 
 	// 6. 流式执行 + 边跑边回吐步骤(onStep)。每产生一步立即回调上层落库,
 	// 使任务 running 中即可观测执行过程(而非等结束批量落)。
-	// userID 透传给 RunStream,由其内部 withUserID(ctx, userID) 注入 ctx,
-	// 供 search_memories 等按用户隔离工具读取。
-	eventCh, err := svc.RunStream(ctx, userID, conversation, streamClient)
+	// userID/taskID 注入 ctx:userID 供 search_memories 等按用户隔离工具;
+	// taskID 供 request_input 工具取(子 Agent 主动要输入时用,#19)。
+	eventCh, err := svc.RunStream(withTaskID(ctx, taskID), userID, conversation, streamClient)
 	if err != nil {
 		return "", err
 	}

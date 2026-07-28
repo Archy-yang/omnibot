@@ -330,10 +330,25 @@ func min(a, b int) int {
 
 type contextKey string
 
-const userIDContextKey contextKey = "agent_user_id"
+const (
+	userIDContextKey contextKey = "agent_user_id"
+	taskIDContextKey contextKey = "agent_task_id" // 子 Agent 运行时的 taskID(供 request_input 工具用)
+)
 
 func withUserID(ctx context.Context, userID int64) context.Context {
 	return context.WithValue(ctx, userIDContextKey, userID)
+}
+
+// withTaskID 把 taskID 注入 ctx(子 Agent runner 启动时调,供 request_input 工具取)。
+func withTaskID(ctx context.Context, taskID int64) context.Context {
+	return context.WithValue(ctx, taskIDContextKey, taskID)
+}
+
+func getTaskIDFromContext(ctx context.Context) int64 {
+	if id, ok := ctx.Value(taskIDContextKey).(int64); ok {
+		return id
+	}
+	return 0
 }
 
 func getUserIDFromContext(ctx context.Context) int64 {

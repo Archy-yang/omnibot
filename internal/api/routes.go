@@ -189,6 +189,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
 	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo)
+	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
+	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
 	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
 	// 任务管理工具:主 Agent 对派出去的任务可查(query)/补充(update)/取消(cancel)。
