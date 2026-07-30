@@ -68,7 +68,7 @@ func setupSubAgentServiceTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}, &domainagent.Artifact{}))
+	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}, &domainagent.Artifact{}, &domainagent.TaskEvent{}))
 	return db
 }
 
@@ -95,7 +95,9 @@ func setupSubAgentServiceWithArtifact(t *testing.T, runner SubAgentRunner, withA
 	if withArtifact {
 		artifactRepo = repoagent.NewArtifactRepository(db)
 	}
-	svc := NewSubAgentService(repo, registry, runner, stepRepo, artifactRepo)
+	// eventRepo 始终建(事件落库测试用)
+	eventRepo := repoagent.NewTaskEventRepository(db)
+	svc := NewSubAgentService(repo, registry, runner, stepRepo, artifactRepo, eventRepo)
 	return svc, repo, stepRepo
 }
 
@@ -162,6 +164,29 @@ func TestSubAgentService_ArtifactPersisted(t *testing.T) {
 	task, _ := repo.GetByID(taskID)
 	require.NotNil(t, task.Artifact)
 	assert.Equal(t, "# 报告\n内容", *task.Artifact)
+}
+
+// TestSubAgentService_EventsRecorded 任务生命周期事件落 agent_task_events(#22)。
+// 完整路径(submitted->running->completed)应各记一条事件,sequence 递增。
+func TestSubAgentService_EventsRecorded(t *testing.T) {
+	runner := &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, runner, true)
+
+	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("g"))
+	require.NoError(t, err)
+	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
+
+	events, err := svc.eventRepo.ListByTaskID(taskID)
+	require.NoError(t, err)
+	// submitted(main) -> running(sub) -> completed(sub)
+	require.Len(t, events, 3)
+	assert.Equal(t, domainagent.EventTaskSubmitted, events[0].EventType)
+	assert.Equal(t, "main", events[0].SourceAgent)
+	assert.Equal(t, 1, events[0].Sequence)
+	assert.Equal(t, domainagent.EventTaskRunning, events[1].EventType)
+	assert.Equal(t, 2, events[1].Sequence)
+	assert.Equal(t, domainagent.EventTaskCompleted, events[2].EventType)
+	assert.Equal(t, 3, events[2].Sequence)
 }
 
 func TestSubAgentService_StartTask_RunnerError(t *testing.T) {

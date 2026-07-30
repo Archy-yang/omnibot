@@ -151,7 +151,8 @@ func autoMigrate(db *gorm.DB) error {
 		&conversation.AgentStep{},
 		&memory.Memory{},
 		&agent.AgentTask{},
-		&agent.Artifact{}, // #18 子 Agent 结构化产物(独立表)
+		&agent.Artifact{},     // #18 子 Agent 结构化产物(独立表)
+		&agent.TaskEvent{},    // #22 任务事件流(状态变化历史,供审计/未来推送)
 	)
 }
 

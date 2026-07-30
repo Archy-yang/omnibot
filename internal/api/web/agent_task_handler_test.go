@@ -46,7 +46,7 @@ func setupAgentTaskHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.Agent
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
 	}))
-	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil)
+	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil)
 	handler := NewAgentTaskHandler(svc, &mockAgentService{}, registry, &mockLLMConfigService{hasConfig: false}, &mockMessageService{})
 	return handler, repo
 }
@@ -194,7 +194,7 @@ func setupAgentTaskStepsHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
 	}))
-	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil)
+	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil, nil)
 	handler := NewAgentTaskHandler(svc, &mockAgentService{}, registry, &mockLLMConfigService{hasConfig: false}, &mockMessageService{})
 	return handler, repo, stepRepo
 }
@@ -285,7 +285,7 @@ func setupReportHandlerTest(t *testing.T, agentSvc AgentService) (*AgentTaskHand
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
 	}))
-	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil)
+	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil, nil)
 	msgSvc := &mockMessageService{}
 	handler := NewAgentTaskHandler(svc, agentSvc, registry, &mockLLMConfigService{hasConfig: false}, msgSvc)
 	return handler, repo, msgSvc

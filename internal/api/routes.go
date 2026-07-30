@@ -188,7 +188,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
 	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
-	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo)
+	eventRepo := agentRepo.NewTaskEventRepository(dbConn.GetGormDB())
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo, eventRepo)
 	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
 	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
