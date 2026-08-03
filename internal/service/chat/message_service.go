@@ -98,7 +98,22 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 	result := make([]llm.ChatMessage, 0, len(memoryMessages)+len(messages)+1)
 	result = append(result, memoryMessages...)
 
-	for _, msg := range messages {
+	// 去重:handler 调用顺序是 SaveUserMessage(当前消息落库) -> BuildContextMessages,
+	// 故 GetRecentByUserID 取到的历史已含当前消息,末尾又 append 一份会重复。
+	// 重复的当前消息曾干扰 LLM 工具调用决策(幻觉派活,见 msg 181)。此处找出历史里
+	// 最后一条与当前消息同内容的 user 消息,循环时跳过它,保证当前消息只 1 份(末尾那条)。
+	dupIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == conversation.RoleUser && messages[i].Content == currentContent {
+			dupIdx = i
+			break
+		}
+	}
+
+	for i, msg := range messages {
+		if i == dupIdx {
+			continue // 跳过历史里重复的当前消息(末尾会补唯一一份)
+		}
 		// 规范改造:assistant 消息若带 ToolCalls(调过工具),展开成 OpenAI 配对序列:
 		// assistant(tool_calls) -> tool(result, tool_call_id) x N -> assistant(最终回复)
 		// 这样下一轮 LLM 能看到"之前调过工具",避免历史只剩纯文本导致不调工具。
