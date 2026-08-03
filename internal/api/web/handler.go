@@ -426,7 +426,9 @@ func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
 		activeLLMClient = customAgentClient
 	}
 
-	result, err := h.agentService.Run(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeLLMClient)
+	// 注入来源渠道(web):delegate 派活时记录到 task.Source。web 不主动推送(靠轮询)。
+	ctx := agentpkg.WithSource(c.Request.Context(), "web")
+	result, err := h.agentService.Run(ctx, userID, toAgentMessages(ctxMessages), activeLLMClient)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to generate response"})
 		return
@@ -540,7 +542,9 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 		return
 	}
 
-	eventCh, err := h.agentService.RunStream(c.Request.Context(), userID, toAgentMessages(ctxMessages), activeStreamClient)
+	// 注入来源渠道(web):delegate 派活时记录到 task.Source。
+	ctx := agentpkg.WithSource(c.Request.Context(), "web")
+	eventCh, err := h.agentService.RunStream(ctx, userID, toAgentMessages(ctxMessages), activeStreamClient)
 	if err != nil {
 		// 流尚未开始（如 streaming client 未配置），按 SSE error 事件返回，前端能感知
 		errData, _ := json.Marshal(map[string]string{"error": err.Error()})

@@ -41,6 +41,7 @@ type SubAgentService struct {
 	stepRepo     chatrepo.AgentStepRepository     // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
 	artifactRepo repoagent.ArtifactRepository     // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
 	eventRepo    repoagent.TaskEventRepository    // 任务事件流落 agent_task_events(#22)
+	notifier     TaskNotifier                      // 任务完成主动推送(方案A:飞书主动消息)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -52,7 +53,7 @@ type SubAgentService struct {
 }
 
 // NewSubAgentService 创建子 Agent 服务。
-// artifactRepo/eventRepo 可为 nil(此时不落结构化产物/事件,仅存 task.Artifact 文本,兼容老路径)。
+// artifactRepo/eventRepo/notifier 可为 nil(此时不落结构化产物/事件/不主动推送,兼容老路径)。
 func NewSubAgentService(
 	taskRepo repoagent.AgentTaskRepository,
 	registry *SubAgentRegistry,
@@ -60,6 +61,7 @@ func NewSubAgentService(
 	stepRepo chatrepo.AgentStepRepository,
 	artifactRepo repoagent.ArtifactRepository,
 	eventRepo repoagent.TaskEventRepository,
+	notifier TaskNotifier,
 ) *SubAgentService {
 	return &SubAgentService{
 		taskRepo:       taskRepo,
@@ -68,6 +70,7 @@ func NewSubAgentService(
 		stepRepo:       stepRepo,
 		artifactRepo:   artifactRepo,
 		eventRepo:      eventRepo,
+		notifier:       notifier,
 		activeCancels:  make(map[int64]context.CancelFunc),
 		eventSeq:       make(map[int64]int),
 	}
@@ -75,12 +78,13 @@ func NewSubAgentService(
 
 // StartTask 建任务 + 起 goroutine 后台执行,立即返回 task_id(异步,不阻塞调用方)。
 // subAgentType 未注册返回 error(早失败,不静默)。taskSpec 为任务包(含 goal+背景+交付物+完成标准)。
-func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentType string, taskSpec domainagent.TaskSpec) (int64, error) {
+// source 来源渠道(web/feishu);notifyTarget 主动推送目标(feishu=open_id)。
+func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentType string, taskSpec domainagent.TaskSpec, source, notifyTarget string) (int64, error) {
 	if _, ok := s.registry.Get(subAgentType); !ok {
 		return 0, fmt.Errorf("sub agent %q not registered", subAgentType)
 	}
 
-	task := domainagent.NewAgentTask(userID, subAgentType, taskSpec)
+	task := domainagent.NewAgentTask(userID, subAgentType, taskSpec, source, notifyTarget)
 	if err := s.taskRepo.Create(task); err != nil {
 		return 0, fmt.Errorf("create agent task: %w", err)
 	}
@@ -162,6 +166,7 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 	if ctx.Err() == context.Canceled {
 		_ = s.taskRepo.Cancel(task.ID)
 		s.recordEvent(task.ID, domainagent.EventTaskCancelled, "main")
+		s.notifyCompleted(task.ID)
 		logger.InfoWithFields("sub agent: task cancelled",
 			zap.Int64("task_id", task.ID),
 			zap.String("sub_agent", task.SubAgentType))
@@ -176,6 +181,7 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		)
 		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
 		s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
+		s.notifyCompleted(task.ID)
 		return // 步骤已随 onStep 实时落库,无需再批量落
 	}
 
@@ -183,6 +189,7 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		errMsg := "子 Agent 未产出有效结果"
 		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
 		s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
+		s.notifyCompleted(task.ID)
 		return
 	}
 
@@ -210,6 +217,8 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 				zap.Int64("task_id", task.ID), zap.Error(err))
 		}
 	}
+	// 完成推送(飞书主动消息):artifact 已落库,推送摘要。web 任务跳过(靠轮询)。
+	s.notifyCompleted(task.ID)
 }
 
 // GetCompletedUnreported 返回该用户已完成但未汇报的任务(含 failed,失败也要汇报)。
@@ -416,8 +425,40 @@ func (s *SubAgentService) recordEvent(taskID int64, eventType, source string) {
 	}
 }
 
+// notifyCompleted 任务终态时若来自飞书(source=feishu + notifyTarget=open_id),主动推送汇报。
+// 推送后标记 reported(防前置汇报重复)。notifier 为 nil 或 source 非 feishu 时跳过(靠轮询/前置汇报)。
+// 推送失败仅记日志,不回滚任务状态(任务已完成是事实,推送是尽力而为)。
+func (s *SubAgentService) notifyCompleted(taskID int64) {
+	if s.notifier == nil {
+		return
+	}
+	task, err := s.taskRepo.GetByID(taskID)
+	if err != nil || task == nil {
+		return
+	}
+	if task.Source != domainagent.SourceFeishu || task.NotifyTarget == "" {
+		return // web 任务靠轮询 + 前置汇报;非飞书不主动推
+	}
+	if err := s.notifier.NotifyTaskCompleted(context.Background(), task.NotifyTarget, task); err != nil {
+		logger.ErrorWithFields("sub agent: notify feishu failed",
+			zap.Int64("task_id", task.ID), zap.String("open_id", task.NotifyTarget), zap.Error(err))
+		return
+	}
+	// 推送成功标记 reported(防下次对话前置汇报重复推)
+	if err := s.taskRepo.MarkReported(task.ID); err != nil {
+		logger.ErrorWithFields("sub agent: mark reported after notify failed",
+			zap.Int64("task.ID", task.ID), zap.Error(err))
+	}
+}
+
 // ErrTaskNotOwned 任务不属于该用户(属主校验失败)。
 var ErrTaskNotOwned = errors.New("task not owned by user")
+
+// SetNotifier 注入任务完成推送器(飞书 channel 启动后调,因 sender 在那时才创建)。
+// 飞书未配置时保持 nil(web 任务靠轮询,不主动推)。
+func (s *SubAgentService) SetNotifier(n TaskNotifier) {
+	s.notifier = n
+}
 
 // ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。
 // 供排查/展示子 Agent 执行过程(可观测性)。属主校验:只能查自己的任务(安全红线),

@@ -23,6 +23,8 @@ type AgentTask struct {
 	Notes        []string   `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
 	TaskSpec     TaskSpec   `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
 	ParentTaskID *int64     `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
+	Source       string     `gorm:"size:20;index"`          // 来源渠道:"web"/"feishu"。空=web(老数据兼容)。决定完成时往哪推送
+	NotifyTarget string     `gorm:"size:128"`               // 主动推送目标:feishu=open_id;web=空(靠轮询)。source=feishu 时必填
 	CreatedAt    time.Time  `gorm:"not null"`
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
@@ -63,15 +65,24 @@ func (t *AgentTask) IsActive() bool {
 	return false
 }
 
+// 任务来源渠道常量(决定完成时往哪推送汇报)。
+const (
+	SourceWeb    = "web"    // Web 端:完成靠前端轮询 GET /agent/tasks + 前置汇报
+	SourceFeishu = "feishu" // 飞书:完成时主动推送到 open_id(NotifyTarget)
+)
+
 // NewAgentTask 创建一个 pending 状态的新任务。
 // taskSpec 任务包(含 goal+背景+交付物+完成标准);为兼容老路径,goal 单独冗余存一份。
-func NewAgentTask(userID int64, subAgentType string, taskSpec TaskSpec) *AgentTask {
+// source 来源渠道(web/feishu);notifyTarget 主动推送目标(feishu=open_id;web=空)。
+func NewAgentTask(userID int64, subAgentType string, taskSpec TaskSpec, source, notifyTarget string) *AgentTask {
 	return &AgentTask{
 		UserID:       userID,
 		SubAgentType: subAgentType,
 		Goal:         taskSpec.Goal, // 冗余快捷访问
 		TaskSpec:     taskSpec,
 		Status:       TaskStatusPending,
+		Source:       source,
+		NotifyTarget: notifyTarget,
 		CreatedAt:    time.Now(),
 	}
 }

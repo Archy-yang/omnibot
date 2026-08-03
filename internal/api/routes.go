@@ -189,7 +189,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
 	eventRepo := agentRepo.NewTaskEventRepository(dbConn.GetGormDB())
-	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo, eventRepo)
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo, eventRepo, nil) // notifier 飞书启动后注入(见 startFeishuChannel)
 	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
 	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
 	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
@@ -260,7 +260,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc)
+	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc, subAgentRegistry)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -329,6 +329,7 @@ func startFeishuChannel(
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
 	subAgentSvc *agentpkg.SubAgentService,
+	subAgentRegistry *agentpkg.SubAgentRegistry,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -349,6 +350,9 @@ func startFeishuChannel(
 
 	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
 	handler.SetSubAgentReporter(subAgentSvc)
+	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
+	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
+	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, subAgentRegistry))
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)

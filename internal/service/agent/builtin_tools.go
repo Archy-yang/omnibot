@@ -331,8 +331,10 @@ func min(a, b int) int {
 type contextKey string
 
 const (
-	userIDContextKey contextKey = "agent_user_id"
-	taskIDContextKey contextKey = "agent_task_id" // 子 Agent 运行时的 taskID(供 request_input 工具用)
+	userIDContextKey   contextKey = "agent_user_id"
+	taskIDContextKey  contextKey = "agent_task_id"  // 子 Agent 运行时的 taskID(供 request_input 工具用)
+	sourceContextKey  contextKey = "agent_source"   // 任务来源渠道(web/feishu),供 delegate 记录到 task
+	notifyContextKey  contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
 )
 
 func withUserID(ctx context.Context, userID int64) context.Context {
@@ -342,6 +344,31 @@ func withUserID(ctx context.Context, userID int64) context.Context {
 // withTaskID 把 taskID 注入 ctx(子 Agent runner 启动时调,供 request_input 工具取)。
 func withTaskID(ctx context.Context, taskID int64) context.Context {
 	return context.WithValue(ctx, taskIDContextKey, taskID)
+}
+
+// WithSource 把来源渠道注入 ctx(web/feishu handler 调,供 delegate 记录到 task.Source)。
+// 导出供 handler 层调用(web/feishu 在调主 Agent Run 前注入)。
+func WithSource(ctx context.Context, source string) context.Context {
+	return context.WithValue(ctx, sourceContextKey, source)
+}
+
+// WithNotifyTarget 把主动推送目标注入 ctx(feishu handler 注入 open_id,供 delegate 记录到 task.NotifyTarget)。
+func WithNotifyTarget(ctx context.Context, target string) context.Context {
+	return context.WithValue(ctx, notifyContextKey, target)
+}
+
+func getSourceFromContext(ctx context.Context) string {
+	if s, ok := ctx.Value(sourceContextKey).(string); ok {
+		return s
+	}
+	return ""
+}
+
+func getNotifyTargetFromContext(ctx context.Context) string {
+	if s, ok := ctx.Value(notifyContextKey).(string); ok {
+		return s
+	}
+	return ""
 }
 
 func getTaskIDFromContext(ctx context.Context) int64 {
@@ -458,7 +485,10 @@ func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
 				}
 			}
 
-			taskID, err := svc.StartTask(ctx, userID, subAgentType, taskSpec)
+			// source/notifyTarget 从 ctx 取(web/feishu handler 注入):决定完成时往哪推送汇报。
+			source := getSourceFromContext(ctx)
+			notifyTarget := getNotifyTargetFromContext(ctx)
+			taskID, err := svc.StartTask(ctx, userID, subAgentType, taskSpec, source, notifyTarget)
 			if err != nil {
 				return "", fmt.Errorf("派活失败: %w", err)
 			}
