@@ -38,8 +38,8 @@ import (
 // researcherSystemPrompt 研究员子 Agent 的 system prompt。
 //
 // 设计目标:在 ReAct「每轮决定是否再次调用工具」这个决策点上,显式约束收敛,
-// 避免 web_fetcher 对 JS 渲染页面拿不到正文时,模型反复换 URL 重试直至跑满 MaxSteps
-// (见 task 15:15 轮 web_fetcher,最后吐"已达到最大步数限制",检索全白做)。
+// 避免 web_read 对 JS 渲染页面拿不到正文时,模型反复换 URL 重试直至跑满 MaxSteps
+// (见 task 15:15 轮抓取,最后吐"已达到最大步数限制",检索全白做)。
 //
 // 三条收敛规则:
 //  1. 每轮工具调用前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
@@ -60,10 +60,11 @@ var researcherSystemPrompt = `你是一名研究员。目标:{goal}。
 3. 信息不足也必须产出报告:基于已有来源如实汇总,对未能查证的部分明确标注"未能查证",
    绝不空转到步数耗尽。一份基于部分来源的报告,远好过跑满步数却啥也没产出。
 
-== web_fetcher 注意事项==
-web_fetcher 对 JS 渲染页面(SPA,如首页/活动页)常只能抓到导航菜单而非正文。
-若一次抓取结果是导航菜单、空正文、或乱码,视为该页面无效,不要继续换该站点的
-其他 URL 重试--改用 search_memories/search_history 查历史,或基于已有信息汇总。`
+== web_read 注意事项==
+web_read(url, mode="auto") 会自动选最快可用方式:先本地解析,正文不足或失败时自动
+升级到 JS 渲染服务。无需手动判断页面类型,直接用 auto。仅当明确知道页面类型时才用
+mode=http(静态)或 mode=reader(强制 JS 渲染)。同一站点连续失败说明该路走不通,
+立即停止重试,改用 search_memories/search_history 或基于已有信息汇总。`
 
 func init() {
 	channelfactory.Register(channelweb.NewChannel())
@@ -152,8 +153,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
 	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
 	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
-	globalToolRegistry.Register(agentpkg.CreateWebFetcherTool())
-	globalToolRegistry.Register(agentpkg.CreateWebReaderTool())
+	globalToolRegistry.Register(agentpkg.CreateWebReadTool())
 
 	// agentToolRegistry:主 Agent 工具集。方向B--移除抓取类(rss/web_fetcher/web_reader),
 	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具仍在
@@ -180,7 +180,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Name:           "研究员",
 		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
 		PromptTemplate: researcherSystemPrompt,
-		Tools:          []string{"rss_reader", "web_fetcher", "web_reader", "search_memories", "search_history"},
+		Tools:          []string{"rss_reader", "web_read", "search_memories", "search_history"},
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
 	})

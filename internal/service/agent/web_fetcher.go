@@ -1,14 +1,17 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	readability "codeberg.org/readeck/go-readability"
 	"github.com/PuerkitoBio/goquery"
 )
 
@@ -81,54 +84,32 @@ func sanitizeFetchError(err error) string {
 	}
 }
 
-const webFetchMaxBytes = 8000 // 正文截断长度,防 token 爆炸
-
-// CreateWebFetcherTool 创建 web_fetcher 工具:用 goquery 抓取网页正文(本地解析)。
-//
-// 适合静态 HTML 页面(博客/文档/新闻):去 script/style/nav 等噪音,提取正文文本。
-// 对需 JS 渲染的 SPA 页面(返回空或乱码)应换用 web_reader。
-//
-// 安全:SSRF 防护(拒内网/保留地址),超时 15s,错误脱敏。
-func CreateWebFetcherTool() Tool {
-	return Tool{
-		Name:        "web_fetcher",
-		DisplayLabel: "抓取了网页",
-		Description: "抓取指定 URL 的网页正文(本地解析,去导航/脚本/样式,返回纯文本)。" +
-			"适合静态 HTML 页面(博客、文档、新闻)。对需 JS 渲染的复杂页面(SPA)可能返回空或乱码," +
-			"此时换用 web_reader。传入完整 HTTP/HTTPS 链接。",
-		Parameters: map[string]interface{}{
-			"type": "object",
-			"required": []string{"url"},
-			"properties": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "要抓取的网页完整 HTTP/HTTPS 链接,必须是公开可访问的页面",
-				},
-			},
-		},
-		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			urlStr, _ := args["url"].(string)
-			if urlStr == "" {
-				return "", fmt.Errorf("url 不能为空")
-			}
-			if err := validateURL(urlStr); err != nil {
-				return "", formatWebFailure(0, urlStr, err.Error())
-			}
-			return fetchAndExtract(ctx, urlStr)
-		},
-	}
-}
+const (
+	webFetchMaxBytes = 8000    // 正文截断长度,防 token 爆炸
+	maxHTMLBytes     = 2 << 20 // 抓取 HTML 原始大小上限 2MB,防超大页面 OOM(readability 需全量 HTML)
+)
 
 // fetchAndExtract 抓取 URL 并提取正文(goquery 解析)。不含 SSRF 校验(由调用方先 validateURL)。
 // 抽出独立函数便于单测(测试用 httptest 本地 server,会触发 SSRF 拒绝,故直接测此函数)。
 // 失败统一 formatWebFailure(标记文本),成功 formatWebSuccess(头 + 裸正文)。
 func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		// P0 SSRF 防护:每次跳转重新校验目标。validateURL 只在 Execute 校验原始 URL,
+		// 默认 http.Client 会跟 10 跳到任意主机,恶意页 302 -> 169.254.169.254 会把云元数据读进正文。
+		// 这里只校验跳转目标(不校验初始 URL,否则 httptest 127.0.0.1 测试全挂)。
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			return validateURL(req.URL.String())
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return "", formatWebFailure(0, urlStr, sanitizeFetchError(err))
 	}
-	req.Header.Set("User-Agent", "OmniBot/1.0 (web_fetcher; +https://github.com/Archy-yang/omnibot)")
+	req.Header.Set("User-Agent", "OmniBot/1.0 (web_read; +https://github.com/Archy-yang/omnibot)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
 	resp, err := client.Do(req)
@@ -146,19 +127,14 @@ func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 		return "", formatWebFailure(resp.StatusCode, urlStr, "目标非 HTML 页面,无法提取正文")
 	}
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	// 读 body 到内存(readability 与 goquery 都要消费 reader,不能共享流);限 2MB 防超大 HTML OOM。
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxHTMLBytes+1))
 	if err != nil {
 		return "", formatWebFailure(0, urlStr, sanitizeFetchError(err))
 	}
 
-	doc.Find("script,style,nav,aside,header,footer,form,iframe,noscript,svg,button").Remove()
-	selection := doc.Find("article, main, [role=main], .content, .article-body, .post-content").First()
-	if selection.Length() == 0 {
-		selection = doc.Find("body")
-	}
-
-	title := doc.Find("title").First().Text()
-	text := cleanText(selection.Text())
+	// P1:readability 优先(Readability.js 算法,正文鲁棒),失败/空则 goquery 兜底(非文章页/落地页)。
+	title, text := extractArticle(bodyBytes, urlStr)
 
 	if strings.TrimSpace(text) == "" {
 		return "", formatWebFailure(0, urlStr, "抓取到空正文(可能是 JS 渲染页面,换用 web_reader)")
@@ -172,6 +148,50 @@ func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 		result = "标题: " + strings.TrimSpace(title) + "\n\n" + text
 	}
 	return formatWebSuccess(resp.StatusCode, urlStr, result), nil
+}
+
+// extractArticle 用 readability 抽正文,失败/空则回退 goquery(手写选择器)。
+// readability 对标准文章页鲁棒;goquery 兜底非文章结构(落地页/列表页/特殊布局)。
+func extractArticle(body []byte, pageURL string) (title, text string) {
+	if t, txt, ok := extractWithReadability(body, pageURL); ok {
+		return t, txt
+	}
+	return extractWithGoquery(body)
+}
+
+// extractWithReadability 用 go-readability(Readability.js 移植)抽正文。返回纯文本(TextContent)。
+// 抽不到(ok=false)时由调用方回退 goquery。抽独立函数便于单测。
+func extractWithReadability(body []byte, pageURL string) (title, text string, ok bool) {
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return "", "", false
+	}
+	article, err := readability.FromReader(bytes.NewReader(body), parsed)
+	if err != nil {
+		return "", "", false
+	}
+	txt := strings.TrimSpace(article.TextContent)
+	if txt == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(article.Title), txt, true
+}
+
+// extractWithGoquery 用 goquery 手写选择器抽正文(去 script/style/nav 等噪音)。
+// 作为 readability 的兜底:readability 抽不出正文的非文章页(落地页/列表页)走此路径。
+func extractWithGoquery(body []byte) (title, text string) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return "", ""
+	}
+	doc.Find("script,style,nav,aside,header,footer,form,iframe,noscript,svg,button").Remove()
+	selection := doc.Find("article, main, [role=main], .content, .article-body, .post-content").First()
+	if selection.Length() == 0 {
+		selection = doc.Find("body")
+	}
+	title = doc.Find("title").First().Text()
+	text = cleanText(selection.Text())
+	return title, text
 }
 
 // cleanText 压缩空白:多空格/换行合并,去首尾空白。

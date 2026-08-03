@@ -86,7 +86,7 @@ func TestAgentStepRepository_ListByTaskID(t *testing.T) {
 		{UserID: 42, TaskID: &taskID, Seq: 0, Kind: conversation.StepKindLLMCall,
 			Status: conversation.StepStatusSuccess, Request: `[]`, Response: `{}`, Model: "deepseek", DurationMs: 100},
 		{UserID: 42, TaskID: &taskID, Seq: 1, Kind: conversation.StepKindToolCall,
-			Status: conversation.StepStatusSuccess, Tool: "web_fetcher",
+			Status: conversation.StepStatusSuccess, Tool: "web_read",
 			Request: `{"url":"x"}`, Response: "正文", DurationMs: 500},
 	}
 	if err := repo.CreateBatch(steps); err != nil {
@@ -107,8 +107,8 @@ func TestAgentStepRepository_ListByTaskID(t *testing.T) {
 	if chain[0].TaskID == nil || *chain[0].TaskID != taskID {
 		t.Errorf("TaskID = %v, want %d", chain[0].TaskID, taskID)
 	}
-	if chain[1].Tool != "web_fetcher" {
-		t.Errorf("step[1] Tool = %q, want web_fetcher", chain[1].Tool)
+	if chain[1].Tool != "web_read" {
+		t.Errorf("step[1] Tool = %q, want web_read", chain[1].Tool)
 	}
 }
 
