@@ -11,8 +11,12 @@ type Runtime struct {
 	FinalAnswer   string                   // 累积最终回答(回复轮文本累加)
 	FailStreak    map[string]int           // 工具连续失败计数(熔断状态,hook 维护)
 	ToolCallCount int                      // 工具调用总数(成功/失败/拦截都算,ToolBudgetHook 读)
-	Emit          func(AgentEvent)         // 事件出口(emit 到 out channel)
-	Step          int                      // 当前轮次(1-based)
+	// DelegateTaskIDs 本轮 RunStream 调 delegate 创建的 task_id(程序从工具返回解析,
+	// LLM 篡改不了)。回复末尾拼接此标识:调了 delegate -> 有标识可校验;
+	// 没调却声称已安排 -> 无标识,幻觉暴露。
+	DelegateTaskIDs []int64
+	Emit            func(AgentEvent) // 事件出口(emit 到 out channel)
+	Step            int              // 当前轮次(1-based)
 }
 
 // RoundHook 是 ReAct 循环的可插拔扩展点。多个 hook 串成链,在循环的固定切点被调用。

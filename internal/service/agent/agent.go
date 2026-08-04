@@ -420,7 +420,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				rt.FinalAnswer += roundContent
 				// 思考模式 C5:回复轮(无 tool_call)发 Final,携带本轮完整文本(= 最终回复)。
 				// 消费方据此明确区分思考与回复,不靠位置推断。
-				out <- AgentEvent{Type: AgentEventFinal, Content: roundContent}
+				// 追加任务标识:本轮 delegate 创建的 task_id(程序拼接,LLM 篡改不了)。
+				// 调了 delegate -> 末尾有标识可校验;没调却声称已安排 -> 无标识,幻觉暴露。
+				finalContent := appendTaskIDs(roundContent, rt.DelegateTaskIDs)
+				out <- AgentEvent{Type: AgentEventFinal, Content: finalContent}
 				out <- AgentEvent{Type: AgentEventDone, Content: rt.FinalAnswer}
 				return
 			}
@@ -523,6 +526,13 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 							toolResult = result
 							status = StepStatusSuccess
 							rt.FailStreak[toolCall.Name] = 0 // 成功清零(偶尔失败不误熔断)
+							// delegate 成功:解析返回的 task_id 记录到 Runtime(供回复末尾拼接)。
+							// task_id 来自工具真实返回,LLM 篡改不了;回复末尾拼接此标识可校验。
+							if toolCall.Name == "delegate" {
+								if tid := parseDelegateTaskID(toolResult); tid > 0 {
+									rt.DelegateTaskIDs = append(rt.DelegateTaskIDs, tid)
+								}
+							}
 						}
 					}
 				}
