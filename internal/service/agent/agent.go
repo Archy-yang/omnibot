@@ -329,8 +329,14 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
 			select {
 			case <-ctx.Done():
-				out <- AgentEvent{Type: AgentEventFinal, Content: "处理超时，已返回当前结果。"}
-				out <- AgentEvent{Type: AgentEventDone, Content: "处理超时，已返回当前结果。"}
+				// P0:超时也走强制汇总(同 MaxSteps 兜底),基于已收集信息产出报告,
+				// 而非吐"处理超时"废话。无 hook 或汇总失败回落兜底文案。
+				summary := hooks.OnMaxExhausted(rt)
+				if summary == "" {
+					summary = "处理超时，已基于已收集信息返回当前结果。"
+				}
+				out <- AgentEvent{Type: AgentEventFinal, Content: summary}
+				out <- AgentEvent{Type: AgentEventDone, Content: summary}
 				return
 			default:
 			}
@@ -358,7 +364,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 本轮内累积：一段 LLM 响应可能是文本（emit token）或工具调用（按 index 累积 delta）。
 			var roundContent string
-			var roundReasoning string // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
+			var roundReasoning string                           // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
 			toolCallAccum := make(map[int]*toolCallAccumulator) // 按 index 索引
 
 			for chunk := range chunkCh {
