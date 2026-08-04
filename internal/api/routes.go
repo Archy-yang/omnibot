@@ -352,7 +352,7 @@ func startFeishuChannel(
 	handler.SetSubAgentReporter(subAgentSvc)
 	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
 	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
-	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, subAgentRegistry))
+	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, subAgentRegistry, agentSvc, msgSvc, llmConfigSvc))
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)

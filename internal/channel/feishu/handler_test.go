@@ -50,6 +50,11 @@ type mockMessageService struct {
 	saveAsstCalled     int
 	buildContextResult []llm.ChatMessage
 	buildContextErr    error
+	// SaveReportMessage 记录(飞书任务完成推送落库用)
+	savedReportContent string
+	savedReportTaskID  int64
+	reportCalled       bool
+	reportErr          error
 }
 
 func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content, msgID string) error {
@@ -86,6 +91,15 @@ func (m *mockMessageService) SaveAssistantMessageWithToolCalls(
 	m.savedSteps = steps
 	return nil
 }
+func (m *mockMessageService) SaveReportMessage(
+	ctx context.Context, userID, taskID int64, content string,
+	segments []conversation.MessageSegment, steps []*conversation.AgentStep,
+) error {
+	m.reportCalled = true
+	m.savedReportContent = content
+	m.savedReportTaskID = taskID
+	return m.reportErr
+}
 
 type mockAgentService struct {
 	result       *agentpkg.AgentResult
@@ -120,12 +134,14 @@ func (m *mockLLMConfigService) GetFullConfigForUser(userID int64) (*userservice.
 }
 
 type mockSender struct {
-	sentOpenID  string
-	sentContent string
-	sendErr     error
-	sendCount   int
-	// lastMode 记录最后一次发送使用的渠道:"text" or "markdown"。
-	// Agent 成功回复应走 "markdown"(飞书会渲染),fallback 兜底走 "text"。
+	sentOpenID   string
+	sentContent  string
+	sentTitle    string // SendCard 的标题
+	sentTemplate string // SendCard 的主题色
+	sendErr      error
+	sendCount    int
+	// lastMode 记录最后一次发送使用的渠道:"text" / "markdown" / "card"。
+	// Agent 成功回复应走 "markdown"(飞书会渲染),fallback 兜底走 "text",回执走 "card"。
 	lastMode string
 }
 
@@ -138,6 +154,12 @@ func (m *mockSender) SendText(ctx context.Context, openID, content string) error
 func (m *mockSender) SendMarkdown(ctx context.Context, openID, content string) error {
 	m.sendCount++
 	m.sentOpenID, m.sentContent, m.lastMode = openID, content, "markdown"
+	return m.sendErr
+}
+
+func (m *mockSender) SendCard(ctx context.Context, openID, title, content, template string) error {
+	m.sendCount++
+	m.sentOpenID, m.sentContent, m.sentTitle, m.sentTemplate, m.lastMode = openID, content, title, template, "card"
 	return m.sendErr
 }
 
@@ -332,14 +354,13 @@ func TestMessageHandler_EmptyText_Skipped(t *testing.T) {
 
 // 编译期保证 mock 满足接口
 var (
-	_ BindingService  = (*mockBindingService)(nil)
+	_ BindingService   = (*mockBindingService)(nil)
 	_ MessageService   = (*mockMessageService)(nil)
 	_ AgentService     = (*mockAgentService)(nil)
 	_ LLMConfigService = (*mockLLMConfigService)(nil)
 	_ Sender           = (*mockSender)(nil)
 	_                  = time.Second // 占位避免 import 漂移
 )
-
 
 // ===== v2.2 绑定码 / 未绑引导 测试 =====
 
