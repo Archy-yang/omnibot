@@ -10,23 +10,23 @@ import (
 // 让模型根本看不到该工具(硬约束),而非只在调用时返回提示(软约束,模型仍会反复调)。
 func TestFilterToolsByCircuitBreaker(t *testing.T) {
 	tools := []map[string]interface{}{
-		{"type": "function", "function": map[string]interface{}{"name": "web_reader", "description": "r"}},
-		{"type": "function", "function": map[string]interface{}{"name": "web_fetcher", "description": "f"}},
+		{"type": "function", "function": map[string]interface{}{"name": "web_read", "description": "r"}},
+		{"type": "function", "function": map[string]interface{}{"name": "calculator", "description": "f"}},
 		{"type": "function", "function": map[string]interface{}{"name": "rss_reader", "description": "rss"}},
 	}
-	streak := map[string]int{"web_reader": 3} // web_reader 达熔断阈值
+	streak := map[string]int{"web_read": 3} // web_read 达熔断阈值
 
 	got := filterToolsByCircuitBreaker(tools, streak, ToolFailureThreshold)
 
-	// web_reader 被移除,剩下 web_fetcher + rss_reader
+	// web_read 被移除,剩下 calculator + rss_reader
 	assert.Len(t, got, 2)
 	names := []string{}
 	for _, t := range got {
 		fn := t["function"].(map[string]interface{})
 		names = append(names, fn["name"].(string))
 	}
-	assert.NotContains(t, names, "web_reader")
-	assert.Contains(t, names, "web_fetcher")
+	assert.NotContains(t, names, "web_read")
+	assert.Contains(t, names, "calculator")
 	assert.Contains(t, names, "rss_reader")
 }
 

@@ -108,8 +108,12 @@ func MainAgentSystemPrompt(hasSubAgents bool) string {
 == 任务管理工具(对已派任务可查/补/取消)==
 除了 delegate 派活,你还能管理已派出去的任务:
 - query_task:用户问"我的任务怎样了""派过什么任务"时,调它查任务状态/列表(传 task_id 查单个,不传查列表)。
-- update_task:用户对已派任务补充需求(如"顺便也查 X""补充一点:...")时调。pending 任务可改 goal;running 任务可追加 note(子 Agent 下轮会读到并入推理)。
-- cancel_task:用户说"不用查了""取消"时调,取消未结束的任务(pending/running)。
+- update_task:用户对已派任务补充需求(如"顺便也查 X""补充一点:...")时调。pending 任务可改 goal;running/input_required 任务可追加 note(子 Agent 会读到)。
+- cancel_task:用户说"不用查了""取消"时调,取消未结束的任务(pending/running/input_required)。
+
+【input_required 状态】query_task 发现任务状态是 input_required,说明子 Agent 在执行中
+需要更多信息(Nodes 里有"[需要输入]"问题)。把问题转述给用户,用户回答后用 update_task 补答案。
+注意:input_required 任务补 note 后不会自动续跑,若要继续需重新 delegate(关联 parent_task_id)。
 
 不要凭记忆回答任务状态--任务在后台异步跑,状态随时变,必须调 query_task 实查。`
 }

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -70,10 +71,37 @@ func TestBuildReportInstruction_MultipleTasks(t *testing.T) {
 		{ID: 1, SubAgentType: "researcher", Goal: "g1", Status: domainagent.TaskStatusCompleted, Artifact: &a1},
 		{ID: 2, SubAgentType: "researcher", Goal: "g2", Status: domainagent.TaskStatusCompleted, Artifact: &a2},
 	}
-	got := BuildReportInstruction(registry, tasks)
+	got := BuildReportInstruction(registry, tasks, true)
 	assert.Contains(t, got, "管家口吻")
 	assert.Contains(t, got, "任务ID: 1")
 	assert.Contains(t, got, "任务ID: 2")
 	assert.Contains(t, got, "r1")
 	assert.Contains(t, got, "r2")
+}
+
+// TestBuildTaskReceipt_SummaryTruncates 控制面/数据面分离(#20):
+// 前置汇报回执(fullArtifact=false)只给摘要(截断),不塞全文。
+func TestBuildTaskReceipt_SummaryTruncates(t *testing.T) {
+	registry := NewSubAgentRegistry()
+	require.NoError(t, registry.Register(domainagent.SubAgentCard{
+		Type: "researcher", Name: "研究员", Description: "d",
+		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: time.Second,
+	}))
+	longArtifact := strings.Repeat("详", 300) // 超过 receiptSummaryMax(200)
+	task := &domainagent.AgentTask{
+		ID: 1, SubAgentType: "researcher", Goal: "g",
+		Status: domainagent.TaskStatusCompleted, Artifact: &longArtifact,
+	}
+
+	// 摘要模式(前置汇报):截断 + 提示
+	summary := BuildTaskReceipt(registry, task)
+	assert.Contains(t, summary, "...")
+	assert.Contains(t, summary, "完整结果可查任务产物")
+	assert.False(t, strings.Contains(summary, strings.Repeat("详", 201)),
+		"摘要不应含超长全文")
+
+	// 完整模式(report 接口):不截断,给全文
+	full := buildTaskReceiptForReport(registry, task, true)
+	assert.NotContains(t, full, "完整结果可查任务产物")
+	assert.Contains(t, full, strings.Repeat("详", 300))
 }

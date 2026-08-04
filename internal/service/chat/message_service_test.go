@@ -50,6 +50,44 @@ func TestMessageService_BuildContextMessages(t *testing.T) {
 	}
 }
 
+// TestMessageService_BuildContextMessages_DedupCurrentMessage 复现生产时序:
+// handler 先 SaveUserMessage(当前消息落库) 再 BuildContextMessages。
+// 此时 GetRecentByUserID 取到的历史已含当前消息,末尾又 append 一份 -> 当前消息重复两份,
+// 干扰 LLM 工具调用决策(曾致主 Agent 幻觉派活,见 msg 181)。
+// 修复:BuildContextMessages 剔除历史里已存在的当前消息,保证只 1 份。
+func TestMessageService_BuildContextMessages_DedupCurrentMessage(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	msgRepo := chat.NewMessageRepository(testDB)
+	service := NewMessageService(msgRepo)
+
+	// 历史对话
+	msgRepo.Create(conversation.NewUserMessage(123, "之前的问题", "wx_1"))
+	msgRepo.Create(conversation.NewAssistantMessage(123, "之前的回复"))
+
+	// 生产时序:先存当前用户消息(handler 调 SaveUserMessage),再构建上下文
+	currentContent := "当前用户消息"
+	if err := service.SaveUserMessage(context.Background(), 123, currentContent, "wx_2"); err != nil {
+		t.Fatalf("SaveUserMessage: %v", err)
+	}
+
+	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, currentContent)
+	if err != nil {
+		t.Fatalf("BuildContextMessages: %v", err)
+	}
+
+	// 当前消息应只出现 1 次(末尾),不重复
+	count := 0
+	for _, m := range ctxMsgs {
+		if m.Content == currentContent {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "当前用户消息在上下文中应只出现 1 次,实际 %d 次(重复致幻觉派活)", count)
+
+	// 末尾应是当前消息
+	assert.Equal(t, currentContent, ctxMsgs[len(ctxMsgs)-1].Content, "末尾应是当前用户消息")
+}
+
 type mockContextMemoryService struct {
 	contents []string
 	err      error
@@ -243,7 +281,11 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 		{Type: "tool", Tool: "rss_reader", Label: "读取了 RSS 订阅", Result: "工具执行失败"},
 	}
 	steps := []*conversation.AgentStep{
-		func() *conversation.AgentStep { s := conversation.NewLLMStep(0, `[{"role":"user"}]`, `{"tool_calls":[]}`, "gpt-4o", conversation.StepStatusSuccess, 300); s.Seq = 0; return s }(),
+		func() *conversation.AgentStep {
+			s := conversation.NewLLMStep(0, `[{"role":"user"}]`, `{"tool_calls":[]}`, "gpt-4o", conversation.StepStatusSuccess, 300)
+			s.Seq = 0
+			return s
+		}(),
 		func() *conversation.AgentStep {
 			s := conversation.NewToolStep(0, "rss_reader", `{"url":"x"}`, "工具执行错误: dial tcp refused", conversation.StepStatusError, 1200)
 			s.Seq = 1

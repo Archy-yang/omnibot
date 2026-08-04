@@ -42,10 +42,10 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
+	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 
 	// 造一个 completed 未汇报任务
-	task := domainagent.NewAgentTask(42, "researcher", "研究 Go 1.24")
+	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
 	require.NoError(t, repo.Create(task))
 	art := "Go 1.24 要点"
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &art, nil))
@@ -109,7 +109,7 @@ func TestHandleSendMessageAgentStream_NoPreReportWhenNoTasks(t *testing.T) {
 		Type: "researcher", Name: "研究员", Description: "d",
 		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db))
+	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 	// 不造任务
 
 	agentSvc := &mockAgentService{events: []agentpkg.AgentEvent{

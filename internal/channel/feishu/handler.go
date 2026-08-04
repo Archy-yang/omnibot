@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"omnibot/internal/client/llm"
+	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	agentpkg "omnibot/internal/service/agent"
 	chatsvc "omnibot/internal/service/chat"
@@ -146,6 +147,10 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 	}
 
 	// 执行 Agent(同步聚合 Run,内部 drain RunStream)
+	// 注入来源渠道(feishu)+ 推送目标(open_id)到 ctx:delegate 派活时记录到 task,
+	// 子 Agent 完成后主动推送回飞书(方案A)。
+	ctx = agentpkg.WithSource(ctx, domainagent.SourceFeishu)
+	ctx = agentpkg.WithNotifyTarget(ctx, in.OpenID)
 	result, err := h.agentService.Run(ctx, userID, toAgentMessages(ctxMessages), activeLLMClient)
 	if err != nil {
 		logger.ErrorWithFields("feishu: agent run failed, sending fallback",

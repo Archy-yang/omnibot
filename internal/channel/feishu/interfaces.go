@@ -13,8 +13,8 @@ package feishu
 import (
 	"context"
 
-	"omnibot/internal/domain/conversation"
 	"omnibot/internal/client/llm"
+	"omnibot/internal/domain/conversation"
 	agentpkg "omnibot/internal/service/agent"
 	userservice "omnibot/internal/service/user"
 )
@@ -32,11 +32,13 @@ type BindingService interface {
 
 // MessageService 消息服务接口。SaveUserMessage 用飞书 message_id 做去重。
 // SaveAssistantMessageWithSegments 与 web 同步端点共用,segments=nil(IM 入口无交错段)。
+// SaveReportMessage 供飞书任务完成推送时落汇报消息(Kind=report,关联 task_id)。
 type MessageService interface {
 	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
+	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 }
 
 // AgentService Agent 服务接口(仅同步 Run,飞书不走流式)。签名与 web AgentService 一致。
@@ -62,11 +64,15 @@ type SubAgentReportProvider interface {
 // Sender 飞书发消息接口。隔离 SDK,测试 mock。
 //
 // SendText  — 纯文本消息(MsgType="text")。飞书客户端**不渲染 markdown**,
-//             适合 fallback 兜底("服务暂时不可用")等短文本。
+//
+//	适合 fallback 兜底("服务暂时不可用")等短文本。
+//
 // SendMarkdown — interactive 卡片(MsgType="interactive",含 markdown element),
-//             飞书客户端**渲染 markdown**:加粗/列表/链接/代码块等。Agent 输出几乎
-//             总是 markdown,默认走这条路径。
+//
+//	飞书客户端**渲染 markdown**:加粗/列表/链接/代码块等。Agent 输出几乎
+//	总是 markdown,默认走这条路径。
 type Sender interface {
 	SendText(ctx context.Context, openID, content string) error
 	SendMarkdown(ctx context.Context, openID, content string) error
+	SendCard(ctx context.Context, openID, title, content, template string) error
 }

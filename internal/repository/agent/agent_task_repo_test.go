@@ -26,7 +26,7 @@ func setupAgentTaskTestDB(t *testing.T) *gorm.DB {
 func TestAgentTaskRepository_CreateAndGetByID(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
 
-	task := domain.NewAgentTask(42, "researcher", "研究 Go 1.24 新特性")
+	task := domain.NewAgentTask(42, "researcher", domain.NewTaskSpec("研究 Go 1.24 新特性"), "web", "")
 	err := repo.Create(task)
 	require.NoError(t, err)
 	assert.NotZero(t, task.ID)
@@ -42,7 +42,7 @@ func TestAgentTaskRepository_CreateAndGetByID(t *testing.T) {
 
 func TestAgentTaskRepository_UpdateStatus(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
-	task := domain.NewAgentTask(1, "researcher", "goal")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("goal"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	// pending -> running
@@ -65,7 +65,7 @@ func TestAgentTaskRepository_UpdateStatus(t *testing.T) {
 
 func TestAgentTaskRepository_UpdateStatusFailed(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
-	task := domain.NewAgentTask(1, "researcher", "goal")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("goal"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	errMsg := "超时"
@@ -80,7 +80,7 @@ func TestAgentTaskRepository_UpdateStatusFailed(t *testing.T) {
 
 func TestAgentTaskRepository_MarkReported(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
-	task := domain.NewAgentTask(1, "researcher", "goal")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("goal"), "web", "")
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domain.TaskStatusCompleted, strPtr("result"), nil))
 
@@ -96,10 +96,10 @@ func TestAgentTaskRepository_ListCompletedUnreported(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
 
 	// 用户 1:1 个 completed 未汇报,1 个 completed 已汇报,1 个 failed 未汇报,1 个 running
-	t1 := domain.NewAgentTask(1, "researcher", "g1")
-	t2 := domain.NewAgentTask(1, "researcher", "g2")
-	t3 := domain.NewAgentTask(1, "researcher", "g3")
-	t4 := domain.NewAgentTask(1, "researcher", "g4")
+	t1 := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g1"), "web", "")
+	t2 := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g2"), "web", "")
+	t3 := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g3"), "web", "")
+	t4 := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g4"), "web", "")
 	for _, tk := range []*domain.AgentTask{t1, t2, t3, t4} {
 		require.NoError(t, repo.Create(tk))
 	}
@@ -110,7 +110,7 @@ func TestAgentTaskRepository_ListCompletedUnreported(t *testing.T) {
 	// t4 保持 pending
 
 	// 用户 2 的任务不应出现
-	t5 := domain.NewAgentTask(2, "researcher", "other")
+	t5 := domain.NewAgentTask(2, "researcher", domain.NewTaskSpec("other"), "web", "")
 	require.NoError(t, repo.Create(t5))
 	require.NoError(t, repo.UpdateStatus(t5.ID, domain.TaskStatusCompleted, strPtr("a5"), nil))
 
@@ -126,9 +126,9 @@ func TestAgentTaskRepository_ListCompletedUnreported(t *testing.T) {
 func TestAgentTaskRepository_ListByUser(t *testing.T) {
 	repo := NewAgentTaskRepository(setupAgentTaskTestDB(t))
 	for i := 0; i < 3; i++ {
-		require.NoError(t, repo.Create(domain.NewAgentTask(1, "researcher", "g")))
+		require.NoError(t, repo.Create(domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g"), "web", "")))
 	}
-	require.NoError(t, repo.Create(domain.NewAgentTask(2, "researcher", "other")))
+	require.NoError(t, repo.Create(domain.NewAgentTask(2, "researcher", domain.NewTaskSpec("other"), "web", "")))
 
 	got, err := repo.ListByUser(1, 10)
 	require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestAgentTaskRepository_ListByUser(t *testing.T) {
 func TestAgentTaskRepository_Cancel(t *testing.T) {
 	db := setupAgentTaskTestDB(t)
 	repo := NewAgentTaskRepository(db)
-	task := domain.NewAgentTask(1, "researcher", "g")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	require.NoError(t, repo.Cancel(task.ID))
@@ -154,7 +154,7 @@ func TestAgentTaskRepository_Cancel(t *testing.T) {
 func TestAgentTaskRepository_UpdateGoal(t *testing.T) {
 	db := setupAgentTaskTestDB(t)
 	repo := NewAgentTaskRepository(db)
-	task := domain.NewAgentTask(1, "researcher", "旧 goal")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("旧 goal"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	require.NoError(t, repo.UpdateGoal(task.ID, "新 goal"))
@@ -166,7 +166,7 @@ func TestAgentTaskRepository_UpdateGoal(t *testing.T) {
 func TestAgentTaskRepository_AppendNote(t *testing.T) {
 	db := setupAgentTaskTestDB(t)
 	repo := NewAgentTaskRepository(db)
-	task := domain.NewAgentTask(1, "researcher", "g")
+	task := domain.NewAgentTask(1, "researcher", domain.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	require.NoError(t, repo.AppendNote(task.ID, "补充1"))
