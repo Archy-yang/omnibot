@@ -5,13 +5,14 @@ import "context"
 // Runtime 是 ReAct 循环的运行时共享状态,贯穿整个 RunStream,所有 hook 通过它交互。
 // hook 只读写 Runtime,不直接碰循环的局部变量(边界清晰)。
 type Runtime struct {
-	Ctx         context.Context            // 请求 ctx(供 hook 调 LLM 用,如强制汇总)
-	Messages    []map[string]interface{}   // 对话历史(可读写:工具结果会 append)
-	Tools       []map[string]interface{}   // 全量工具(原始,ToOpenAITools 产物,不变)
-	FinalAnswer string                     // 累积最终回答(回复轮文本累加)
-	FailStreak  map[string]int             // 工具连续失败计数(熔断状态,hook 维护)
-	Emit        func(AgentEvent)           // 事件出口(emit 到 out channel)
-	Step        int                        // 当前轮次(1-based)
+	Ctx           context.Context          // 请求 ctx(供 hook 调 LLM 用,如强制汇总)
+	Messages      []map[string]interface{} // 对话历史(可读写:工具结果会 append)
+	Tools         []map[string]interface{} // 全量工具(原始,ToOpenAITools 产物,不变)
+	FinalAnswer   string                   // 累积最终回答(回复轮文本累加)
+	FailStreak    map[string]int           // 工具连续失败计数(熔断状态,hook 维护)
+	ToolCallCount int                      // 工具调用总数(成功/失败/拦截都算,ToolBudgetHook 读)
+	Emit          func(AgentEvent)         // 事件出口(emit 到 out channel)
+	Step          int                      // 当前轮次(1-based)
 }
 
 // RoundHook 是 ReAct 循环的可插拔扩展点。多个 hook 串成链,在循环的固定切点被调用。

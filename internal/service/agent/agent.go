@@ -526,6 +526,8 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 						}
 					}
 				}
+				// 工具调用计数(无论成功/失败/拦截,消耗一次预算)。ToolBudgetHook 据此达阈值移除工具。
+				rt.ToolCallCount++
 				durationMs := time.Since(execStart).Milliseconds()
 
 				out <- AgentEvent{
