@@ -48,6 +48,10 @@ type ReActAgentConfig struct {
 	// Hooks 可插拔的执行链机制(熔断/强制汇总等)。nil/空=纯推理(无机制)。
 	// 主 Agent 可不传(纯推理),子 Agent 传 [CircuitBreakerHook, ForceSummaryHook]。
 	Hooks []RoundHook
+	// PreCreatedTaskIDs 循环开始前已由外部(结构化规划器)创建的后台任务 id。
+	// 种子进 Runtime.DelegateTaskIDs,回复末尾一并拼接(与循环内 delegate 创建的合并),
+	// 使"框架机械建出的任务"也有任务标识可校验(方向 B)。
+	PreCreatedTaskIDs []int64
 }
 
 // 默认值
@@ -120,13 +124,14 @@ func MainAgentSystemPrompt(hasSubAgents bool) string {
 
 // ReActAgent ReAct 模式 Agent
 type ReActAgent struct {
-	llmClient       LLMClient
-	streamingClient StreamingLLMClient
-	toolRegistry    *ToolRegistry
-	maxSteps        int
-	timeout         time.Duration
-	systemPrompt    string
-	hooks           []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
+	llmClient         LLMClient
+	streamingClient   StreamingLLMClient
+	toolRegistry      *ToolRegistry
+	maxSteps          int
+	timeout           time.Duration
+	systemPrompt      string
+	hooks             []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
+	preCreatedTaskIDs []int64     // 外部规划器预建的任务 id(种子进 Runtime.DelegateTaskIDs)
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -141,13 +146,14 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		config.SystemPrompt = defaultSystemPrompt
 	}
 	return &ReActAgent{
-		llmClient:       config.LLMClient,
-		streamingClient: config.StreamingLLMClient,
-		toolRegistry:    config.ToolRegistry,
-		maxSteps:        config.MaxSteps,
-		timeout:         config.Timeout,
-		systemPrompt:    config.SystemPrompt,
-		hooks:           config.Hooks,
+		llmClient:         config.LLMClient,
+		streamingClient:   config.StreamingLLMClient,
+		toolRegistry:      config.ToolRegistry,
+		maxSteps:          config.MaxSteps,
+		timeout:           config.Timeout,
+		systemPrompt:      config.SystemPrompt,
+		hooks:             config.Hooks,
+		preCreatedTaskIDs: config.PreCreatedTaskIDs,
 	}
 }
 
@@ -318,11 +324,12 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		// 运行时共享状态 + hook 链。熔断计数/强制汇总等机制通过 hook 介入循环,
 		// 循环本身保持纯推理(调 LLM -> 解析 -> 执行工具 -> 判断结束)。
 		rt := &Runtime{
-			Ctx:        ctx,
-			Messages:   messages,
-			Tools:      tools,
-			FailStreak: make(map[string]int),
-			Emit:       func(e AgentEvent) { out <- e },
+			Ctx:             ctx,
+			Messages:        messages,
+			Tools:           tools,
+			FailStreak:      make(map[string]int),
+			DelegateTaskIDs: a.preCreatedTaskIDs, // 预建任务种子(方向 B),循环内 delegate 创建的会再 append
+			Emit:            func(e AgentEvent) { out <- e },
 		}
 		hooks := newHookChain(a.hooks)
 
@@ -418,12 +425,14 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					StepDurationMs: time.Since(roundStart).Milliseconds(),
 				}
 				rt.FinalAnswer += roundContent
+				// 任务标识作为独立事件下发(方向 B):不拼进回复文本(否则会重复/污染历史/被模型模仿),
+				// 由前端据此渲染可点击的任务卡片。task_id 来自 delegate/规划器真实创建,LLM 篡改不了。
+				if len(rt.DelegateTaskIDs) > 0 {
+					out <- AgentEvent{Type: AgentEventTaskCreated, TaskIDs: rt.DelegateTaskIDs}
+				}
 				// 思考模式 C5:回复轮(无 tool_call)发 Final,携带本轮完整文本(= 最终回复)。
 				// 消费方据此明确区分思考与回复,不靠位置推断。
-				// 追加任务标识:本轮 delegate 创建的 task_id(程序拼接,LLM 篡改不了)。
-				// 调了 delegate -> 末尾有标识可校验;没调却声称已安排 -> 无标识,幻觉暴露。
-				finalContent := appendTaskIDs(roundContent, rt.DelegateTaskIDs)
-				out <- AgentEvent{Type: AgentEventFinal, Content: finalContent}
+				out <- AgentEvent{Type: AgentEventFinal, Content: roundContent}
 				out <- AgentEvent{Type: AgentEventDone, Content: rt.FinalAnswer}
 				return
 			}

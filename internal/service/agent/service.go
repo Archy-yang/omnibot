@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // AgentServiceConfig 配置 Agent 服务。
@@ -15,6 +16,13 @@ type AgentServiceConfig struct {
 	// Hooks 可插拔执行链(熔断/强制汇总等)。子 Agent 应装配[熔断+强制汇总];
 	// 主 Agent 可不传(纯推理)或按需装配。nil=无机制(纯 ReAct 推理)。
 	Hooks []RoundHook
+	// DelegationPlanner 结构化派活规划器(方向 B)。仅主 Agent 装配;子 Agent 传 nil(不规划)。
+	// 装配后,runStream 在进 ReAct 循环前先跑规划 -> 机械建后台任务 -> 注入上下文 + 种子 task_id。
+	DelegationPlanner *DelegationPlanner
+	// Timeout ReAct 循环的总超时(透传进 ReActAgentConfig.Timeout)。<=0 时 ReActAgent
+	// 回落 DefaultTimeout(120s)。子 Agent 必须把 card.Timeout 传进来,否则内层循环用 120s
+	// 强行截胡 executeTask 外层 ctx 更长的 deadline(见 51/52 超时 bug)。主 Agent 可不设(120s)。
+	Timeout time.Duration
 }
 
 // AgentService 封装 ReActAgent,供 API 层调用。
@@ -29,6 +37,8 @@ type AgentService struct {
 	maxSteps            int
 	systemPrompt        string
 	hooks               []RoundHook
+	delegationPlanner   *DelegationPlanner
+	timeout             time.Duration
 }
 
 // NewAgentService 创建 Agent 服务。
@@ -40,6 +50,8 @@ func NewAgentService(config AgentServiceConfig) *AgentService {
 		maxSteps:            config.MaxSteps,
 		systemPrompt:        config.SystemPrompt,
 		hooks:               config.Hooks,
+		delegationPlanner:   config.DelegationPlanner,
+		timeout:             config.Timeout,
 	}
 }
 
@@ -161,19 +173,77 @@ func (s *AgentService) RunStream(
 }
 
 // runStreamWithClient 是 Run / RunStream 共享的内部入口:构造 ReActAgent 并启动流式执行。
+// 主 Agent(装配了 DelegationPlanner)在进循环前先跑结构化规划(方向 B):
+// 机械建后台任务 + 把"已创建哪些任务"注入上下文 + 把预建 task_id 种子进 Runtime。
+// 规划那次 LLM 调用是循环外的独立同步调用,不会自然进事件流——前插一个 LLMCall 步骤,
+// 使同步/流式 handler 都能把"规划决策"落进 agent_steps(复盘可见)。
 func (s *AgentService) runStreamWithClient(
 	ctx context.Context,
 	userID int64,
 	conversation []map[string]interface{},
 	streamClient StreamingLLMClient,
 ) (<-chan AgentEvent, error) {
-	agent := NewReActAgent(ReActAgentConfig{
+	if streamClient == nil {
+		return nil, fmt.Errorf("agent: streaming LLM client not configured")
+	}
+	cfg := ReActAgentConfig{
 		LLMClient:          s.defaultLLMClient, // 占位,流式路径不会调用同步接口
 		StreamingLLMClient: streamClient,
 		ToolRegistry:       s.toolRegistry,
 		MaxSteps:           s.maxSteps,
 		SystemPrompt:       s.systemPrompt,
+		Timeout:            s.timeout, // 透传(P0):子 Agent 的 card.Timeout 才能真正约束循环
 		Hooks:              s.hooks,
-	})
-	return agent.RunStream(withUserID(ctx, userID), conversation)
+	}
+	var preEvents []AgentEvent
+	if s.delegationPlanner != nil {
+		userMsg := lastUserMessage(conversation)
+		if userMsg != "" {
+			ids, injected, planStep, _ := s.delegationPlanner.PlanAndExecute(ctx, userID, userMsg)
+			// 记录规划这次调用为 agent_steps 的 llm_call(成功/失败都记,复盘可见规划决策)。
+			if planStep != nil {
+				preEvents = append(preEvents, AgentEvent{
+					Type:           AgentEventLLMCall,
+					LLMRequest:     planStep.Request,
+					LLMResponse:    planStep.Response,
+					StepStatus:     planStep.Status,
+					StepDurationMs: planStep.DurationMs,
+				})
+			}
+			// 注入"已创建任务"上下文:告诉主 Agent 这些任务确实建好了(grounding,防幻觉派活)。
+			if injected != "" {
+				conversation = append([]map[string]interface{}{
+					{"role": "system", "content": injected},
+				}, conversation...)
+			}
+			// 预建 task_id 种子进 Runtime.DelegateTaskIDs,回复末尾拼接"任务ID: xxx"。
+			cfg.PreCreatedTaskIDs = ids
+		}
+	}
+	agent := NewReActAgent(cfg)
+	child, err := agent.RunStream(withUserID(ctx, userID), conversation)
+	if err != nil {
+		return nil, err
+	}
+	if len(preEvents) == 0 {
+		return child, nil
+	}
+	return prependEvents(preEvents, child), nil
+}
+
+// prependEvents 把 preEvents 作为前缀插入 child 事件流,再原样转发 child 后续事件。
+// 用于把 ReAct 循环外的独立 LLM 调用(如结构化规划)记录为步骤,保持"同步/流式记录单一来源"。
+// 转发顺序与原始通道一致;child 关闭后本通道才关闭,消费方 range 语义不变。
+func prependEvents(preEvents []AgentEvent, child <-chan AgentEvent) <-chan AgentEvent {
+	out := make(chan AgentEvent, len(preEvents)+16)
+	go func() {
+		defer close(out)
+		for _, e := range preEvents {
+			out <- e
+		}
+		for e := range child {
+			out <- e
+		}
+	}()
+	return out
 }

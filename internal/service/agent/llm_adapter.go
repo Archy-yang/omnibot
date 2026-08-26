@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"omnibot/pkg/logger"
@@ -16,25 +18,57 @@ import (
 	"go.uber.org/zap"
 )
 
+// 分层超时模型。原来用 http.Client.Timeout 一刀切:流式场景下只要累计时长超限就被掐死,
+// 即使模型在持续流式吐 token(deepseek 推理模式思考久)也会中招(见 task 51/52 单请求 60s 超时)。
+// 改为:
+//   - 连接(TCP+TLS): net.Dialer.Timeout / TLSHandshakeTimeout
+//   - TTFB(等首个响应头): ResponseHeaderTimeout
+//   - 读空闲(流式): 每次读到一行就重置 deadline(http.NewResponseController.SetReadDeadline),
+//     持续输出不掐,静默超界才报错;同步路径则作为整体读超时(一次性 SetReadDeadline)。
+//
+// 整体任务时长由上层循环/executeTask ctx(如 card.Timeout)约束,本层不再设总超时。
+const (
+	llmConnectTimeout = 15 * time.Second
+	llmTTFBTimeout    = 30 * time.Second
+)
+
+// newLLMTransport 构建分层超时的 HTTP 传输,不做整体请求总超时。
+func newLLMTransport() *http.Transport {
+	dialer := &net.Dialer{Timeout: llmConnectTimeout, KeepAlive: 30 * time.Second}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		TLSHandshakeTimeout:   llmConnectTimeout,
+		ResponseHeaderTimeout: llmTTFBTimeout,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   8,
+	}
+}
+
 // OpenAILLMClient 基于 OpenAI 协议的 LLM 客户端
 // 直接构造 HTTP 请求以支持 tools 参数
 type OpenAILLMClient struct {
-	apiKey  string
-	baseURL string
-	model   string
-	client  *http.Client
+	apiKey   string
+	baseURL  string
+	model    string
+	client   *http.Client  // 传输层配 connect/TTFB,无整体总超时
+	deadline time.Duration // 语义:同步=整体读超时;流式=读空闲超时(每次读到一行重置)
 }
 
-// NewOpenAILLMClient 创建 Agent 专用 LLM 客户端
+// NewOpenAILLMClient 创建 Agent 专用 LLM 客户端。
+// timeout 语义:同步 ChatCompletion 作为整体读超时;流式 ChatCompletionStream 作为读空闲超时
+// (两次内容行之间的最大间隔,持续输出不掐)。<=0 表示不设读 deadline(靠上层 ctx 兜底)。
 func NewOpenAILLMClient(apiKey, baseURL, model string, timeout time.Duration) *OpenAILLMClient {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
 	return &OpenAILLMClient{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		model:   model,
-		client:  &http.Client{Timeout: timeout},
+		apiKey:   apiKey,
+		baseURL:  baseURL,
+		model:    model,
+		client:   &http.Client{Transport: newLLMTransport()},
+		deadline: timeout,
 	}
 }
 
@@ -108,6 +142,14 @@ func (c *OpenAILLMClient) ChatCompletion(ctx context.Context, messages []map[str
 	}
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 
+	// 同步语义:整体超时——把 deadline 挂到 ctx,http.Client 随 ctx 取消中断整个请求
+	// (替代原来 http.Client.Timeout 的一刀切;流式走读空闲超时见 ChatCompletionStream)。
+	if c.deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.deadline)
+		defer cancel()
+	}
+
 	for attempt := 0; ; attempt++ {
 		content, toolCalls, status, callErr := c.chatCompletionOnce(ctx, url, jsonBody)
 		if callErr == nil {
@@ -150,7 +192,21 @@ func (c *OpenAILLMClient) chatCompletionOnce(ctx context.Context, url string, js
 		return "", nil, resp.StatusCode, fmt.Errorf("no choices in response")
 	}
 	choice := agentResp.Choices[0]
-	return choice.Message.Content, choice.Message.ToolCalls, resp.StatusCode, nil
+	content := choice.Message.Content
+	toolCalls := choice.Message.ToolCalls
+	// DSML 兜底:deepseek 把工具调用写进 message.content(<agent_tool_calls>)时,解析回结构化
+	// tool_call,避免 DSML 草稿被当作最终回答。非流式同样可能漂移(见 parseDSML)。
+	if dsmlTools, clean := parseDSML(content); len(dsmlTools) > 0 {
+		content = clean
+		for i := range dsmlTools {
+			t := dsmlTools[i]
+			toolCalls = append(toolCalls, map[string]interface{}{
+				"id": t.ID, "type": "function",
+				"function": map[string]interface{}{"name": t.Name, "arguments": t.ArgumentsDelta},
+			})
+		}
+	}
+	return content, toolCalls, resp.StatusCode, nil
 }
 
 // streamingChunk 对应 OpenAI SSE 流中一行 `data: {...}` 的 JSON 结构。
@@ -239,11 +295,23 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 		defer close(out)
 		defer resp.Body.Close()
 
+		// 流式读空闲超时:http.Client 无客户端侧 per-read deadline 标准 API,用"活动看门狗"近似:
+		// 每个 Read 成功刷新活动时间,看门狗周期检查,静默超过 deadline 则 Close body 中断阻塞读,
+		// 让"持续输出的长推理流"不被掐,只有真正静默超界才报错。
+		var watchdog *idleWatchdogBody
+		if c.deadline > 0 {
+			watchdog = newIdleWatchdogBody(resp.Body, c.deadline)
+			resp.Body = watchdog
+		}
+
 		scanner := bufio.NewScanner(resp.Body)
 		// SSE 单行可能很长（OpenAI tool_call arguments 不分片时可能上千字节），把缓冲调大
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-		for scanner.Scan() {
+		for {
+			if !scanner.Scan() {
+				break
+			}
 			select {
 			case <-ctx.Done():
 				out <- LLMStreamChunk{Error: ctx.Err()}
@@ -280,7 +348,16 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 			choice := chunk.Choices[0]
 
 			if choice.Delta.Content != "" {
-				out <- LLMStreamChunk{ContentDelta: choice.Delta.Content}
+				// DSML 兜底:deepseek 把工具调用(<agent_tool_calls>)写进 delta.content 时,
+				// 解析回结构化 ToolCallDelta(循环会真正执行),并把 DSML 从 content 剥离,避免当散文泄漏。
+				dsmlTools, clean := parseDSML(choice.Delta.Content)
+				for i := range dsmlTools {
+					tc := dsmlTools[i]
+					out <- LLMStreamChunk{ToolCallDelta: &tc}
+				}
+				if clean != "" {
+					out <- LLMStreamChunk{ContentDelta: clean}
+				}
 			}
 			if choice.Delta.ReasoningContent != "" {
 				out <- LLMStreamChunk{ReasoningDelta: choice.Delta.ReasoningContent}
@@ -301,9 +378,88 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 		}
 
 		if err := scanner.Err(); err != nil {
-			out <- LLMStreamChunk{Error: fmt.Errorf("read SSE stream: %w", err)}
+			if watchdog != nil && watchdog.Fired() {
+				// 看门狗已触发(静默超界)——报读空闲超时,而非底层的连接重置/关闭错误。
+				out <- LLMStreamChunk{Error: fmt.Errorf("read SSE stream: idle timeout after %s", c.deadline)}
+			} else {
+				out <- LLMStreamChunk{Error: fmt.Errorf("read SSE stream: %w", err)}
+			}
 		}
 	}()
 
 	return out, nil
+}
+
+// idleWatchdogBody 包装响应体,实现客户端侧"读空闲超时"。http.Client 没有暴露客户端读 deadline,
+// 这里用活动看门狗:每个 Read 成功刷新 lastActivity;看门狗周期检查,静默超过 idle 则 Close 底层
+// body(使阻塞中的 Read 返回),从而中断静默的流。持续输出的流(两次数据间隔 < idle)永不触发。
+type idleWatchdogBody struct {
+	io.ReadCloser
+	idle      time.Duration
+	mu        sync.Mutex
+	last      time.Time
+	fired     bool
+	stopCh    chan struct{}
+	closeOnce sync.Once
+}
+
+func newIdleWatchdogBody(rc io.ReadCloser, idle time.Duration) *idleWatchdogBody {
+	b := &idleWatchdogBody{ReadCloser: rc, idle: idle, stopCh: make(chan struct{})}
+	b.mu.Lock()
+	b.last = time.Now()
+	b.mu.Unlock()
+	go b.watch()
+	return b
+}
+
+func (b *idleWatchdogBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.mu.Lock()
+		b.last = time.Now()
+		b.mu.Unlock()
+	}
+	return n, err
+}
+
+// watch 周期检查活动时间,静默超过 idle 则标记 fired 并 Close body 中断读。
+func (b *idleWatchdogBody) watch() {
+	if b.idle <= 0 {
+		return
+	}
+	interval := b.idle / 4
+	if interval < 20*time.Millisecond {
+		interval = 20 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-b.stopCh:
+			return
+		case <-ticker.C:
+			b.mu.Lock()
+			expired := time.Since(b.last) > b.idle
+			b.mu.Unlock()
+			if expired {
+				b.mu.Lock()
+				b.fired = true
+				b.mu.Unlock()
+				_ = b.Close()
+				return
+			}
+		}
+	}
+}
+
+func (b *idleWatchdogBody) Close() error {
+	b.closeOnce.Do(func() { close(b.stopCh) })
+	return b.ReadCloser.Close()
+}
+
+// Fired 报告看门狗是否已因空闲超时触发(用于区分"读超时"与普通连接错误)。
+func (b *idleWatchdogBody) Fired() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fired
 }

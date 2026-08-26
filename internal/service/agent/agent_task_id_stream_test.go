@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestReActAgent_RunStream_AppendsTaskIDToFinal 调了 delegate 后,
-// 回复末尾应拼接"任务ID: 43"(程序追加,LLM 写不了)。
-func TestReActAgent_RunStream_AppendsTaskIDToFinal(t *testing.T) {
+// TestReActAgent_RunStream_EmitsTaskCreatedEvent 调了 delegate 后:
+// 应 emit 独立的 AgentEventTaskCreated(携带 task_id),而 Final 回复文本不再拼接"任务ID"。
+func TestReActAgent_RunStream_EmitsTaskCreatedEvent(t *testing.T) {
 	llm := &mockStreamingLLMClient{
 		rounds: [][]LLMStreamChunk{
 			// 第一轮:调 delegate
@@ -21,7 +21,7 @@ func TestReActAgent_RunStream_AppendsTaskIDToFinal(t *testing.T) {
 				{FinishReason: "tool_calls"},
 				{Done: true},
 			},
-			// 第二轮:纯文本回复"已经安排研究员去查了"
+			// 第二轮:纯文本回复
 			{
 				{ContentDelta: "已经安排研究员去查高铁票了"},
 				{FinishReason: "stop"},
@@ -54,22 +54,28 @@ func TestReActAgent_RunStream_AppendsTaskIDToFinal(t *testing.T) {
 	events := drainEvents(t, ch)
 
 	var finalContent string
+	var created []int64
 	for _, e := range events {
-		if e.Type == AgentEventFinal {
+		switch e.Type {
+		case AgentEventFinal:
 			finalContent = e.Content
+		case AgentEventTaskCreated:
+			created = e.TaskIDs
 		}
 	}
 	require.NotEmpty(t, finalContent)
 	assert.Contains(t, finalContent, "已经安排研究员去查高铁票了")
-	assert.Contains(t, finalContent, "任务ID: 43", "调了 delegate,末尾应拼接任务标识")
+	assert.NotContains(t, finalContent, "任务ID", "任务ID 不应再拼进回复文本(独立事件下发)")
+	require.Len(t, created, 1, "调了 delegate 应 emit TaskCreated 事件")
+	assert.Equal(t, int64(43), created[0])
 }
 
-// TestReActAgent_RunStream_NoTaskIDWhenNoDelegate 没调 delegate(直接回复),
-// 末尾不应有"任务ID"(幻觉派活时无标识,暴露"说了但没派")。
-func TestReActAgent_RunStream_NoTaskIDWhenNoDelegate(t *testing.T) {
+// TestReActAgent_RunStream_NoTaskCreatedWhenNoDelegate 没调 delegate(直接回复):
+// 不应 emit TaskCreated 事件,回复文本也不含"任务ID"。
+func TestReActAgent_RunStream_NoTaskCreatedWhenNoDelegate(t *testing.T) {
 	llm := &mockStreamingLLMClient{
 		rounds: [][]LLMStreamChunk{
-			// 直接回复(无 tool_call,模拟幻觉派活)
+			// 直接回复(无 tool_call)
 			{
 				{ContentDelta: "已经安排研究员去查高铁票了"},
 				{FinishReason: "stop"},
@@ -78,14 +84,6 @@ func TestReActAgent_RunStream_NoTaskIDWhenNoDelegate(t *testing.T) {
 		},
 	}
 	registry := NewToolRegistry()
-	registry.Register(Tool{
-		Name:        "delegate",
-		Description: "派活",
-		Parameters:  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
-		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			return `{"task_id": 43}`, nil
-		},
-	})
 	agent := NewReActAgent(ReActAgentConfig{
 		LLMClient:          &noopSyncLLM{},
 		StreamingLLMClient: llm,
@@ -102,12 +100,17 @@ func TestReActAgent_RunStream_NoTaskIDWhenNoDelegate(t *testing.T) {
 	events := drainEvents(t, ch)
 
 	var finalContent string
+	var sawTaskCreated bool
 	for _, e := range events {
 		if e.Type == AgentEventFinal {
 			finalContent = e.Content
 		}
+		if e.Type == AgentEventTaskCreated {
+			sawTaskCreated = true
+		}
 	}
 	require.NotEmpty(t, finalContent)
 	assert.Contains(t, finalContent, "已经安排研究员去查高铁票了")
-	assert.NotContains(t, finalContent, "任务ID", "没调 delegate,末尾不应有任务标识(幻觉暴露)")
+	assert.NotContains(t, finalContent, "任务ID")
+	assert.False(t, sawTaskCreated, "没调 delegate 不应 emit TaskCreated 事件")
 }

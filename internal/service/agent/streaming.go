@@ -14,9 +14,9 @@ type LLMStreamChunk struct {
 	ContentDelta   string         // 文本 token 增量
 	ReasoningDelta string         // deepseek 思考模式:思考过程增量(千帆要求多轮回传)
 	ToolCallDelta  *ToolCallDelta // 工具调用增量（指针：nil 表示本 chunk 不是工具增量）
-	FinishReason  string         // "stop" / "tool_calls" / "length" 等
-	Done          bool           // true 表示 [DONE] 信号，channel 即将关闭
-	Error         error          // 解析或网络错误，发生即终止流
+	FinishReason   string         // "stop" / "tool_calls" / "length" 等
+	Done           bool           // true 表示 [DONE] 信号，channel 即将关闭
+	Error          error          // 解析或网络错误，发生即终止流
 }
 
 // ToolCallDelta 是单次 tool_call 的增量。一次完整的 tool_call 通常跨多个 chunk：
@@ -84,6 +84,12 @@ const (
 	// 前端把该轮文本迁移到思考块--简单问题(单轮回复)无 Thought,主气泡零跳动。
 	AgentEventThought AgentEventType = "thought"
 
+	// AgentEventTaskCreated：本轮派活创建的后台 task_id 列表(方向 B 独立下发)。
+	// 不拼进回复文本(避免重复/污染历史/被模型模仿),作为独立 SSE 事件发给前端,
+	// 前端据此渲染可点击的任务卡片(点击用 task_id 查 /api/v1/agent/tasks/:id/steps 看执行步骤)。
+	// 仅在回复轮前、且有 delegate/规划器创建的 task 时发出。
+	AgentEventTaskCreated AgentEventType = "task_created"
+
 	// AgentEventDone：整个 ReAct 循环结束的终止信号(在 Final 之后发出)。Content 字段
 	// 携带兜底文案,仅在消费方未收到 Final 时作兜底用。
 	AgentEventDone AgentEventType = "done"
@@ -119,5 +125,7 @@ type AgentEvent struct {
 	// LLM 调用步骤专用（v1.5.5）
 	LLMRequest  string // 该轮发出的 messages JSON 快照
 	LLMResponse string // 模型回复 {content, tool_calls} JSON
-	Error       error
+	// TaskIDs 本轮派活创建的后台 task_id 列表（AgentEventTaskCreated 事件用）。
+	TaskIDs []int64
+	Error   error
 }

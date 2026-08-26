@@ -2,8 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 )
 
 // parseDelegateTaskID 从 delegate 工具返回的 JSON 提取 task_id。
@@ -24,27 +22,4 @@ func parseDelegateTaskID(toolResult string) int64 {
 		return v
 	}
 	return 0
-}
-
-// appendTaskIDs 在回复末尾追加任务标识。无 task_id 原样返回(不拼接)。
-// 格式:
-//
-//	<回复正文>
-//
-//	---
-//	任务ID: 43
-//
-// 多个 task:
-//
-//	---
-//	任务ID: 43, 44
-func appendTaskIDs(content string, taskIDs []int64) string {
-	if len(taskIDs) == 0 {
-		return content
-	}
-	parts := make([]string, 0, len(taskIDs))
-	for _, id := range taskIDs {
-		parts = append(parts, fmt.Sprintf("%d", id))
-	}
-	return content + "\n\n---\n任务ID: " + strings.Join(parts, ", ")
 }

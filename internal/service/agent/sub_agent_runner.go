@@ -111,6 +111,9 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 		MaxSteps:           maxSteps,
 		SystemPrompt:       systemPrompt,
 		Hooks:              hooks,
+		// P0:card.Timeout(如 180s)必须透传进 ReActAgent,否则内层循环用 DefaultTimeout 120s
+		// 强行截胡 executeTask 外层 ctx 的更长超时(见 51/52 超时 bug)。
+		Timeout: timeout,
 	})
 
 	// 5. 子 Agent 独立上下文:只有 system(已含任务合同)+ 一条 user 触发(= goal)。
