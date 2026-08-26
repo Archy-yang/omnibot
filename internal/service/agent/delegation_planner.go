@@ -50,6 +50,9 @@ func NewDelegationPlanner(client LLMClient, starter DelegationTaskStarter, regis
 	return &DelegationPlanner{client: client, starter: starter, registry: registry}
 }
 
+// Client 返回构造函数传入的默认 client。调用方在 PlanAndExecute 未传活跃 client 时用作回退。
+func (p *DelegationPlanner) Client() LLMClient { return p.client }
+
 // PlanAndExecute 一次完整规划:
 //  1. 调规划 LLM -> 拿 plan_delegation 计划(结构化 JSON,可能空)
 //  2. 机械执行计划:逐个 StartTask 建任务,收集真实 task_id
@@ -63,13 +66,19 @@ func NewDelegationPlanner(client LLMClient, starter DelegationTaskStarter, regis
 //     规划调用失败也返回 planStep(status=error),复盘可见规划决策。nil 仅在调用方无法构造时。
 //   - err:仅调用方无法构造 planStep 等系统错误才返回非 nil;规划返回空/解析失败均优雅降级,
 //     以返回值表达(0 任务 + 空上下文),不报错。
-func (p *DelegationPlanner) PlanAndExecute(ctx context.Context, userID int64, userMessage string) (taskIDs []int64, injectedContext string, planStep *StepRecord, err error) {
+func (p *DelegationPlanner) PlanAndExecute(ctx context.Context, userID int64, userMessage string, client ...LLMClient) (taskIDs []int64, injectedContext string, planStep *StepRecord, err error) {
+	// 优先用传入的活跃 client(用户自定义/循环同款),而不是构造函数焊死的默认 client——
+	// 否则用户自定义 key 时,系统默认 provider(可能空 key)会让规划调用必然失败(见 agent_steps 1337)。
+	c := p.client
+	if len(client) > 0 && client[0] != nil {
+		c = client[0]
+	}
 	messages := []map[string]interface{}{
 		{"role": "system", "content": delegationPlannerPrompt(p.availableSubAgents())},
 		{"role": "user", "content": userMessage},
 	}
 	start := time.Now()
-	plan, toolCalls, callErr := p.callPlanner(ctx, messages)
+	plan, toolCalls, callErr := p.callPlanner(ctx, messages, c)
 	planStep = &StepRecord{
 		Kind:       StepKindLLMCall,
 		DurationMs: time.Since(start).Milliseconds(),
@@ -116,8 +125,8 @@ func (p *DelegationPlanner) PlanAndExecute(ctx context.Context, userID int64, us
 // callPlanner 调规划 LLM,要求其调用 plan_delegation 工具输出结构化计划。
 // 返回原始 tool_calls(供记录到 planStep.Response)。
 // 无 tool_call / 非 plan_delegation / 参数非法时一律回落空计划(0 任务,不报错)。
-func (p *DelegationPlanner) callPlanner(ctx context.Context, messages []map[string]interface{}) (*DelegatePlan, []map[string]interface{}, error) {
-	_, toolCalls, err := p.client.ChatCompletion(ctx, messages, []map[string]interface{}{planningToolSchema})
+func (p *DelegationPlanner) callPlanner(ctx context.Context, messages []map[string]interface{}, c LLMClient) (*DelegatePlan, []map[string]interface{}, error) {
+	_, toolCalls, err := c.ChatCompletion(ctx, messages, []map[string]interface{}{planningToolSchema})
 	if err != nil {
 		return nil, nil, err
 	}

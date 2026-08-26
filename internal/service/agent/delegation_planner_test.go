@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -15,11 +16,16 @@ import (
 
 // mockPlannerClient 模拟规划调用的同步 LLM:直接返回预设的 tool_calls(OpenAI 风格)。
 // 规划器只消费 plan_delegation 这个 tool_call,无需文本。
+// err 非 nil 时模拟"调用失败"(如默认 provider 空 key),用于验证"传入的活跃 client 覆盖默认"。
 type mockPlannerClient struct {
 	toolCalls []map[string]interface{}
+	err       error
 }
 
 func (m *mockPlannerClient) ChatCompletion(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}) (string, []map[string]interface{}, error) {
+	if m.err != nil {
+		return "", nil, m.err
+	}
 	return "", m.toolCalls, nil
 }
 
@@ -60,6 +66,28 @@ func newTestPlanner(client LLMClient, starter DelegationTaskStarter) *Delegation
 		PromptTemplate: "你是一名研究员。目标:{goal}。", Tools: []string{"web_read"},
 	})
 	return NewDelegationPlanner(client, starter, reg)
+}
+
+// TestDelegationPlanner_PlanAndExecute_UsesProvidedClient P0 bug 回归(agent_steps 1337):
+// 规划必须用**传入的活跃 client**(用户自定义/循环同款),而非构造函数里焊死的默认 client。
+// 若默认 provider 空 key(系统默认 openai),焊死默认会让规划调用必然失败;传入用户自定义时应能成功建任务。
+func TestDelegationPlanner_PlanAndExecute_UsesProvidedClient(t *testing.T) {
+	broken := &mockPlannerClient{err: fmt.Errorf("You didn't provide an API key")} // 模拟空 key 的默认 provider
+	starter := &mockTaskStarter{}
+	reg := NewSubAgentRegistry()
+	reg.Register(domainagent.SubAgentCard{Type: "researcher", Name: "研究员", Description: "研究"})
+	planner := NewDelegationPlanner(broken, starter, reg)
+
+	// 传入的活跃 client(用户自定义)正常返回计划 -> 应成功建任务(而非用坏的默认 client 退化)。
+	good := &mockPlannerClient{toolCalls: makePlanToolCall(
+		`[{"sub_agent_type":"researcher","goal":"查高铁"}]`)}
+	ids, injected, planStep, err := planner.PlanAndExecute(context.Background(), 1, "帮我查高铁票", good)
+	require.NoError(t, err)
+	require.Len(t, ids, 1, "传入的活跃 client 应被使用,任务应被创建")
+	assert.Equal(t, "查高铁", starter.calls[0].Goal)
+	assert.NotEmpty(t, injected)
+	require.NotNil(t, planStep)
+	assert.Equal(t, StepStatusSuccess, planStep.Status, "用传入 client 规划成功,步骤非 error")
 }
 
 // TestDelegationPlanner_PlansAndExecutes 研究类请求:规划返回 1 任务 -> 机械建 1 task,

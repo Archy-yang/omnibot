@@ -199,7 +199,13 @@ func (s *AgentService) runStreamWithClient(
 	if s.delegationPlanner != nil {
 		userMsg := lastUserMessage(conversation)
 		if userMsg != "" {
-			ids, injected, planStep, _ := s.delegationPlanner.PlanAndExecute(ctx, userID, userMsg)
+			// P0:规划器用当前活跃的 LLM 客户端(优先用户自定义/循环同款),而非焊死默认——
+			// 否则用户自定义 key 时,系统默认 provider(空 key)会让规划调用必然失败(见 agent_steps 1337)。
+			planClient := s.delegationPlanner.Client()
+			if sc, ok := streamClient.(LLMClient); ok {
+				planClient = sc
+			}
+			ids, injected, planStep, _ := s.delegationPlanner.PlanAndExecute(ctx, userID, userMsg, planClient)
 			// 记录规划这次调用为 agent_steps 的 llm_call(成功/失败都记,复盘可见规划决策)。
 			if planStep != nil {
 				preEvents = append(preEvents, AgentEvent{
