@@ -3,9 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	agentprompt "omnibot/internal/agentprompt"
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
 )
@@ -65,9 +65,10 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 		}
 	}
 
-	// 2. 填充 PromptTemplate 的 {goal} + 注入任务包详情(deliverables/criteria/constraints)
-	//    让子 Agent 明确"做到什么程度算完",缓解循环不收敛(见 10-规划 §2.1)。
-	systemPrompt := buildSubAgentPrompt(card.PromptTemplate, taskSpec)
+	// 2. 经 agentprompt.PromptRegistry 组装子 Agent system prompt(11-Prompt管理 §5.2):填充 {goal} +
+	//    注入任务包详情(deliverables/criteria/constraints),让子 Agent 明确"做到什么程度算完",
+	//    缓解循环不收敛(见 10-规划 §2.1)。静态 section 组装不可能失败,故忽略 error。
+	systemPrompt, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.SubScope(card.Type), card.PromptTemplate, taskSpec)
 
 	// 3. 选 LLM(方案3):优先用户配置,无则系统默认
 	syncClient := r.defaultSyncClient
@@ -178,50 +179,3 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 	return finalContent, nil
 }
 
-// buildSubAgentPrompt 填充 PromptTemplate 的 {goal} + 注入任务包详情。
-// taskSpec 含 deliverables/completion_criteria/constraints 时,追加结构化段让子 Agent
-// 明确"必须交付什么/什么情况算完/有何约束",缓解循环不收敛。
-// 仅 goal(无详情)时,等价于原 ReplaceAll({goal}),兼容老路径。
-func buildSubAgentPrompt(template string, spec domainagent.TaskSpec) string {
-	prompt := strings.ReplaceAll(template, "{goal}", spec.Goal)
-	if !spec.HasDetail() {
-		return prompt
-	}
-
-	var b strings.Builder
-	b.WriteString(prompt)
-	b.WriteString("\n\n== 任务合同(必须遵守)==\n")
-
-	if len(spec.Deliverables) > 0 {
-		b.WriteString("\n【必须交付】\n")
-		for i, d := range spec.Deliverables {
-			b.WriteString(fmt.Sprintf("%d. %s: %s\n", i+1, d.Name, d.Description))
-		}
-	}
-	if len(spec.CompletionCriteria) > 0 {
-		b.WriteString("\n【完成标准(全部满足才算完成,达成后立即产出报告,不要继续检索)】\n")
-		for i, c := range spec.CompletionCriteria {
-			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, c))
-		}
-	}
-	if len(spec.Background) > 0 {
-		b.WriteString("\n【背景】\n")
-		for k, v := range spec.Background {
-			b.WriteString(fmt.Sprintf("- %s: %v\n", k, v))
-		}
-	}
-	if spec.Constraints != nil {
-		b.WriteString("\n【约束】\n")
-		if spec.Constraints.MaxSteps > 0 {
-			b.WriteString(fmt.Sprintf("- 最大步数: %d\n", spec.Constraints.MaxSteps))
-		}
-		if spec.Constraints.MaxToolCalls > 0 {
-			b.WriteString(fmt.Sprintf("- 最大工具调用次数: %d\n", spec.Constraints.MaxToolCalls))
-		}
-		if !spec.Constraints.Deadline.IsZero() {
-			b.WriteString(fmt.Sprintf("- 截止时间: %s\n", spec.Constraints.Deadline.Format("2006-01-02 15:04")))
-		}
-	}
-	b.WriteString("\n注意:满足完成标准后必须立即产出报告,不要继续无意义检索。")
-	return b.String()
-}

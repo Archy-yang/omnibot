@@ -16,6 +16,7 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	agentprompt "omnibot/internal/agentprompt"
 	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
@@ -207,13 +208,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
 	agentToolRegistry.Register(agentpkg.CreateCancelTaskTool(subAgentSvc))
 
-	// 主 Agent 服务:system prompt 含 delegate 派活 + 汇报引导(08 §4.4),toolRegistry 含 delegate
+	// 主 Agent 服务:system prompt 由 PromptRegistry 组装(11-Prompt管理),toolRegistry 含 delegate
 	// 派活只走循环内的 delegate 工具一条抽象框架路径:任务在循环内创建,task_id 由框架解析。
+	// 静态 section 组装不可能失败,故忽略 error。
+	agentMainPrompt, _ := agentprompt.BuildMainAgentSystemPrompt(true)
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
 		LLMClient:          agentLLMClient,
 		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
 		ToolRegistry:       agentToolRegistry,
-		SystemPrompt:       agentpkg.MainAgentSystemPrompt(true),
+		SystemPrompt:       agentMainPrompt,
 		// 主 Agent 同样装配执行链:熔断(工具连失败抑制)+ 强制汇总(MaxSteps 兜底出报告,不吐废话)。
 		Hooks: []agentpkg.RoundHook{
 			agentpkg.NewCircuitBreakerHook(agentpkg.ToolFailureThreshold),

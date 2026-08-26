@@ -6,12 +6,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	agentprompt "omnibot/internal/agentprompt"
 	domainagent "omnibot/internal/domain/agent"
 )
 
 // TestBuildSubAgentPrompt_GoalOnly 仅 goal(无详情)等价于 ReplaceAll({goal})。
 func TestBuildSubAgentPrompt_GoalOnly(t *testing.T) {
-	got := buildSubAgentPrompt("你是研究员。目标:{goal}", domainagent.NewTaskSpec("研究 X"))
+	got, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.SubScope("researcher"), "你是研究员。目标:{goal}", domainagent.NewTaskSpec("研究 X"))
 	assert.Contains(t, got, "研究 X")
 	assert.NotContains(t, got, "任务合同", "无详情不应注入任务合同段")
 }
@@ -28,7 +29,7 @@ func TestBuildSubAgentPrompt_WithDeliverables(t *testing.T) {
 		Background:         map[string]any{"project": "永久助理"},
 		Constraints:        &domainagent.Constraints{MaxSteps: 10},
 	}
-	got := buildSubAgentPrompt("你是研究员。目标:{goal}", spec)
+	got, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.SubScope("researcher"), "你是研究员。目标:{goal}", spec)
 
 	assert.Contains(t, got, "研究 Go 框架")
 	assert.Contains(t, got, "任务合同")
@@ -47,7 +48,7 @@ func TestBuildSubAgentPrompt_WithDeliverables(t *testing.T) {
 
 // TestBuildSubAgentPrompt_PromptWithoutGoalTag 模板无 {goal} 占位时,goal 不注入(防御)。
 func TestBuildSubAgentPrompt_PromptWithoutGoalTag(t *testing.T) {
-	got := buildSubAgentPrompt("你是研究员。", domainagent.NewTaskSpec("X"))
+	got, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.SubScope("researcher"), "你是研究员。", domainagent.NewTaskSpec("X"))
 	// 无 {goal} 占位,goal 不替换,但 prompt 原样返回
 	assert.Contains(t, got, "你是研究员")
 	assert.False(t, strings.Contains(got, "X"))
