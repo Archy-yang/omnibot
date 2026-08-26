@@ -208,9 +208,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentToolRegistry.Register(agentpkg.CreateCancelTaskTool(subAgentSvc))
 
 	// 主 Agent 服务:system prompt 含 delegate 派活 + 汇报引导(08 §4.4),toolRegistry 含 delegate
-	// 方向 B:装配结构化规划器。主 Agent 在回答前先跑专用规划调用 -> 框架机械建后台任务 ->
-	// 注入"已创建任务"上下文 + 种子 task_id 到回复末尾,消除"说了没派活"的幻觉派活。
-	agentPlanner := agentpkg.NewDelegationPlanner(agentLLMClient, subAgentSvc, subAgentRegistry)
+	// 派活只走循环内的 delegate 工具一条抽象框架路径:任务在循环内创建,task_id 由框架解析。
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
 		LLMClient:          agentLLMClient,
 		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
@@ -221,7 +219,6 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			agentpkg.NewCircuitBreakerHook(agentpkg.ToolFailureThreshold),
 			agentpkg.NewForceSummaryHook(agentLLMClient),
 		},
-		DelegationPlanner: agentPlanner,
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)

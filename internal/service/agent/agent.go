@@ -48,10 +48,6 @@ type ReActAgentConfig struct {
 	// Hooks 可插拔的执行链机制(熔断/强制汇总等)。nil/空=纯推理(无机制)。
 	// 主 Agent 可不传(纯推理),子 Agent 传 [CircuitBreakerHook, ForceSummaryHook]。
 	Hooks []RoundHook
-	// PreCreatedTaskIDs 循环开始前已由外部(结构化规划器)创建的后台任务 id。
-	// 种子进 Runtime.DelegateTaskIDs,回复末尾一并拼接(与循环内 delegate 创建的合并),
-	// 使"框架机械建出的任务"也有任务标识可校验(方向 B)。
-	PreCreatedTaskIDs []int64
 }
 
 // 默认值
@@ -131,7 +127,6 @@ type ReActAgent struct {
 	timeout           time.Duration
 	systemPrompt      string
 	hooks             []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
-	preCreatedTaskIDs []int64     // 外部规划器预建的任务 id(种子进 Runtime.DelegateTaskIDs)
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -153,7 +148,6 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		timeout:           config.Timeout,
 		systemPrompt:      config.SystemPrompt,
 		hooks:             config.Hooks,
-		preCreatedTaskIDs: config.PreCreatedTaskIDs,
 	}
 }
 
@@ -328,7 +322,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			Messages:        messages,
 			Tools:           tools,
 			FailStreak:      make(map[string]int),
-			DelegateTaskIDs: a.preCreatedTaskIDs, // 预建任务种子(方向 B),循环内 delegate 创建的会再 append
+			DelegateTaskIDs: nil, // 循环内 delegate 工具创建的任务 id(框架从工具返回解析,LLM 篡改不了)
 			Emit:            func(e AgentEvent) { out <- e },
 		}
 		hooks := newHookChain(a.hooks)
