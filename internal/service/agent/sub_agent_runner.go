@@ -48,7 +48,7 @@ func NewSubAgentRunner(
 		defaultSyncClient:   defaultSyncClient,
 		globalToolRegistry:  globalToolRegistry,
 		llmConfigProvider:   llmConfigProvider,
-		taskRepo:             taskRepo,
+		taskRepo:            taskRepo,
 	}
 }
 
@@ -94,10 +94,12 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 	// 用 AgentService 聚合 Run(内部 drain RunStream,产生 Records + FinalResponse)。
 	// 不能直接用 ReActAgent.Run(老路径不产生 Records,导致子 Agent 步骤落不了库)。
 	// 子 Agent 装配执行链 hook:熔断(抑制对失败工具的无限重试)+ 强制汇总(MaxSteps 兜底出报告)
+	// + 工具调用预算(总数达阈值移除所有工具,硬约束兜底 prompt 软约束"5来源上限",防超时)
 	// + notes 注入(running 态 update_task 追加的补充信息,子 Agent 下轮读到并入推理)。
 	hooks := []RoundHook{
 		NewCircuitBreakerHook(ToolFailureThreshold),
 		NewForceSummaryHook(streamClient),
+		NewToolBudgetHook(ToolCallBudget),
 	}
 	if r.taskRepo != nil {
 		hooks = append(hooks, NewNoteInjectionHook(taskID, r.taskRepo))
@@ -109,6 +111,9 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 		MaxSteps:           maxSteps,
 		SystemPrompt:       systemPrompt,
 		Hooks:              hooks,
+		// P0:card.Timeout(如 180s)必须透传进 ReActAgent,否则内层循环用 DefaultTimeout 120s
+		// 强行截胡 executeTask 外层 ctx 的更长超时(见 51/52 超时 bug)。
+		Timeout: timeout,
 	})
 
 	// 5. 子 Agent 独立上下文:只有 system(已含任务合同)+ 一条 user 触发(= goal)。

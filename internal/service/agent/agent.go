@@ -120,13 +120,13 @@ func MainAgentSystemPrompt(hasSubAgents bool) string {
 
 // ReActAgent ReAct 模式 Agent
 type ReActAgent struct {
-	llmClient       LLMClient
-	streamingClient StreamingLLMClient
-	toolRegistry    *ToolRegistry
-	maxSteps        int
-	timeout         time.Duration
-	systemPrompt    string
-	hooks           []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
+	llmClient         LLMClient
+	streamingClient   StreamingLLMClient
+	toolRegistry      *ToolRegistry
+	maxSteps          int
+	timeout           time.Duration
+	systemPrompt      string
+	hooks             []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -141,13 +141,13 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		config.SystemPrompt = defaultSystemPrompt
 	}
 	return &ReActAgent{
-		llmClient:       config.LLMClient,
-		streamingClient: config.StreamingLLMClient,
-		toolRegistry:    config.ToolRegistry,
-		maxSteps:        config.MaxSteps,
-		timeout:         config.Timeout,
-		systemPrompt:    config.SystemPrompt,
-		hooks:           config.Hooks,
+		llmClient:         config.LLMClient,
+		streamingClient:   config.StreamingLLMClient,
+		toolRegistry:      config.ToolRegistry,
+		maxSteps:          config.MaxSteps,
+		timeout:           config.Timeout,
+		systemPrompt:      config.SystemPrompt,
+		hooks:             config.Hooks,
 	}
 }
 
@@ -318,19 +318,26 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		// 运行时共享状态 + hook 链。熔断计数/强制汇总等机制通过 hook 介入循环,
 		// 循环本身保持纯推理(调 LLM -> 解析 -> 执行工具 -> 判断结束)。
 		rt := &Runtime{
-			Ctx:        ctx,
-			Messages:   messages,
-			Tools:      tools,
-			FailStreak: make(map[string]int),
-			Emit:       func(e AgentEvent) { out <- e },
+			Ctx:             ctx,
+			Messages:        messages,
+			Tools:           tools,
+			FailStreak:      make(map[string]int),
+			DelegateTaskIDs: nil, // 循环内 delegate 工具创建的任务 id(框架从工具返回解析,LLM 篡改不了)
+			Emit:            func(e AgentEvent) { out <- e },
 		}
 		hooks := newHookChain(a.hooks)
 
 		for stepNum := 1; stepNum <= a.maxSteps; stepNum++ {
 			select {
 			case <-ctx.Done():
-				out <- AgentEvent{Type: AgentEventFinal, Content: "处理超时，已返回当前结果。"}
-				out <- AgentEvent{Type: AgentEventDone, Content: "处理超时，已返回当前结果。"}
+				// P0:超时也走强制汇总(同 MaxSteps 兜底),基于已收集信息产出报告,
+				// 而非吐"处理超时"废话。无 hook 或汇总失败回落兜底文案。
+				summary := hooks.OnMaxExhausted(rt)
+				if summary == "" {
+					summary = "处理超时，已基于已收集信息返回当前结果。"
+				}
+				out <- AgentEvent{Type: AgentEventFinal, Content: summary}
+				out <- AgentEvent{Type: AgentEventDone, Content: summary}
 				return
 			default:
 			}
@@ -358,7 +365,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 本轮内累积：一段 LLM 响应可能是文本（emit token）或工具调用（按 index 累积 delta）。
 			var roundContent string
-			var roundReasoning string // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
+			var roundReasoning string                           // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
 			toolCallAccum := make(map[int]*toolCallAccumulator) // 按 index 索引
 
 			for chunk := range chunkCh {
@@ -412,6 +419,11 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					StepDurationMs: time.Since(roundStart).Milliseconds(),
 				}
 				rt.FinalAnswer += roundContent
+				// 任务标识作为独立事件下发(方向 B):不拼进回复文本(否则会重复/污染历史/被模型模仿),
+				// 由前端据此渲染可点击的任务卡片。task_id 来自 delegate/规划器真实创建,LLM 篡改不了。
+				if len(rt.DelegateTaskIDs) > 0 {
+					out <- AgentEvent{Type: AgentEventTaskCreated, TaskIDs: rt.DelegateTaskIDs}
+				}
 				// 思考模式 C5:回复轮(无 tool_call)发 Final,携带本轮完整文本(= 最终回复)。
 				// 消费方据此明确区分思考与回复,不靠位置推断。
 				out <- AgentEvent{Type: AgentEventFinal, Content: roundContent}
@@ -517,9 +529,18 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 							toolResult = result
 							status = StepStatusSuccess
 							rt.FailStreak[toolCall.Name] = 0 // 成功清零(偶尔失败不误熔断)
+							// delegate 成功:解析返回的 task_id 记录到 Runtime(供回复末尾拼接)。
+							// task_id 来自工具真实返回,LLM 篡改不了;回复末尾拼接此标识可校验。
+							if toolCall.Name == "delegate" {
+								if tid := parseDelegateTaskID(toolResult); tid > 0 {
+									rt.DelegateTaskIDs = append(rt.DelegateTaskIDs, tid)
+								}
+							}
 						}
 					}
 				}
+				// 工具调用计数(无论成功/失败/拦截,消耗一次预算)。ToolBudgetHook 据此达阈值移除工具。
+				rt.ToolCallCount++
 				durationMs := time.Since(execStart).Milliseconds()
 
 				out <- AgentEvent{

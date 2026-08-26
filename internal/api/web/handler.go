@@ -672,6 +672,12 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			data, _ := json.Marshal(map[string]string{"content": ev.Content})
 			fmt.Fprintf(c.Writer, "event: final\ndata: %s\n\n", data)
 			flusher.Flush()
+		case agentpkg.AgentEventTaskCreated:
+			// 方向 B:本轮派活创建的后台 task_id 列表,独立事件下发(不拼进回复文本)。
+			// 前端据此渲染可点击任务卡片,点击用 task_id 查 /api/v1/agent/tasks/:id/steps。
+			data, _ := json.Marshal(map[string]interface{}{"task_ids": ev.TaskIDs})
+			fmt.Fprintf(c.Writer, "event: task_created\ndata: %s\n\n", data)
+			flusher.Flush()
 		case agentpkg.AgentEventDone:
 			// Done 仅作终止信号;Content 在未收到 Final 时(LLM 失败等)作兜底。
 			doneFallback = ev.Content

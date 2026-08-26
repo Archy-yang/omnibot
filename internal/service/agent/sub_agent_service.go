@@ -38,10 +38,10 @@ type SubAgentService struct {
 	taskRepo     repoagent.AgentTaskRepository
 	registry     *SubAgentRegistry
 	runner       SubAgentRunner
-	stepRepo     chatrepo.AgentStepRepository     // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
-	artifactRepo repoagent.ArtifactRepository     // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
-	eventRepo    repoagent.TaskEventRepository    // 任务事件流落 agent_task_events(#22)
-	notifier     TaskNotifier                      // 任务完成主动推送(方案A:飞书主动消息)
+	stepRepo     chatrepo.AgentStepRepository  // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
+	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
+	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
+	notifier     TaskNotifier                  // 任务完成主动推送(方案A:飞书主动消息)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -64,15 +64,15 @@ func NewSubAgentService(
 	notifier TaskNotifier,
 ) *SubAgentService {
 	return &SubAgentService{
-		taskRepo:       taskRepo,
-		registry:       registry,
-		runner:         runner,
-		stepRepo:       stepRepo,
-		artifactRepo:   artifactRepo,
-		eventRepo:      eventRepo,
-		notifier:       notifier,
-		activeCancels:  make(map[int64]context.CancelFunc),
-		eventSeq:       make(map[int64]int),
+		taskRepo:      taskRepo,
+		registry:      registry,
+		runner:        runner,
+		stepRepo:      stepRepo,
+		artifactRepo:  artifactRepo,
+		eventRepo:     eventRepo,
+		notifier:      notifier,
+		activeCancels: make(map[int64]context.CancelFunc),
+		eventSeq:      make(map[int64]int),
 	}
 }
 
@@ -251,14 +251,14 @@ func (s *SubAgentService) GetTaskArtifact(taskID int64) (*domainagent.Artifact, 
 
 // TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:只给状态/goal 摘要/步骤数。
 type TaskSummary struct {
-	ID         int64   `json:"id"`
-	UserID     int64   `json:"-"`
-	SubAgent   string  `json:"sub_agent"`
-	Goal       string  `json:"goal"`
-	Status     string  `json:"status"`
-	StepCount  int     `json:"step_count"`
-	Reported   bool    `json:"reported"`
-	Artifact   *string `json:"artifact,omitempty"` // completed 时给摘要
+	ID        int64   `json:"id"`
+	UserID    int64   `json:"-"`
+	SubAgent  string  `json:"sub_agent"`
+	Goal      string  `json:"goal"`
+	Status    string  `json:"status"`
+	StepCount int     `json:"step_count"`
+	Reported  bool    `json:"reported"`
+	Artifact  *string `json:"artifact,omitempty"` // completed 时给摘要
 }
 
 // QueryTask 查单个任务概要。属主校验:只能查自己的任务。
@@ -354,6 +354,7 @@ func (s *SubAgentService) RequestInput(taskID int64, question string) error {
 //   - pending:改 goal(任务还没跑,直接更新)
 //   - running:追加 notes(补充信息,子 Agent 下轮经 NoteInjectionHook 注入上下文)
 //   - 已结束:拒绝
+//
 // goal 空串不改;note 空串不追加(按需调用)。
 func (s *SubAgentService) UpdateTask(userID, taskID int64, goal, note string) error {
 	task, err := s.taskRepo.GetByID(taskID)
@@ -426,8 +427,13 @@ func (s *SubAgentService) recordEvent(taskID int64, eventType, source string) {
 }
 
 // notifyCompleted 任务终态时若来自飞书(source=feishu + notifyTarget=open_id),主动推送汇报。
-// 推送后标记 reported(防前置汇报重复)。notifier 为 nil 或 source 非 feishu 时跳过(靠轮询/前置汇报)。
-// 推送失败仅记日志,不回滚任务状态(任务已完成是事实,推送是尽力而为)。
+//
+// 先标记 reported 再推送(顺序关键):飞书任务的汇报由本方法负责(走主 Agent 转述+推送),
+// 若在推送(耗时数秒的主 Agent Run)之后才 MarkReported,期间 web 前端轮询会查到
+// unreported 触发 HandleReportTask,导致重复汇报(task40:msg202+msg203)。
+// 先 MarkReported 让前端轮询查不到该 task,避免重叠。推送失败也保持 reported
+// (消息没到是异常,但重复汇报更糟;失败有日志可补救)。
+// notifier 为 nil 或 source 非 feishu 时跳过(web 任务靠前端轮询 + 前置汇报)。
 func (s *SubAgentService) notifyCompleted(taskID int64) {
 	if s.notifier == nil {
 		return
@@ -439,15 +445,15 @@ func (s *SubAgentService) notifyCompleted(taskID int64) {
 	if task.Source != domainagent.SourceFeishu || task.NotifyTarget == "" {
 		return // web 任务靠轮询 + 前置汇报;非飞书不主动推
 	}
+	// 先标记 reported:防 web 前端轮询在此期间查到 unreported 触发重复汇报
+	if err := s.taskRepo.MarkReported(task.ID); err != nil {
+		logger.ErrorWithFields("sub agent: mark reported before notify failed",
+			zap.Int64("task_id", task.ID), zap.Error(err))
+		// 标记失败仍继续推送(尽力把消息送到)
+	}
 	if err := s.notifier.NotifyTaskCompleted(context.Background(), task.NotifyTarget, task); err != nil {
 		logger.ErrorWithFields("sub agent: notify feishu failed",
 			zap.Int64("task_id", task.ID), zap.String("open_id", task.NotifyTarget), zap.Error(err))
-		return
-	}
-	// 推送成功标记 reported(防下次对话前置汇报重复推)
-	if err := s.taskRepo.MarkReported(task.ID); err != nil {
-		logger.ErrorWithFields("sub agent: mark reported after notify failed",
-			zap.Int64("task.ID", task.ID), zap.Error(err))
 	}
 }
 

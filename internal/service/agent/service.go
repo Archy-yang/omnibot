@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // AgentServiceConfig 配置 Agent 服务。
@@ -15,6 +16,10 @@ type AgentServiceConfig struct {
 	// Hooks 可插拔执行链(熔断/强制汇总等)。子 Agent 应装配[熔断+强制汇总];
 	// 主 Agent 可不传(纯推理)或按需装配。nil=无机制(纯 ReAct 推理)。
 	Hooks []RoundHook
+	// Timeout ReAct 循环的总超时(透传进 ReActAgentConfig.Timeout)。<=0 时 ReActAgent
+	// 回落 DefaultTimeout(120s)。子 Agent 必须把 card.Timeout 传进来,否则内层循环用 120s
+	// 强行截胡 executeTask 外层 ctx 更长的 deadline(见 51/52 超时 bug)。主 Agent 可不设(120s)。
+	Timeout time.Duration
 }
 
 // AgentService 封装 ReActAgent,供 API 层调用。
@@ -29,6 +34,7 @@ type AgentService struct {
 	maxSteps            int
 	systemPrompt        string
 	hooks               []RoundHook
+	timeout             time.Duration
 }
 
 // NewAgentService 创建 Agent 服务。
@@ -40,6 +46,7 @@ func NewAgentService(config AgentServiceConfig) *AgentService {
 		maxSteps:            config.MaxSteps,
 		systemPrompt:        config.SystemPrompt,
 		hooks:               config.Hooks,
+		timeout:             config.Timeout,
 	}
 }
 
@@ -161,19 +168,26 @@ func (s *AgentService) RunStream(
 }
 
 // runStreamWithClient 是 Run / RunStream 共享的内部入口:构造 ReActAgent 并启动流式执行。
+// 派活只走循环内的 delegate 工具(单一抽象框架路径):任务在循环内创建,框架从工具返回
+// 解析真实 task_id 累积进 Runtime,最终以独立 AgentEventTaskCreated 事件下发(回复文本不拼接)。
 func (s *AgentService) runStreamWithClient(
 	ctx context.Context,
 	userID int64,
 	conversation []map[string]interface{},
 	streamClient StreamingLLMClient,
 ) (<-chan AgentEvent, error) {
-	agent := NewReActAgent(ReActAgentConfig{
+	if streamClient == nil {
+		return nil, fmt.Errorf("agent: streaming LLM client not configured")
+	}
+	cfg := ReActAgentConfig{
 		LLMClient:          s.defaultLLMClient, // 占位,流式路径不会调用同步接口
 		StreamingLLMClient: streamClient,
 		ToolRegistry:       s.toolRegistry,
 		MaxSteps:           s.maxSteps,
 		SystemPrompt:       s.systemPrompt,
+		Timeout:            s.timeout, // 透传(P0):子 Agent 的 card.Timeout 才能真正约束循环
 		Hooks:              s.hooks,
-	})
+	}
+	agent := NewReActAgent(cfg)
 	return agent.RunStream(withUserID(ctx, userID), conversation)
 }
