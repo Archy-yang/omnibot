@@ -29,6 +29,7 @@ func CreateGetCurrentTimeTool() Tool {
 		Name:         "get_current_time",
 		Description:  "获取当前的日期和时间",
 		DisplayLabel: "查询了当前时间",
+		Capabilities: []string{CapBasic},
 		Parameters: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -45,6 +46,7 @@ func CreateCalculatorTool() Tool {
 		Name:         "calculator",
 		Description:  "执行安全的数学计算（仅支持四则运算和括号）",
 		DisplayLabel: "计算了一下",
+		Capabilities: []string{CapBasic},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -75,6 +77,7 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 		Name:         "search_memories",
 		Description:  "搜索用户的长期记忆，查找与查询相关的记忆内容",
 		DisplayLabel: "翻了翻记忆",
+		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -106,6 +109,7 @@ func CreateSearchHistoryTool() Tool {
 		Name:         "search_history",
 		Description:  "搜索用户的历史对话记录",
 		DisplayLabel: "搜索了历史对话",
+		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -207,8 +211,9 @@ func CreateRSSReaderTool() Tool {
 		Name:         "rss_reader",
 		Description:  "解析并获取RSS/Atom订阅源的内容，支持所有主流RSS(0.9x/1.0/2.0)和Atom(0.3/1.0)格式。传入RSS链接，返回订阅源的基本信息和最新文章列表。",
 		DisplayLabel: "读取了 RSS 订阅",
+		Capabilities: []string{CapResearch, CapWeb, CapIngest},
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":     "object",
 			"required": []string{"url"},
 			"properties": map[string]interface{}{
 				"url": map[string]interface{}{
@@ -331,10 +336,10 @@ func min(a, b int) int {
 type contextKey string
 
 const (
-	userIDContextKey   contextKey = "agent_user_id"
-	taskIDContextKey  contextKey = "agent_task_id"  // 子 Agent 运行时的 taskID(供 request_input 工具用)
-	sourceContextKey  contextKey = "agent_source"   // 任务来源渠道(web/feishu),供 delegate 记录到 task
-	notifyContextKey  contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
+	userIDContextKey contextKey = "agent_user_id"
+	taskIDContextKey contextKey = "agent_task_id"       // 子 Agent 运行时的 taskID(供 request_input 工具用)
+	sourceContextKey contextKey = "agent_source"        // 任务来源渠道(web/feishu),供 delegate 记录到 task
+	notifyContextKey contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
 )
 
 func withUserID(ctx context.Context, userID int64) context.Context {
@@ -396,7 +401,7 @@ func getUserIDFromContext(ctx context.Context) int64 {
 // userID 从 ctx 取(主 Agent RunStream 已通过 withUserID 注入)。
 func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
 	return Tool{
-		Name:        "delegate",
+		Name:         "delegate",
 		DisplayLabel: "安排了子任务",
 		Description: fmt.Sprintf(
 			"把耗时任务委派给子 Agent 后台执行(不阻塞当前对话)。可用子 Agent:\n%s\n"+

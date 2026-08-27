@@ -26,6 +26,7 @@ func CreateWebReadTool() Tool {
 	return Tool{
 		Name:         "web_read",
 		DisplayLabel: "读取了网页",
+		Capabilities: []string{CapResearch, CapWeb},
 		Description: "抓取指定 URL 的网页正文。mode=auto(默认)自动选最快方式:先本地解析," +
 			"正文不足或失败时自动升级到 JS 渲染服务,无需判断页面类型。mode=http 仅本地解析(快);" +
 			"mode=reader 强制 JS 渲染(慢,已知 SPA)。优先用 auto。传入完整 HTTP/HTTPS 链接。",

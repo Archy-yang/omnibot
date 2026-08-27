@@ -270,9 +270,9 @@ Assemble(c PromptCtx):
 
 ---
 
-## 10. 后续（本期不做，仅记录方向）
+## 10. 后续 & 落地进度
 
-- **ToolProviderResult**：把工具可见集也按 scope 裁剪，与 prompt 组装对齐。
+- **ToolProviderResult ✅ 已落地（v1.10）**：工具可见集按 `内部/service/agent/tool_provider.go` 裁剪，与 prompt scope 概念对齐——但裁剪轴取**工具自身能力标签 ∩ config 白名单**，非角色卡固定列表（DSH 的 knownNames/schemas 分离：knownNames=框架能力词汇表判定配错，visible=能力命中+request_input 基线）。详见 08 框架文档 §5.x。
 - **生命周期 / 事件**：是否需要 Cordis 那套"注册即 disposer + change 事件"，取决于是否要多 Agent 动态装配；本期以纯 registry 起步。
 - **持久化快照**：DSH 用 `PromptContext` 物化动态上下文快照、变更才记日志，供复盘/审计，可后续引入。
 

@@ -91,8 +91,7 @@ type SubAgentCard struct {
     Description string            // 能力描述,主 Agent LLM 据此决定是否派活
     // 委托指令模板:主 Agent 派活时填入 {goal},生成子 Agent 的 system prompt
     PromptTemplate string
-    // 子 Agent 可用的工具集(独立 ToolRegistry,可与主 Agent 不同)
-    Tools       []string          // 工具名列表,从全局工具池选
+    // 注:不再有 Tools 字段 —— 子 Agent 可见工具集由「工具能力标签 ∩ config 白名单」算出(见 §5.6)
     // 停止条件:最大步数 / 超时(第一版固定,不做 LLM 自判停止)
     MaxSteps    int
     Timeout     time.Duration
@@ -214,7 +213,7 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
 ### 4.6 装配(routes.go)
 
 - 建 `agentTaskRepo` + `subAgentRegistry` + `subAgentSvc`
-- 注册示例子 Agent "researcher"(用现有 RSS + search_history 工具)
+- 注册示例子 Agent "researcher"(prompt/角色;工具由能力白名单裁剪,见 §5.6)
 - delegate 工具加入主 Agent toolRegistry
 - subAgentSvc 注入主 Agent handler(前置汇报兜底用)
 - 新增路由:`GET /api/v1/agent/tasks`(轮询)+ `POST /api/v1/agent/tasks/:id/report`(触发汇报)
@@ -268,6 +267,18 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
 风险:LLM 可能该派不派/不该派乱派。第一版靠 system prompt + 工具描述调优,不做硬规则。
 若后续发现不可控,可加规则层(如"消息含'研究/调研'关键词才允许派 researcher")。
 
+### 5.6 子 Agent 工具可见性(capability 标签 ∩ config 白名单)
+
+**问题**:v1.10 前子 Agent 可见工具由 `SubAgentCard.Tools` 硬编码,把"研究员属于哪些工具"这层角色分类学写死进抽象框架(与已删的派活规划器同味)。
+
+**做法**(仿 DSH ToolProviderResult,见 `internal/service/agent/tool_provider.go`):
+- 每个 `Tool` 打 `Capabilities` 标签(取值域 `basic/memory/research/web/ingest/interactive`)。
+- config `agent.sub_agent.allowed_capabilities` 声明子 Agent 可见能力白名单(默认 `[research, interactive]`)。
+- 运行期 `ResolveSubAgentTools` 算出 `visible = 能力∩白名单 ∪ request_input 基线`(恒可见,修复 #19 request_input 从未注入子 Agent 的间隙)。
+- **knownNames/schemas 分离**:白名单出现框架能力词汇表外的字符串 → 启动报错(配错显性);某个工具能力未命中白名单 → 仅隐藏、不报错。
+
+**收益**:分类轴从"角色"下沉到"工具能力",可组合非枚举;子 Agent 是通用执行器,换能力只要改 config,不动 ReAct/prompt/runner。逻辑层保持抽象,运行层受配置文件约束。
+
 ---
 
 ## 6. 示例子 Agent:researcher(研究员)
@@ -279,9 +290,9 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
   - Name: "研究员"
   - Description: "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。"
   - PromptTemplate: "你是一名研究员。目标:{goal}。使用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。"
-  - Tools: ["rss_reader", "search_memories", "search_history"]
   - MaxSteps: 15
   - Timeout: 180s
+  - ~~Tools~~(已移除):可见工具不再由角色卡固定，而由「工具能力标签 ∩ config `agent.sub_agent.allowed_capabilities`」算出(见 §5.6)。researcher 在默认白名单 `[research, interactive]` 下落到 `rss_reader/web_read/search_memories/search_history` + 强制基线 `request_input`。
 
 主 Agent delegate 工具描述会动态包含:"researcher(研究员):用于查阅资料/阅读RSS/检索历史的耗时研究任务"。
 

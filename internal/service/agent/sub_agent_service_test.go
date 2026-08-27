@@ -86,7 +86,6 @@ func setupSubAgentServiceWithArtifact(t *testing.T, runner SubAgentRunner, withA
 		Name:           "研究员",
 		Description:    "查阅资料",
 		PromptTemplate: "你是研究员。目标:{goal}",
-		Tools:          []string{"rss_reader"},
 		MaxSteps:       15,
 		Timeout:        5 * time.Second,
 	}))

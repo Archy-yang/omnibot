@@ -16,7 +16,6 @@ func sampleCard(typ, name, desc string) domainagent.SubAgentCard {
 		Name:           name,
 		Description:    desc,
 		PromptTemplate: "你是一名" + name + "。目标:{goal}。",
-		Tools:          []string{"rss_reader"},
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"omnibot/frontend"
+	agentprompt "omnibot/internal/agentprompt"
 	"omnibot/internal/api/admin"
 	"omnibot/internal/api/web"
 	"omnibot/internal/api/wechat"
@@ -16,7 +17,6 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
-	agentprompt "omnibot/internal/agentprompt"
 	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
@@ -189,13 +189,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		Name:           "研究员",
 		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
 		PromptTemplate: researcherSystemPrompt,
-		Tools:          []string{"rss_reader", "web_read", "search_memories", "search_history"},
 		MaxSteps:       15,
 		Timeout:        180 * time.Second,
 	})
 	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
 	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
-	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
+	// 子 Agent 可见工具由「工具能力标签 ∩ config 白名单」算出(仿 DSH ToolProviderResult),不在此卡固定列表。
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry,
+		cfg.Agent.SubAgent.AllowedCapabilities, // 空回落默认 ["research","interactive"]
+		subAgentLLMProvider, agentTaskRepo)
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
 	eventRepo := agentRepo.NewTaskEventRepository(dbConn.GetGormDB())
 	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo, eventRepo, nil) // notifier 飞书启动后注入(见 startFeishuChannel)

@@ -27,7 +27,6 @@ func setupDelegateToolTest(t *testing.T) (Tool, *SubAgentService, *SubAgentRegis
 		Name:           "研究员",
 		Description:    "查阅资料/阅读RSS/检索历史的耗时研究任务",
 		PromptTemplate: "你是研究员。目标:{goal}",
-		Tools:          []string{"rss_reader"},
 		MaxSteps:       15,
 		Timeout:        5 * time.Second,
 	}))

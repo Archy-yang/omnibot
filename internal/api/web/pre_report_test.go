@@ -40,7 +40,7 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 	registry := agentpkg.NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
 	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 
@@ -107,7 +107,7 @@ func TestHandleSendMessageAgentStream_NoPreReportWhenNoTasks(t *testing.T) {
 	registry := agentpkg.NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5 * time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: 5 * time.Second,
 	}))
 	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 	// 不造任务

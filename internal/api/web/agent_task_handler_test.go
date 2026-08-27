@@ -44,7 +44,7 @@ func setupAgentTaskHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.Agent
 	registry := agentpkg.NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: 5000000000,
 	}))
 	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 	handler := NewAgentTaskHandler(svc, &mockAgentService{}, registry, &mockLLMConfigService{hasConfig: false}, &mockMessageService{})
@@ -192,7 +192,7 @@ func setupAgentTaskStepsHandlerTest(t *testing.T) (*AgentTaskHandler, repoagent.
 	registry := agentpkg.NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: 5000000000,
 	}))
 	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil, nil, nil)
 	handler := NewAgentTaskHandler(svc, &mockAgentService{}, registry, &mockLLMConfigService{hasConfig: false}, &mockMessageService{})
@@ -283,7 +283,7 @@ func setupReportHandlerTest(t *testing.T, agentSvc AgentService) (*AgentTaskHand
 	registry := agentpkg.NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "查阅资料",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: 5000000000,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: 5000000000,
 	}))
 	svc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, stepRepo, nil, nil, nil)
 	msgSvc := &mockMessageService{}

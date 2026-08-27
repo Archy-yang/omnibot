@@ -28,41 +28,44 @@ type subAgentRunnerImpl struct {
 	defaultStreamClient StreamingLLMClient
 	defaultSyncClient   LLMClient
 	globalToolRegistry  *ToolRegistry // 全局工具池,子 Agent 工具从这里选
+	allowedCapabilities []string      // 能力白名单:与工具能力标签交集决定子 Agent 可见工具集(仿 DSH ToolProviderResult)
 	llmConfigProvider   SubAgentLLMConfigProvider
 	taskRepo            repoagent.AgentTaskRepository // 注入:装配 NoteInjectionHook 读 task.Notes
 }
 
 // NewSubAgentRunner 创建生产 SubAgentRunner。
 // defaultClient 需同时实现 LLMClient 和 StreamingLLMClient(如 OpenAILLMClient)。
+// allowedCapabilities 为子 Agent 可见工具的能力白名单(空则回落 DefaultSubAgentCapabilities)。
 // llmConfigProvider 可为 nil(此时子 Agent 一律用系统默认)。
 // taskRepo 可为 nil(此时不装配 NoteInjectionHook,running 态 update 的 notes 不注入)。
 func NewSubAgentRunner(
 	defaultSyncClient LLMClient,
 	defaultStreamClient StreamingLLMClient,
 	globalToolRegistry *ToolRegistry,
+	allowedCapabilities []string,
 	llmConfigProvider SubAgentLLMConfigProvider,
 	taskRepo repoagent.AgentTaskRepository,
 ) SubAgentRunner {
+	if len(allowedCapabilities) == 0 {
+		allowedCapabilities = DefaultSubAgentCapabilities
+	}
 	return &subAgentRunnerImpl{
 		defaultStreamClient: defaultStreamClient,
 		defaultSyncClient:   defaultSyncClient,
 		globalToolRegistry:  globalToolRegistry,
+		allowedCapabilities: allowedCapabilities,
 		llmConfigProvider:   llmConfigProvider,
 		taskRepo:            taskRepo,
 	}
 }
 
 func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (string, error) {
-	// 1. 构造子 Agent 独立 ToolRegistry(从全局池选 card.Tools 指定的工具)
-	subToolRegistry := NewToolRegistry()
-	for _, toolName := range card.Tools {
-		tool, ok := r.globalToolRegistry.Get(toolName)
-		if !ok {
-			return "", fmt.Errorf("sub agent %q: tool %q not in global registry", card.Type, toolName)
-		}
-		if err := subToolRegistry.Register(tool); err != nil {
-			return "", fmt.Errorf("sub agent %q: register tool %q: %w", card.Type, toolName, err)
-		}
+	// 1. 构造子 Agent 独立 ToolRegistry:能力标签 ∩ 配置能力白名单决定可见集(仿 DSH ToolProviderResult),
+	//    取代旧的角色卡固定 card.Tools 列表(分类轴从"角色"下沉到"工具自身能力",可组合非枚举)。
+	//    可见集含 alwaysBaseline(request_input),修复 #19:旧 card.Tools 从未含 request_input,子 Agent 实际调不到。
+	subToolRegistry, _, err := BuildSubAgentToolRegistry(r.globalToolRegistry, r.allowedCapabilities)
+	if err != nil {
+		return "", fmt.Errorf("sub agent %q: %w", card.Type, err)
 	}
 
 	// 2. 经 agentprompt.PromptRegistry 组装子 Agent system prompt(11-Prompt管理 §5.2):填充 {goal} +
@@ -178,4 +181,3 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 	}
 	return finalContent, nil
 }
-

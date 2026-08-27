@@ -15,7 +15,7 @@ func TestBuildTaskReceipt_Completed(t *testing.T) {
 	registry := NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{"rss_reader"}, MaxSteps: 10, Timeout: time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
 	}))
 	artifact := "Go 1.24 要点"
 	task := &domainagent.AgentTask{
@@ -34,7 +34,7 @@ func TestBuildTaskReceipt_Failed(t *testing.T) {
 	registry := NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
 	}))
 	errMsg := "子 Agent 执行超时"
 	task := &domainagent.AgentTask{
@@ -63,7 +63,7 @@ func TestBuildReportInstruction_MultipleTasks(t *testing.T) {
 	registry := NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
 	}))
 	a1 := "r1"
 	a2 := "r2"
@@ -85,7 +85,7 @@ func TestBuildTaskReceipt_SummaryTruncates(t *testing.T) {
 	registry := NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 10, Timeout: time.Second,
+		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
 	}))
 	longArtifact := strings.Repeat("详", 300) // 超过 receiptSummaryMax(200)
 	task := &domainagent.AgentTask{

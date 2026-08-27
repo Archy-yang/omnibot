@@ -22,7 +22,7 @@ func setupTaskToolsTest(t *testing.T) (*SubAgentService, repoagent.AgentTaskRepo
 	registry := NewSubAgentRegistry()
 	require.NoError(t, registry.Register(domainagent.SubAgentCard{
 		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", Tools: []string{}, MaxSteps: 5, Timeout: time.Second,
+		PromptTemplate: "p", MaxSteps: 5, Timeout: time.Second,
 	}))
 	stepRepo := chatrepo.NewAgentStepRepository(db)
 	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"}, stepRepo, nil, nil, nil)
