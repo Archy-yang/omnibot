@@ -32,7 +32,7 @@ func TestNotifyCompleted_Feishu(t *testing.T) {
 	svc.SetNotifier(notifier)
 
 	// 手动造一个飞书来源的 running 任务
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_openid_xxx")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_openid_xxx")
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 
@@ -53,7 +53,7 @@ func TestNotifyCompleted_Web(t *testing.T) {
 	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "r", delay: 20*time.Millisecond}, true)
 	svc.SetNotifier(notifier)
 
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 

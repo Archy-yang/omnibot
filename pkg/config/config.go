@@ -18,6 +18,24 @@ type Config struct {
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
+	Agent    AgentConfig    `mapstructure:"agent"`
+}
+
+// AgentConfig 后台 Agent 框架配置(08-后台Agent任务框架)。
+type AgentConfig struct {
+	SubAgent SubAgentConfig `mapstructure:"sub_agent"`
+}
+
+// SubAgentConfig 子 Agent 运行配置。
+//
+// AllowedCapabilities 是子 Agent 可见工具的能力白名单(仿 DSH ToolProviderResult):
+// 子 Agent 能看到的工具 = 能力标签 ∩ 该白名单的工具。取值域见 service/agent 包 Cap* 常量。
+// 空值时装配点取默认 ["research","interactive"]。**非敏感数据**,可入库可日志。
+// Timeout 是子 Agent 执行超时(time.ParseDuration 语法,如 "180s")。空值时装配点取默认 180s。
+// 它是子 Agent 专属超时,不影响主 Agent 兜底(DefaultTimeout 120s)。
+type SubAgentConfig struct {
+	AllowedCapabilities []string `mapstructure:"allowed_capabilities"`
+	Timeout             string   `mapstructure:"timeout"`
 }
 
 // AuthConfig 邮箱密码认证配置(v2.1)。
@@ -120,8 +138,8 @@ type LoggerConfig struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Driver   string `mapstructure:"driver"`   // sqlite, mysql
-	DSN      string `mapstructure:"dsn"`      // 连接字符串
+	Driver   string `mapstructure:"driver"` // sqlite, mysql
+	DSN      string `mapstructure:"dsn"`    // 连接字符串
 	MaxConns int    `mapstructure:"max_conns"`
 }
 

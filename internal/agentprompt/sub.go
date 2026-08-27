@@ -7,9 +7,10 @@ import (
 	domainagent "omnibot/internal/domain/agent"
 )
 
-// 子 Agent 的 PromptRegistry 装配(11-Prompt管理 §5.2)。
-// 子 Agent 提示词 = 角色模板(含 {goal},由本次任务 goal 填入) + 任务合同(deliverables/criteria)。
-// 与主 Agent 走同一 registry 组装机制。
+// 子 Agent 的 PromptRegistry 装配(11-Prompt管理 §5.2,去角色后 §5.7)。
+// 子 Agent 提示词 = 共享基础人格(DefaultSystemPrompt) + 通用执行器 persona(SubAgentExecutorPersona)
+// + 可选【本次任务角色】(taskSpec.PersonaHint) + 任务合同(deliverables/criteria)。
+// 不再有角色卡模板(如"你是研究员");persona 是任务级 hint,非框架枚举。与主 Agent 走同一 registry 组装机制。
 
 // buildSubContract 生成任务合同段(含前导空行,跟在角色模板后)。spec 无详情时返回空串。
 // 抽取自原 buildSubAgentPrompt 的详情注入逻辑,单一来源。
@@ -53,20 +54,26 @@ func buildSubContract(spec domainagent.TaskSpec) string {
 	return b.String()
 }
 
-// SubAgentPromptSections 生成子 Agent 的 sections(§5.2):
-//   - sub_role(0):角色模板,{goal} 已由本次任务 goal 填入
+// SubAgentPromptSections 生成子 Agent 的 sections(§5.2,去角色 §5.7):
+//   - agent_base(-100):共享基础人格(与主 Agent 同款 DefaultSystemPrompt)
+//   - sub_role(0):通用执行器 persona(SubAgentExecutorPersona),不再"你是研究员"
+//   - sub_persona_hint(50):taskSpec.PersonaHint 非空才注册 → 【本次任务角色】{hint}(主 Agent 按任务给,可空)
 //   - sub_contract(100):任务合同(spec 无详情时为空文本,组装时跳过)
-func SubAgentPromptSections(scope ScopeKey, template string, spec domainagent.TaskSpec) []PromptSection {
-	return []PromptSection{
-		StaticSection("sub_role", scope, 0, strings.ReplaceAll(template, "{goal}", spec.Goal)),
-		StaticSection("sub_contract", scope, 100, buildSubContract(spec)),
+func SubAgentPromptSections(scope ScopeKey, spec domainagent.TaskSpec) []PromptSection {
+	sections := []PromptSection{
+		StaticSection("agent_base", scope, -100, DefaultSystemPrompt),
+		StaticSection("sub_role", scope, 0, SubAgentExecutorPersona),
 	}
+	if strings.TrimSpace(spec.PersonaHint) != "" {
+		sections = append(sections, StaticSection("sub_persona_hint", scope, 50, "【本次任务角色】"+strings.TrimSpace(spec.PersonaHint)))
+	}
+	return append(sections, StaticSection("sub_contract", scope, 100, buildSubContract(spec)))
 }
 
 // BuildSubAgentSystemPrompt 用 registry 组装子 Agent 的 system prompt。
-func BuildSubAgentSystemPrompt(scope ScopeKey, template string, spec domainagent.TaskSpec) (string, error) {
+func BuildSubAgentSystemPrompt(scope ScopeKey, spec domainagent.TaskSpec) (string, error) {
 	r := NewPromptRegistry()
-	for _, s := range SubAgentPromptSections(scope, template, spec) {
+	for _, s := range SubAgentPromptSections(scope, spec) {
 		if err := r.Register(s); err != nil {
 			return "", err
 		}

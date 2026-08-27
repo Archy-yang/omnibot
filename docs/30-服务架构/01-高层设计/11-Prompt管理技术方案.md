@@ -208,16 +208,17 @@ Assemble(c PromptCtx):
 
 **未来"派活规划器回归"的安放处**：规划器要不要出现，就是注册不注册一段 `planner_hint` section，不动循环、不删代码。
 
-### 5.2 子 Agent（scope=sub:<type>）
+### 5.2 子 Agent（scope=sub，去角色后通用执行器）
 
 | section | Scope | Order | 内容来源 |
 |---------|:---:|:---:|----------|
-| `harness_identity` | 全局 | -100 | 与主 Agent 共享的框架身份 |
-| `sub_role` | sub:researcher | 0 | 角色定位（由 `researcherSystemPrompt` 迁移，去掉 `{goal}` 部分） |
-| `goal_details` | sub:researcher | 110 | `目标:{{goal}}` + 任务包详情（deliverable/criteria） |
+| `agent_base` | sub | -100 | 共享基础人格（`DefaultSystemPrompt`，与主 Agent 同款） |
+| `sub_role` | sub | 0 | 通用执行器 persona（`SubAgentExecutorPersona`，含收敛规则；不再有角色模板） |
+| `sub_persona_hint` | sub | 50 | `TaskSpec.PersonaHint` 非空才注册 → `【本次任务角色】{hint}`（任务级角色，主 Agent 按任务给） |
+| `sub_contract` | sub | 100 | 任务包详情（deliverable/criteria/background/constraints，`spec.HasDetail()` gate） |
 
-- `SubAgentCard.PromptTemplate` 保留，但 `{goal}` 占位改为 `{{goal}}`，由 `RegisterVariable("goal", fn)` 解析（`fn` 读 `c.Request["goal"]`）。
-- `buildSubAgentPrompt` 的任务包详情注入，可改为 `goal_details` 的 `Provider` 函数按 `c.Request` 组合（比多个 `{{var}}` 更清晰）。
+> 去角色（v1.10+）：不再有 `SubAgentCard.PromptTemplate` 角色模板，子 Agent 是通用执行器。persona 由任务级
+> `persona_hint` 承载，scope 由 `sub:<type>` 收敛为单一 `sub`。`buildSubContract` 承担任务合同单一来源。
 
 ---
 
@@ -270,9 +271,9 @@ Assemble(c PromptCtx):
 
 ---
 
-## 10. 后续（本期不做，仅记录方向）
+## 10. 后续 & 落地进度
 
-- **ToolProviderResult**：把工具可见集也按 scope 裁剪，与 prompt 组装对齐。
+- **ToolProviderResult ✅ 已落地（v1.10）**：工具可见集按 `内部/service/agent/tool_provider.go` 裁剪，与 prompt scope 概念对齐——但裁剪轴取**工具自身能力标签 ∩ config 白名单**，非角色卡固定列表（DSH 的 knownNames/schemas 分离：knownNames=框架能力词汇表判定配错，visible=能力命中+request_input 基线）。详见 08 框架文档 §5.x。
 - **生命周期 / 事件**：是否需要 Cordis 那套"注册即 disposer + change 事件"，取决于是否要多 Agent 动态装配；本期以纯 registry 起步。
 - **持久化快照**：DSH 用 `PromptContext` 物化动态上下文快照、变更才记日志，供复盘/审计，可后续引入。
 

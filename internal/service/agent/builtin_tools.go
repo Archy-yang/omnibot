@@ -29,6 +29,7 @@ func CreateGetCurrentTimeTool() Tool {
 		Name:         "get_current_time",
 		Description:  "获取当前的日期和时间",
 		DisplayLabel: "查询了当前时间",
+		Capabilities: []string{CapBasic},
 		Parameters: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -45,6 +46,7 @@ func CreateCalculatorTool() Tool {
 		Name:         "calculator",
 		Description:  "执行安全的数学计算（仅支持四则运算和括号）",
 		DisplayLabel: "计算了一下",
+		Capabilities: []string{CapBasic},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -75,6 +77,7 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 		Name:         "search_memories",
 		Description:  "搜索用户的长期记忆，查找与查询相关的记忆内容",
 		DisplayLabel: "翻了翻记忆",
+		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -106,6 +109,7 @@ func CreateSearchHistoryTool() Tool {
 		Name:         "search_history",
 		Description:  "搜索用户的历史对话记录",
 		DisplayLabel: "搜索了历史对话",
+		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -207,8 +211,9 @@ func CreateRSSReaderTool() Tool {
 		Name:         "rss_reader",
 		Description:  "解析并获取RSS/Atom订阅源的内容，支持所有主流RSS(0.9x/1.0/2.0)和Atom(0.3/1.0)格式。传入RSS链接，返回订阅源的基本信息和最新文章列表。",
 		DisplayLabel: "读取了 RSS 订阅",
+		Capabilities: []string{CapResearch, CapWeb, CapIngest},
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":     "object",
 			"required": []string{"url"},
 			"properties": map[string]interface{}{
 				"url": map[string]interface{}{
@@ -331,10 +336,10 @@ func min(a, b int) int {
 type contextKey string
 
 const (
-	userIDContextKey   contextKey = "agent_user_id"
-	taskIDContextKey  contextKey = "agent_task_id"  // 子 Agent 运行时的 taskID(供 request_input 工具用)
-	sourceContextKey  contextKey = "agent_source"   // 任务来源渠道(web/feishu),供 delegate 记录到 task
-	notifyContextKey  contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
+	userIDContextKey contextKey = "agent_user_id"
+	taskIDContextKey contextKey = "agent_task_id"       // 子 Agent 运行时的 taskID(供 request_input 工具用)
+	sourceContextKey contextKey = "agent_source"        // 任务来源渠道(web/feishu),供 delegate 记录到 task
+	notifyContextKey contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
 )
 
 func withUserID(ctx context.Context, userID int64) context.Context {
@@ -394,29 +399,23 @@ func getUserIDFromContext(ctx context.Context) int64 {
 // 工具结果给主 Agent LLM,让其生成自然语言确认("已安排X处理,稍后汇报")回用户。
 //
 // userID 从 ctx 取(主 Agent RunStream 已通过 withUserID 注入)。
-func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
+func CreateDelegateTool(svc *SubAgentService) Tool {
 	return Tool{
-		Name:        "delegate",
+		Name:         "delegate",
 		DisplayLabel: "安排了子任务",
-		Description: fmt.Sprintf(
-			"把耗时任务委派给子 Agent 后台执行(不阻塞当前对话)。可用子 Agent:\n%s\n"+
-				"派活后立即返回,子 Agent 后台跑,完成后再向用户汇报。适合需要多步检索/研究的任务。",
-			registry.DelegateToolDescription(),
-		),
+		Description: "把耗时任务委派给后台执行器异步执行(不阻塞当前对话,通用不绑角色)。" +
+			"委派 = goal(必) + deliverables(交付物) + completion_criteria(完成标准),可选 background/persona_hint。" +
+			"派活后立即返回,执行器后台跑,完成后向用户汇报。适合需要多步检索/研究/汇总的耗时任务。",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"sub_agent_type": map[string]interface{}{
-					"type":        "string",
-					"description": "子 Agent 类型,如 researcher",
-				},
 				"goal": map[string]interface{}{
 					"type":        "string",
-					"description": "委托目标:清晰描述要让子 Agent 做什么",
+					"description": "委托目标:清晰描述要让后台执行器做什么(必填)",
 				},
 				"deliverables": map[string]interface{}{
 					"type":        "array",
-					"description": "必须交付的产物列表。每项 {name, description}。明确交付物让子 Agent 知道要产出什么",
+					"description": "必须交付的产物列表。每项 {name, description}。明确交付物让执行器知道要产出什么",
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -432,16 +431,23 @@ func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
 				},
 				"background": map[string]interface{}{
 					"type":        "object",
-					"description": "背景信息(项目/技术栈/当前架构等),帮助子 Agent 理解上下文。可空",
+					"description": "背景信息(项目/技术栈/当前架构等),帮助执行器理解上下文。可空",
+				},
+				"persona_hint": map[string]interface{}{
+					"type":        "string",
+					"description": "可选角色扮演提示:想让执行器以某角色/风格产出,一句话描述(如'你是严谨的研究员,先多路检索再出结构化报告+来源')。可空",
+				},
+				"task_type": map[string]interface{}{
+					"type":        "string",
+					"description": "可选任务类型标签(纯溯源/展示,如'研究''写代码'),不参与执行。可空",
 				},
 			},
-			"required": []string{"sub_agent_type", "goal"},
+			"required": []string{"goal"},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			subAgentType, _ := args["sub_agent_type"].(string)
 			goal, _ := args["goal"].(string)
-			if subAgentType == "" || goal == "" {
-				return "", fmt.Errorf("sub_agent_type and goal are required")
+			if goal == "" {
+				return "", fmt.Errorf("goal is required")
 			}
 
 			userID := getUserIDFromContext(ctx)
@@ -450,6 +456,12 @@ func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
 			}
 
 			taskSpec := domainagent.NewTaskSpec(goal)
+			if persona, _ := args["persona_hint"].(string); persona != "" {
+				taskSpec.PersonaHint = persona
+			}
+			if tt, _ := args["task_type"].(string); tt != "" {
+				taskSpec.Type = tt
+			}
 			// deliverables
 			if raw, ok := args["deliverables"]; ok {
 				if arr, ok := raw.([]interface{}); ok {
@@ -488,13 +500,13 @@ func CreateDelegateTool(registry *SubAgentRegistry, svc *SubAgentService) Tool {
 			// source/notifyTarget 从 ctx 取(web/feishu handler 注入):决定完成时往哪推送汇报。
 			source := getSourceFromContext(ctx)
 			notifyTarget := getNotifyTargetFromContext(ctx)
-			taskID, err := svc.StartTask(ctx, userID, subAgentType, taskSpec, source, notifyTarget)
+			taskID, err := svc.StartTask(ctx, userID, taskSpec, source, notifyTarget)
 			if err != nil {
 				return "", fmt.Errorf("派活失败: %w", err)
 			}
 
 			// 立即返回 task_id(异步),主 Agent LLM 据此回用户"已安排X处理"
-			return fmt.Sprintf(`{"task_id": %d, "status": "pending", "message": "已安排子 Agent 处理,稍后汇报"}`, taskID), nil
+			return fmt.Sprintf(`{"task_id": %d, "status": "pending", "message": "已安排后台执行器处理,稍后汇报"}`, taskID), nil
 		},
 	}
 }

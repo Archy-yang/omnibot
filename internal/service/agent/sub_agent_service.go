@@ -20,13 +20,14 @@ import (
 // SubAgentRunner 子 Agent 执行器接口:按 card 的 prompt+工具集跑一次 Agent,返回最终产出。
 // 生产实现见 subAgentRunnerImpl(用 ReActAgent + 系统默认 LLM);测试可 mock。
 type SubAgentRunner interface {
-	// Run 按 card 配置执行子 Agent。taskSpec 任务包(含 goal+背景+交付物+完成标准)注入 system prompt。
-	// userID 用于查用户 LLM 配置(方案3:优先用户配置,无则系统默认)。
+	// Run 执行子 Agent(通用执行器,去角色后无 card)。taskSpec 任务包(含 goal+背景+交付物+完成标准+
+	// persona_hint)注入 system prompt。userID 用于查用户 LLM 配置(方案3:优先用户配置,无则系统默认)。
 	// taskID 用于装配 NoteInjectionHook(running 态 update_task 追加的 notes 注入子 Agent 上下文)。
+	// MaxSteps/Timeout 由 taskSpec.Constraints 覆盖或框架默认(不给 LLM 自由填)。
 	// onStep:每产生一步(LLM调用/工具调用)立即回调,供上层实时落 agent_steps--
 	// 任务 running 中即可观测执行过程,而非等结束批量落。nil 时跳过回调(测试可用)。
 	// 返回子 Agent 的最终回复(FinalResponse)作为 Artifact。
-	Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (artifact string, err error)
+	Run(ctx context.Context, taskID, userID int64, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (artifact string, err error)
 }
 
 // SubAgentService 后台子 Agent 任务服务(08 技术方案 §4.3)。
@@ -36,7 +37,6 @@ type SubAgentRunner interface {
 // GetCompletedUnreported 供主 Agent 前置汇报查询;MarkReported 汇报后标记。
 type SubAgentService struct {
 	taskRepo     repoagent.AgentTaskRepository
-	registry     *SubAgentRegistry
 	runner       SubAgentRunner
 	stepRepo     chatrepo.AgentStepRepository  // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
 	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
@@ -54,9 +54,9 @@ type SubAgentService struct {
 
 // NewSubAgentService 创建子 Agent 服务。
 // artifactRepo/eventRepo/notifier 可为 nil(此时不落结构化产物/事件/不主动推送,兼容老路径)。
+// 去角色后不接收 SubAgentRegistry:子 Agent 是通用执行器,不存在角色卡注册层。
 func NewSubAgentService(
 	taskRepo repoagent.AgentTaskRepository,
-	registry *SubAgentRegistry,
 	runner SubAgentRunner,
 	stepRepo chatrepo.AgentStepRepository,
 	artifactRepo repoagent.ArtifactRepository,
@@ -65,7 +65,6 @@ func NewSubAgentService(
 ) *SubAgentService {
 	return &SubAgentService{
 		taskRepo:      taskRepo,
-		registry:      registry,
 		runner:        runner,
 		stepRepo:      stepRepo,
 		artifactRepo:  artifactRepo,
@@ -77,14 +76,10 @@ func NewSubAgentService(
 }
 
 // StartTask 建任务 + 起 goroutine 后台执行,立即返回 task_id(异步,不阻塞调用方)。
-// subAgentType 未注册返回 error(早失败,不静默)。taskSpec 为任务包(含 goal+背景+交付物+完成标准)。
-// source 来源渠道(web/feishu);notifyTarget 主动推送目标(feishu=open_id)。
-func (s *SubAgentService) StartTask(ctx context.Context, userID int64, subAgentType string, taskSpec domainagent.TaskSpec, source, notifyTarget string) (int64, error) {
-	if _, ok := s.registry.Get(subAgentType); !ok {
-		return 0, fmt.Errorf("sub agent %q not registered", subAgentType)
-	}
-
-	task := domainagent.NewAgentTask(userID, subAgentType, taskSpec, source, notifyTarget)
+// taskSpec 为任务包(含 goal+背景+交付物+完成标准+persona_hint),其 Type 作溯源标签。
+// 去角色后不校验任何注册:任何任务都交给通用执行器。source 来源渠道(web/feishu);notifyTarget 主动推送目标。
+func (s *SubAgentService) StartTask(ctx context.Context, userID int64, taskSpec domainagent.TaskSpec, source, notifyTarget string) (int64, error) {
+	task := domainagent.NewAgentTask(userID, taskSpec, source, notifyTarget)
 	if err := s.taskRepo.Create(task); err != nil {
 		return 0, fmt.Errorf("create agent task: %w", err)
 	}
@@ -110,13 +105,6 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		}
 	}()
 
-	card, ok := s.registry.Get(task.SubAgentType)
-	if !ok {
-		errMsg := fmt.Sprintf("子 Agent %q 未注册", task.SubAgentType)
-		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
-		return
-	}
-
 	// 启动前检查:若已被 cancel(pending 态被取消),直接置 cancelled 跳过执行。
 	cur, err := s.taskRepo.GetByID(task.ID)
 	if err == nil && cur.Status == domainagent.TaskStatusCancelled {
@@ -131,8 +119,10 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 	}
 	s.recordEvent(task.ID, domainagent.EventTaskRunning, "sub")
 
-	// 带 card.Timeout 执行,且 ctx 可被外部 cancel(CancelTask 触发)。
-	ctx, cancel := context.WithTimeout(context.Background(), card.Timeout)
+	// ctx 只承担「可被外部 cancel」(CancelTask 触发),不设超时——执行超时由 runner 统一负责
+	// (sub_agent_runner.go 的 AgentServiceConfig.Timeout,默认 180s,可配置 agent.sub_agent.timeout)。
+	// 单一超时来源,避免 executeTask 与 runner 双超时不一致(此前曾用 DefaultTimeout 120s 误杀耗时研究任务)。
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.registerCancel(task.ID, cancel)
 
@@ -160,7 +150,7 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 		}
 	}
 
-	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, card, task.TaskSpec, onStep)
+	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, task.TaskSpec, onStep)
 
 	// 识别取消 vs 真失败:若 ctx 被 cancel(外部 CancelTask 触发),置 cancelled 而非 failed。
 	if ctx.Err() == context.Canceled {
@@ -488,7 +478,7 @@ func (s *SubAgentService) GetPendingReportContext(userID int64) (instruction str
 	if err != nil || len(unreported) == 0 {
 		return "", nil
 	}
-	instruction = BuildReportInstruction(s.registry, unreported, false)
+	instruction = BuildReportInstruction(unreported, false)
 	for _, t := range unreported {
 		taskIDs = append(taskIDs, t.ID)
 	}

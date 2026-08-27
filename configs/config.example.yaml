@@ -80,6 +80,13 @@ logger:
   format: "text"  # production 改 json
   output: "stdout"
 
+# 后台 Agent 框架(08):子 Agent 可见工具的能力白名单。
+# 非敏感数据。request_input(interactive)为强制基线恒可见,其余工具需在能力标签 ∩ 此白名单内。
+agent:
+  sub_agent:
+    allowed_capabilities: ["research", "interactive"]
+    timeout: "180s"
+
 # 认证配置(v2.1 邮箱密码登录)
 # jwt_secret 生产必须改为强随机值(建议 ≥32 字符),不要提交到 git;
 # token_ttl 使用 time.ParseDuration 语法,720h = 30 天(对齐 PRD 5.3)。

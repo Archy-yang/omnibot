@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"omnibot/frontend"
+	agentprompt "omnibot/internal/agentprompt"
 	"omnibot/internal/api/admin"
 	"omnibot/internal/api/web"
 	"omnibot/internal/api/wechat"
@@ -16,8 +17,6 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
-	agentprompt "omnibot/internal/agentprompt"
-	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
 	agentRepo "omnibot/internal/repository/agent"
@@ -35,45 +34,6 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"go.uber.org/zap"
 )
-
-// researcherSystemPrompt 研究员子 Agent 的 system prompt。
-//
-// 设计目标:在 ReAct「每轮决定是否再次调用工具」这个决策点上,显式约束收敛,
-// 避免 web_read 对 JS 渲染页面拿不到正文时,模型反复换 URL 重试直至跑满 MaxSteps
-// (见 task 15:15 轮抓取,最后吐"已达到最大步数限制",检索全白做)。
-//
-// 三条收敛规则:
-//  1. 每轮工具调用前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
-//     够了就立即产出报告,不要再调工具。
-//  2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,不要继续重试--
-//     改换思路或基于已收集信息汇总。绝不反复重试同类失败。
-//  3. 信息不足也能产出报告:基于已有来源如实汇总,明确标注哪些部分未能查证,
-//     绝不空转到最后一句"已达到最大步数限制"。
-var researcherSystemPrompt = `你是一名研究员。目标:{goal}。
-
-工作方式:用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。
-
-== 收敛规则(每轮决策是否再次调工具时必须遵守)==
-1. 调用工具前先自问:这一步对回答目标真的必要吗?已收集的信息够不够产出报告?
-   信息够就立即产出报告,不要再调工具。宁可早出报告,不要多检索。
-2. 同一工具连续失败(尤其换 URL 仍拿不到有效正文)说明这条路走不通,
-   立即停止重试该工具,改换思路或基于已有信息汇总。绝不反复重试同类失败。
-3. 信息不足也必须产出报告:基于已有来源如实汇总,对未能查证的部分明确标注"未能查证",
-   绝不空转到步数耗尽。一份基于部分来源的报告,远好过跑满步数却啥也没产出。
-
-== 检索预算(硬性上限,必须遵守)==
-- **来源数量上限:5 个**。抓取超过 5 个不同来源后,无论是否满意,必须立即产出报告。
-- **同一站点最多抓 1-2 个页面**。不要在同一站点反复换路径/换页面(如 weather.com.cn 的
-  weather1d/weathern/weather40d 等多个路径都是同一站点,试 1-2 个拿不到就换站,不要穷举)。
-- **首次拿到含目标数据的页面即停止**。不要为"更权威/更完整"反复换站交叉验证。
-  2-3 个来源足以产出报告,多数情况 1 个有效来源就够。
-- 调工具前数一数已抓了几个来源,达到预算立即转产出报告,不要再抓。
-
-== web_read 注意事项==
-web_read(url, mode="auto") 会自动选最快可用方式:先本地解析,正文不足或失败时自动
-升级到 JS 渲染服务。无需手动判断页面类型,直接用 auto。仅当明确知道页面类型时才用
-mode=http(静态)或 mode=reader(强制 JS 渲染)。同一站点连续失败说明该路走不通,
-立即停止重试,改用 search_memories/search_history 或基于已有信息汇总。`
 
 func init() {
 	channelfactory.Register(channelweb.NewChannel())
@@ -183,26 +143,29 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
 	// 先于 agentSvc 装配,因 delegate 工具 + 主 Agent system prompt 依赖子 Agent 框架。
 	agentTaskRepo := agentRepo.NewAgentTaskRepository(dbConn.GetGormDB())
-	subAgentRegistry := agentpkg.NewSubAgentRegistry()
-	subAgentRegistry.Register(domainagent.SubAgentCard{
-		Type:           "researcher",
-		Name:           "研究员",
-		Description:    "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。",
-		PromptTemplate: researcherSystemPrompt,
-		Tools:          []string{"rss_reader", "web_read", "search_memories", "search_history"},
-		MaxSteps:       15,
-		Timeout:        180 * time.Second,
-	})
 	// 适配 user.LLMConfigService -> agent.SubAgentLLMConfigProvider(方案3:子 Agent 优先用户配置)
 	subAgentLLMProvider := &subAgentLLMConfigAdapter{svc: llmConfigSvc}
-	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry, subAgentLLMProvider, agentTaskRepo)
+	// 子 Agent 可见工具由「工具能力标签 ∩ config 白名单」算出(仿 DSH ToolProviderResult,去角色后无子 Agent 卡)。
+	// 子 Agent 执行超时:config agent.sub_agent.timeout,缺省回落默认 180s(过短会误杀耗时研究任务)。
+	subAgentTimeout := agentpkg.DefaultSubAgentTimeout
+	if cfg.Agent.SubAgent.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Agent.SubAgent.Timeout); err == nil && d > 0 {
+			subAgentTimeout = d
+		} else {
+			logger.Warn("agent.sub_agent.timeout 无效,回落默认 180s: " + cfg.Agent.SubAgent.Timeout)
+		}
+	}
+	subAgentRunner := agentpkg.NewSubAgentRunner(agentLLMClient, agentLLMClient, globalToolRegistry,
+		cfg.Agent.SubAgent.AllowedCapabilities, // 空回落默认 ["research","interactive"]
+		subAgentTimeout,
+		subAgentLLMProvider, agentTaskRepo)
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
 	eventRepo := agentRepo.NewTaskEventRepository(dbConn.GetGormDB())
-	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRegistry, subAgentRunner, stepRepo, artifactRepo, eventRepo, nil) // notifier 飞书启动后注入(见 startFeishuChannel)
+	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRunner, stepRepo, artifactRepo, eventRepo, nil) // notifier 飞书启动后注入(见 startFeishuChannel)
 	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
 	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
-	// delegate 工具加入主 Agent 工具集(主 Agent 据此派活)
-	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentRegistry, subAgentSvc))
+	// delegate 工具加入主 Agent 工具集(主 Agent 派活给通用执行器,去角色后无 registry)
+	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentSvc))
 	// 任务管理工具:主 Agent 对派出去的任务可查(query)/补充(update)/取消(cancel)。
 	agentToolRegistry.Register(agentpkg.CreateQueryTaskTool(subAgentSvc))
 	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
@@ -225,10 +188,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
-	webHandler.SetSubAgentSupport(subAgentSvc, subAgentRegistry)
+	webHandler.SetSubAgentSupport(subAgentSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
-	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, subAgentRegistry, llmConfigSvc, msgSvc)
+	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
 
 	// v2.1: 邮箱密码认证装配
 	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
@@ -272,7 +235,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc, subAgentRegistry)
+	startFeishuChannel(cfg, bindingSvc, msgSvc, agentSvc, llmConfigSvc, subAgentSvc)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -341,7 +304,6 @@ func startFeishuChannel(
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
 	subAgentSvc *agentpkg.SubAgentService,
-	subAgentRegistry *agentpkg.SubAgentRegistry,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -364,7 +326,7 @@ func startFeishuChannel(
 	handler.SetSubAgentReporter(subAgentSvc)
 	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
 	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
-	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, subAgentRegistry, agentSvc, msgSvc, llmConfigSvc))
+	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, agentSvc, msgSvc, llmConfigSvc))
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)

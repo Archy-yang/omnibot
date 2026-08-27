@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"omnibot/internal/domain/conversation"
 	domainagent "omnibot/internal/domain/agent"
+	"omnibot/internal/domain/conversation"
 	repoagent "omnibot/internal/repository/agent"
 	chatrepo "omnibot/internal/repository/chat"
 )
@@ -45,26 +45,16 @@ func stepsDiagSetup(t *testing.T, llm StreamingLLMClient) (*SubAgentService, *re
 		Name:         "rss_reader",
 		DisplayLabel: "读取了 RSS",
 		Description:  "fake rss reader for diag",
+		Capabilities: []string{CapResearch}, // 对齐生产打标:子 Agent 可见性走能力白名单
 		Parameters:   map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return `{"title":"fake","items":[{"title":"文章A"}]}`, nil
 		},
 	}))
 
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type:           "researcher",
-		Name:           "研究员",
-		Description:    "diag",
-		PromptTemplate: "你是研究员。目标:{goal}",
-		Tools:          []string{"rss_reader"},
-		MaxSteps:       10,
-		Timeout:        3 * time.Second,
-	}))
-
 	// 真实 runner:用 mock 流式 LLM(noopSyncLLM 作 sync 占位,流式路径不会用到)
-	runner := NewSubAgentRunner(noopSyncLLM{}, llm, globalReg, nil, nil)
-	svc := NewSubAgentService(taskRepo, registry, runner, stepRepo, nil, nil, nil)
+	runner := NewSubAgentRunner(noopSyncLLM{}, llm, globalReg, nil, 0, nil, nil)
+	svc := NewSubAgentService(taskRepo, runner, stepRepo, nil, nil, nil)
 	return svc, taskRepo, stepRepo
 }
 
@@ -104,7 +94,7 @@ func TestSubAgentSteps_SuccessSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusCompleted, 3*time.Second)
@@ -143,7 +133,7 @@ func TestSubAgentSteps_FailureStillSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusFailed, 3*time.Second)
@@ -169,5 +159,5 @@ func TestSubAgentSteps_FailureStillSavesSteps(t *testing.T) {
 // newSimpleErr 一个简单 error 用于 openErr 模拟。
 type simpleErr struct{ msg string }
 
-func (e *simpleErr) Error() string { return e.msg }
+func (e *simpleErr) Error() string  { return e.msg }
 func newSimpleErr(msg string) error { return &simpleErr{msg: msg} }

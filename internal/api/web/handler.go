@@ -82,8 +82,7 @@ type Handler struct {
 	memoryService    MemoryService
 	agentService     AgentService
 	// 后台 Agent 框架(08 §4.5 前置汇报兜底)。nil 时不启用前置汇报(向后兼容)。
-	subAgentSvc      *agentpkg.SubAgentService
-	subAgentRegistry *agentpkg.SubAgentRegistry
+	subAgentSvc *agentpkg.SubAgentService
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -105,11 +104,10 @@ func NewHandler(
 	}
 }
 
-// SetSubAgentSupport 注入后台 Agent 框架依赖(前置汇报兜底用)。
+// SetSubAgentSupport 注入后台 Agent 框架依赖(前置汇报兜底用)。去角色后无 registry。
 // 未调用时 subAgentSvc 为 nil,Handler 行为与之前一致(无前置汇报)。
-func (h *Handler) SetSubAgentSupport(svc *agentpkg.SubAgentService, registry *agentpkg.SubAgentRegistry) {
+func (h *Handler) SetSubAgentSupport(svc *agentpkg.SubAgentService) {
 	h.subAgentSvc = svc
-	h.subAgentRegistry = registry
 }
 
 // SendMessageRequest 发送消息请求体

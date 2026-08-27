@@ -11,10 +11,14 @@ import (
 // ""(空串)=全局,所有组装都包含。
 type ScopeKey string
 
-// 主 Agent 作用域。子 Agent 用 SubScope(type) 构造。
+// 主 Agent 作用域。
 const ScopeMain ScopeKey = "main"
 
-// SubScope 构造子 Agent 作用域键(如 "sub:researcher")。
+// ScopeSub 子 Agent 作用域。去角色后子 Agent 是通用执行器,不再按角色分作用域;
+// 工具可见性已由「能力标签 ∩ 全局配置」决定(与 prompt scope 正交),sub 只需一个 scope。
+const ScopeSub ScopeKey = "sub"
+
+// SubScope 构造子 Agent 作用域键(如 "sub:researcher")。仅测试/历史用途保留;新代码统一用 ScopeSub。
 func SubScope(agentType string) ScopeKey { return ScopeKey("sub:" + agentType) }
 
 // PromptCtx 一次 Assemble 的请求:要谁(命中的作用域) + 本次运行的动态数据(§3.2)。
@@ -28,12 +32,12 @@ type Provider func(c PromptCtx) string
 
 // PromptSection 一条可注册的提示词片段(§3.3)。
 type PromptSection struct {
-	Name     string    // (Scope, Name) 唯一;同作用域内重复注册抛错
-	Scope    ScopeKey  // "" = 全局,所有组装参与
-	Order    int       // 排序,升序拼接
-	Text     string    // 静态文本;Text 与 Provider 二选一
-	Provider Provider  // 动态求值;两者都空则该 section 不产文本
-	Complete bool      // true = 该 section 独占整个 system prompt(逃逸口,§6)
+	Name     string   // (Scope, Name) 唯一;同作用域内重复注册抛错
+	Scope    ScopeKey // "" = 全局,所有组装参与
+	Order    int      // 排序,升序拼接
+	Text     string   // 静态文本;Text 与 Provider 二选一
+	Provider Provider // 动态求值;两者都空则该 section 不产文本
+	Complete bool     // true = 该 section 独占整个 system prompt(逃逸口,§6)
 }
 
 // StaticSection 构造一个静态 PromptSection。

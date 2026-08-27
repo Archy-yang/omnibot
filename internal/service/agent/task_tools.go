@@ -71,7 +71,7 @@ func CreateCancelTaskTool(svc *SubAgentService) Tool {
 		Description: "取消一个未结束的后台任务(pending 或 running 状态)。已完成的任务不可取消。" +
 			"用户说\"不用查了\"\"取消\"时用此工具。",
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":     "object",
 			"required": []string{"task_id"},
 			"properties": map[string]interface{}{
 				"task_id": map[string]interface{}{
@@ -108,7 +108,7 @@ func CreateUpdateTaskTool(svc *SubAgentService) Tool {
 			"running 任务可追加补充信息(note),子 Agent 下一轮会读到并入推理。" +
 			"用户对已派任务补充需求时用此工具。",
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":     "object",
 			"required": []string{"task_id"},
 			"properties": map[string]interface{}{
 				"task_id": map[string]interface{}{
@@ -197,11 +197,12 @@ func CreateRequestInputTool(svc *SubAgentService) Tool {
 	return Tool{
 		Name:         "request_input",
 		DisplayLabel: "请求了用户输入",
+		Capabilities: []string{CapInteractive},
 		Description: "当任务执行中需要用户/主 Agent 提供更多信息才能继续时调用。" +
 			"调用后任务挂起(input_required),你的问题会存入任务,主 Agent 会问用户并补充。" +
 			"问题要具体清晰(如'你更关注自部署还是云服务?')。调用后结束本轮,不要继续。",
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":     "object",
 			"required": []string{"question"},
 			"properties": map[string]interface{}{
 				"question": map[string]interface{}{
