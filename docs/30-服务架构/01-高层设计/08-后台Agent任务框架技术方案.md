@@ -80,23 +80,24 @@
 
 ## 3. A2A 协议语义(进程内子集)
 
-### 3.1 Agent Card(能力声明)
+### 3.1 子 Agent:通用执行器(去角色,已移除 Agent Card)
 
-`internal/domain/agent/sub_agent_card.go`:
-```go
-// SubAgentCard 子 Agent 能力声明(A2A Agent Card 的进程内子集)
-type SubAgentCard struct {
-    Type        string            // 子 Agent 类型标识,如 "researcher"
-    Name        string            // 面向主 Agent 的名称(写进 delegate 工具描述)
-    Description string            // 能力描述,主 Agent LLM 据此决定是否派活
-    // 委托指令模板:主 Agent 派活时填入 {goal},生成子 Agent 的 system prompt
-    PromptTemplate string
-    // 注:不再有 Tools 字段 —— 子 Agent 可见工具集由「工具能力标签 ∩ config 白名单」算出(见 §5.6)
-    // 停止条件:最大步数 / 超时(第一版固定,不做 LLM 自判停止)
-    MaxSteps    int
-    Timeout     time.Duration
-}
+> **v1.10+**:已移除 `SubAgentCard`/`SubAgentRegistry`(角色卡注册层,见 §5.7)。子 Agent 是**通用执行器**,
+> 身份 = 任务合同(TaskSpec),不再有"researcher"等框架枚举角色。persona 是任务级自由文本 `persona_hint`
+> (主 Agent 按任务给)。工具可见性由「工具能力标签 ∩ config 白名单」算出(§5.6)。
+
+子 Agent 的 system prompt 由 `agentprompt` 注册式组装,固定结构:
+
 ```
+agent_base(-100)  共享基础人格(DefaultSystemPrompt,与主 Agent 同款)
+sub_role(0)       通用执行器 persona(SubAgentExecutorPersona,含收敛规则)
+[sub_persona_hint](50)   任务级角色 hint(主 Agent 传,可空) → 【本次任务角色】
+sub_contract(100) 任务合同(deliverables/criteria/background/constraints)
+```
+
+`TaskSpec` 新增两字段承载去角色语义:
+- `Type string`:任务溯源标签(可空),落 `AgentTask.SubAgentType`,仅供展示/溯源,不 gate 任何机制。
+- `PersonaHint string`:任务级角色扮演提示(可空),注入子 Agent prompt。
 
 ### 3.2 Task(任务生命周期)
 
@@ -105,7 +106,7 @@ type SubAgentCard struct {
 type AgentTask struct {
     ID          int64
     UserID      int64            // 归属用户(任务按用户隔离)
-    SubAgentType string          // "researcher" 等
+    SubAgentType string          // 溯源标签(可空,来自 taskSpec.Type;去角色后非角色,不 gate 机制)
     Goal        string           // 主 Agent 生成的委托目标(已填入 prompt)
     Status      string           // pending / running / completed / failed
     Artifact    *string          // 子 Agent 最终产出(JSON 或文本),completed 时填
@@ -279,31 +280,46 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
 
 **收益**:分类轴从"角色"下沉到"工具能力",可组合非枚举;子 Agent 是通用执行器,换能力只要改 config,不动 ReAct/prompt/runner。逻辑层保持抽象,运行层受配置文件约束。
 
+### 5.7 子 Agent 去角色(通用执行器 + 任务级 persona hint)
+
+**问题**:v1.10 前子 Agent 身份是 `SubAgentCard.Type`="researcher" 等固定角色,把"研究员属于哪类"写死进抽象框架(与已删派活规划器同类)。工具能力化(§5.6)已解放工具,但角色本身还在(卡身份、delegate 必填 sub_agent_type、主 prompt 硬写研究员)。
+
+**做法**(已落地):
+- **删 `SubAgentCard`/`SubAgentRegistry`**:框架不再有角色卡注册层。子 Agent = 通用执行器,身份 = TaskSpec。
+- **delegate 去必填 `sub_agent_type`**:改传 `goal + deliverables + completion_criteria + background`,可选 `persona_hint`(任务级角色)+ `task_type`(溯源标签)。
+- **sub prompt 固定结构**:共享基础人格 + `SubAgentExecutorPersona` + 可选【本次任务角色】+ 任务合同。scope 从 `sub:<type>` 收敛为单一 `ScopeSub`。
+- **`TaskSpec.Type`** = 溯源标签(落 `AgentTask.SubAgentType`,仅展示)。
+
+**取舍**:persona 从"框架枚举的卡片"改为"任务级自由文本 hint"(主 Agent 每次委托按任务给,可空)。好处是零领域知识进框架、完全抽象;代价是研究类任务产出质量依赖主 Agent 把 deliverable/criteria/persona 写清楚——主 prompt 已加模板引导,默认 `persona_hint` 空时退化为基础执行器 + 任务合同。运行时执行预算归框架、**不给 LLM 填**(防乱设):MaxSteps = `TaskSpec.Constraints.MaxSteps` 覆盖 or 框架默认;Timeout = 子 Agent 专属 `agent.sub_agent.timeout`(默认 **180s**,`DefaultSubAgentTimeout`;注意勿误用主 Agent `DefaultTimeout` 120s,会误杀耗时研究任务)。
+
 ---
 
-## 6. 示例子 Agent:researcher(研究员)
+## 6. 子 Agent:通用后台执行器(去角色后无固定示例子 Agent)
 
-第一版配这一个,验证框架。
+去角色后不再预注册 researcher 卡。任何耗时任务都委派给通用执行器,任务本身决定一切:
 
-- SubAgentCard:
-  - Type: "researcher"
-  - Name: "研究员"
-  - Description: "用于需要查阅资料、阅读 RSS、检索历史信息的耗时研究任务。派给它一个研究目标,它会多步检索并汇总成报告。"
-  - PromptTemplate: "你是一名研究员。目标:{goal}。使用可用工具检索信息,多步推理,最后产出一份结构化报告(要点 + 来源)。"
-  - MaxSteps: 15
-  - Timeout: 180s
-  - ~~Tools~~(已移除):可见工具不再由角色卡固定，而由「工具能力标签 ∩ config `agent.sub_agent.allowed_capabilities`」算出(见 §5.6)。researcher 在默认白名单 `[research, interactive]` 下落到 `rss_reader/web_read/search_memories/search_history` + 强制基线 `request_input`。
+- delegate 委派一个任务 = `goal(必) + deliverables + completion_criteria + background` + 可选 `persona_hint` + `task_type`。
+- 子 Agent system prompt = 共享基础人格 + 通用执行器 persona(含收敛规则:工具失败换路线、达成完成标准即产出)+ 可选【本次任务角色】+ 任务合同。
+- 可见工具由能力白名单决定(§5.6)。默认白名单 `[research, interactive]` 下可用 = `rss_reader/web_read/search_memories/search_history` + 强制基线 `request_input`。
 
-主 Agent delegate 工具描述会动态包含:"researcher(研究员):用于查阅资料/阅读RSS/检索历史的耗时研究任务"。
+**委托示例**(带 persona_hint):
+```json
+delegate({
+  "goal": "调研三个自部署 LLM 网关的选型",
+  "deliverables": [{"name":"candidate_list","description":"候选方案清单"},
+                   {"name":"recommendation","description":"推荐顺序和理由"}],
+  "completion_criteria": ["至少比较三个方案", "给出明确推荐"],
+  "persona_hint": "你是严谨的技术研究员,先多路检索,再出带来源的结构化报告"
+})
+```
 
 ---
 
 ## 7. TDD 开发顺序
 
-1. **Domain + Repo**:AgentTask 实体 + SubAgentCard + AgentTaskRepository + 单测 + AutoMigrate
-2. **SubAgentRegistry**:注册/查询 SubAgentCard + 单测
-3. **SubAgentService**:StartTask(建任务+起goroutine)/executeTask(跑子Agent写Artifact)/GetCompletedUnreported/MarkReported + 单测(mock AgentService)
-4. **delegate 工具**:CreateDelegateTool + 单测
+1. **Domain + Repo**:AgentTask 实体 + TaskSpec(Type/PersonaHint) + AgentTaskRepository + 单测 + AutoMigrate
+2. **SubAgentService**:StartTask(建任务+起goroutine)/executeTask(跑子Agent写Artifact)/GetCompletedUnreported/MarkReported + 单测(mock Runner)
+3. **delegate 工具**:CreateDelegateTool(去 sub_agent_type,带 persona_hint/task_type) + 单测
 5. **主 Agent 前置汇报**:主对话流程改造(查未汇报任务+注入回执)+ 单测
 6. **装配 + 示例子 Agent**:routes.go 注册 researcher + 装配 subAgentSvc + delegate 工具
 7. **回归 + 手测**:go test + 起后端真实派活验证(需真实 LLM)

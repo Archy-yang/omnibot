@@ -3,75 +3,60 @@ package agent
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	domainagent "omnibot/internal/domain/agent"
 )
 
+// 回执测试(去角色后不再依赖 registry;SubAgentType 作溯源标签显示)。
+
+// TestBuildTaskReceipt_Completed 完成任务回执含任务ID/类型标签(SubAgentType)/目标/结果摘要。
 func TestBuildTaskReceipt_Completed(t *testing.T) {
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
-	}))
 	artifact := "Go 1.24 要点"
 	task := &domainagent.AgentTask{
-		ID: 123, UserID: 1, SubAgentType: "researcher", Goal: "研究 Go 1.24",
+		ID: 123, UserID: 1, SubAgentType: "research", Goal: "研究 Go 1.24",
 		Status: domainagent.TaskStatusCompleted, Artifact: &artifact,
 	}
 
-	got := BuildTaskReceipt(registry, task)
+	got := BuildTaskReceipt(task)
 	assert.Contains(t, got, "任务ID: 123")
-	assert.Contains(t, got, "研究员(researcher)")
+	assert.Contains(t, got, "任务类型: research")
 	assert.Contains(t, got, "研究 Go 1.24")
 	assert.Contains(t, got, "Go 1.24 要点")
 }
 
+// TestBuildTaskReceipt_NoTypeLabel 无 SubAgentType 标签时显示"后台任务"。
+func TestBuildTaskReceipt_NoTypeLabel(t *testing.T) {
+	artifact := "r"
+	task := &domainagent.AgentTask{
+		ID: 1, Goal: "g",
+		Status: domainagent.TaskStatusCompleted, Artifact: &artifact,
+	}
+	got := BuildTaskReceipt(task)
+	assert.Contains(t, got, "任务类型: 后台任务")
+}
+
 func TestBuildTaskReceipt_Failed(t *testing.T) {
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
-	}))
 	errMsg := "子 Agent 执行超时"
 	task := &domainagent.AgentTask{
-		ID: 456, UserID: 1, SubAgentType: "researcher", Goal: "g",
+		ID: 456, UserID: 1, SubAgentType: "research", Goal: "g",
 		Status: domainagent.TaskStatusFailed, ErrorMsg: &errMsg,
 	}
 
-	got := BuildTaskReceipt(registry, task)
+	got := BuildTaskReceipt(task)
 	assert.Contains(t, got, "失败: 子 Agent 执行超时")
 	assert.NotContains(t, got, "结果:\n\n") // 不应有空结果
 }
 
-func TestBuildTaskReceipt_UnregisteredType(t *testing.T) {
-	registry := NewSubAgentRegistry()
-	artifact := "r"
-	task := &domainagent.AgentTask{
-		ID: 1, SubAgentType: "unknown", Goal: "g",
-		Status: domainagent.TaskStatusCompleted, Artifact: &artifact,
-	}
-	got := BuildTaskReceipt(registry, task)
-	// 未注册子 Agent,名称回落到类型标识
-	assert.Contains(t, got, "unknown(unknown)")
-}
-
 func TestBuildReportInstruction_MultipleTasks(t *testing.T) {
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
-	}))
 	a1 := "r1"
 	a2 := "r2"
 	tasks := []*domainagent.AgentTask{
-		{ID: 1, SubAgentType: "researcher", Goal: "g1", Status: domainagent.TaskStatusCompleted, Artifact: &a1},
-		{ID: 2, SubAgentType: "researcher", Goal: "g2", Status: domainagent.TaskStatusCompleted, Artifact: &a2},
+		{ID: 1, SubAgentType: "research", Goal: "g1", Status: domainagent.TaskStatusCompleted, Artifact: &a1},
+		{ID: 2, SubAgentType: "research", Goal: "g2", Status: domainagent.TaskStatusCompleted, Artifact: &a2},
 	}
-	got := BuildReportInstruction(registry, tasks, true)
+	got := BuildReportInstruction(tasks, true)
 	assert.Contains(t, got, "管家口吻")
 	assert.Contains(t, got, "任务ID: 1")
 	assert.Contains(t, got, "任务ID: 2")
@@ -82,26 +67,21 @@ func TestBuildReportInstruction_MultipleTasks(t *testing.T) {
 // TestBuildTaskReceipt_SummaryTruncates 控制面/数据面分离(#20):
 // 前置汇报回执(fullArtifact=false)只给摘要(截断),不塞全文。
 func TestBuildTaskReceipt_SummaryTruncates(t *testing.T) {
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: time.Second,
-	}))
 	longArtifact := strings.Repeat("详", 300) // 超过 receiptSummaryMax(200)
 	task := &domainagent.AgentTask{
-		ID: 1, SubAgentType: "researcher", Goal: "g",
+		ID: 1, SubAgentType: "research", Goal: "g",
 		Status: domainagent.TaskStatusCompleted, Artifact: &longArtifact,
 	}
 
 	// 摘要模式(前置汇报):截断 + 提示
-	summary := BuildTaskReceipt(registry, task)
+	summary := BuildTaskReceipt(task)
 	assert.Contains(t, summary, "...")
 	assert.Contains(t, summary, "完整结果可查任务产物")
 	assert.False(t, strings.Contains(summary, strings.Repeat("详", 201)),
 		"摘要不应含超长全文")
 
 	// 完整模式(report 接口):不截断,给全文
-	full := buildTaskReceiptForReport(registry, task, true)
+	full := buildTaskReceiptForReport(task, true)
 	assert.NotContains(t, full, "完整结果可查任务产物")
 	assert.Contains(t, full, strings.Repeat("详", 300))
 }

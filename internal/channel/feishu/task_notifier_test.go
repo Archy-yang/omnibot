@@ -13,7 +13,7 @@ import (
 
 // stubFeishuTask 构造一个飞书来源的已完成任务。
 func stubFeishuTask() *domainagent.AgentTask {
-	t := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("查询北京天气"), domainagent.SourceFeishu, "ou_test_open_id")
+	t := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("查询北京天气"), domainagent.SourceFeishu, "ou_test_open_id")
 	art := "北京未来7天天气:晴,25-32度..."
 	t.Artifact = &art
 	t.Status = domainagent.TaskStatusCompleted
@@ -27,11 +27,9 @@ func TestFeishuNotifier_RunsAgentSavesAndPushes(t *testing.T) {
 	sender := &mockSender{}
 	agentSvc := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "主人，北京未来7天都是晴天，25-32度，适合出行~"}}
 	msgSvc := &mockMessageService{}
-	registry := agentpkg.NewSubAgentRegistry()
 
 	n := &FeishuTaskNotifier{
 		sender:   sender,
-		registry: registry,
 		agentSvc: agentSvc,
 		msgSvc:   msgSvc,
 		// llmConfigSvc nil:测试不选用户配置,走默认
@@ -61,11 +59,9 @@ func TestFeishuNotifier_FallsBackToReceiptOnAgentError(t *testing.T) {
 	sender := &mockSender{}
 	agentSvc := &mockAgentService{err: assert.AnError}
 	msgSvc := &mockMessageService{}
-	registry := agentpkg.NewSubAgentRegistry()
 
 	n := &FeishuTaskNotifier{
 		sender:   sender,
-		registry: registry,
 		agentSvc: agentSvc,
 		msgSvc:   msgSvc,
 	}

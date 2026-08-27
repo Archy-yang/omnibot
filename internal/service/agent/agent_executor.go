@@ -24,8 +24,8 @@ type AgentExecutor interface {
 	AgentID() string
 	// Capabilities 返回该执行器的能力(支持取消/流式/输入等)。预留,当前可返回 nil。
 	Capabilities(ctx context.Context) (*AgentCapabilities, error)
-	// Submit 提交任务,返回任务回执(含 taskID)。异步,不阻塞。
-	Submit(ctx context.Context, userID int64, subAgentType string, spec domainagent.TaskSpec) (*TaskReceipt, error)
+	// Submit 提交任务,返回任务回执(含 taskID)。异步,不阻塞。spec 携带任务合同(含 persona_hint, 无角色)。
+	Submit(ctx context.Context, userID int64, spec domainagent.TaskSpec) (*TaskReceipt, error)
 	// Send 向运行中任务发消息(补充输入/update)。
 	Send(ctx context.Context, taskID int64, msg AgentMessage) error
 	// Cancel 取消任务。
@@ -36,10 +36,10 @@ type AgentExecutor interface {
 
 // AgentCapabilities 执行器能力描述(预留,未来 Agent Registry 用)。
 type AgentCapabilities struct {
-	SupportsStreaming       bool
+	SupportsStreaming         bool
 	SupportsPushNotifications bool
-	SupportsCancellation    bool
-	SupportsInputRequired   bool
+	SupportsCancellation      bool
+	SupportsInputRequired     bool
 }
 
 // TaskReceipt 提交任务后的回执。
@@ -51,8 +51,8 @@ type TaskReceipt struct {
 
 // AgentMessage 父->子消息(补充输入)。
 type AgentMessage struct {
-	Role  string         `json:"role"`  // "parent_agent" / "user"
-	Parts []MessagePart  `json:"parts"` // 消息片段(文本/数据)
+	Role  string        `json:"role"`  // "parent_agent" / "user"
+	Parts []MessagePart `json:"parts"` // 消息片段(文本/数据)
 }
 
 // MessagePart 消息片段(预留多模态:文本/数据/文件引用)。
@@ -64,9 +64,9 @@ type MessagePart struct {
 
 // AgentTaskStatus 任务状态快照(供 Status 接口返回)。
 type AgentTaskStatus struct {
-	TaskID   int64  `json:"task_id"`
-	Status   string `json:"status"`
-	Goal     string `json:"goal"`
+	TaskID int64  `json:"task_id"`
+	Status string `json:"status"`
+	Goal   string `json:"goal"`
 }
 
 // LocalAgentExecutor 本地自研子 Agent 执行器(包装 SubAgentService)。
@@ -90,11 +90,11 @@ func (e *LocalAgentExecutor) Capabilities(ctx context.Context) (*AgentCapabiliti
 	}, nil
 }
 
-func (e *LocalAgentExecutor) Submit(ctx context.Context, userID int64, subAgentType string, spec domainagent.TaskSpec) (*TaskReceipt, error) {
+func (e *LocalAgentExecutor) Submit(ctx context.Context, userID int64, spec domainagent.TaskSpec) (*TaskReceipt, error) {
 	// source/notifyTarget 从 ctx 取(handler 注入),决定完成时往哪推送。
 	source := getSourceFromContext(ctx)
 	notifyTarget := getNotifyTargetFromContext(ctx)
-	taskID, err := e.svc.StartTask(ctx, userID, subAgentType, spec, source, notifyTarget)
+	taskID, err := e.svc.StartTask(ctx, userID, spec, source, notifyTarget)
 	if err != nil {
 		return nil, err
 	}

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -17,10 +16,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	agentpkg "omnibot/internal/service/agent"
 	domainagent "omnibot/internal/domain/agent"
 	repoagent "omnibot/internal/repository/agent"
 	chatrepo "omnibot/internal/repository/chat"
+	agentpkg "omnibot/internal/service/agent"
 )
 
 // TestHandleSendMessageAgentStream_PreReportInjectsReceipt 验证前置汇报兜底:
@@ -37,15 +36,10 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}))
 	repo := repoagent.NewAgentTaskRepository(db)
-	registry := agentpkg.NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "查阅资料",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: 5 * time.Second,
-	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
+	subSvc := agentpkg.NewSubAgentService(repo, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 
 	// 造一个 completed 未汇报任务
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
 	require.NoError(t, repo.Create(task))
 	art := "Go 1.24 要点"
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &art, nil))
@@ -63,7 +57,7 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 		&mockMemoryService{},
 		agentSvc,
 	)
-	handler.SetSubAgentSupport(subSvc, registry)
+	handler.SetSubAgentSupport(subSvc)
 
 	router := gin.New()
 	router.Use(injectUserID(42))
@@ -104,12 +98,7 @@ func TestHandleSendMessageAgentStream_NoPreReportWhenNoTasks(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}))
 	repo := repoagent.NewAgentTaskRepository(db)
-	registry := agentpkg.NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type: "researcher", Name: "研究员", Description: "d",
-		PromptTemplate: "p", MaxSteps: 10, Timeout: 5 * time.Second,
-	}))
-	subSvc := agentpkg.NewSubAgentService(repo, registry, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
+	subSvc := agentpkg.NewSubAgentService(repo, &webMockRunner{}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
 	// 不造任务
 
 	agentSvc := &mockAgentService{events: []agentpkg.AgentEvent{
@@ -124,7 +113,7 @@ func TestHandleSendMessageAgentStream_NoPreReportWhenNoTasks(t *testing.T) {
 		&mockMemoryService{},
 		agentSvc,
 	)
-	handler.SetSubAgentSupport(subSvc, registry)
+	handler.SetSubAgentSupport(subSvc)
 
 	router := gin.New()
 	router.Use(injectUserID(42))

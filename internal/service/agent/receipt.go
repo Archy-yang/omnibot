@@ -17,12 +17,11 @@ import (
 //
 // 主 Agent system 指示:看到此格式先向用户汇报该任务结果,再处理当前消息。
 // web(report 接口/前置汇报)和飞书(前置汇报)共用此格式。
-func BuildTaskReceipt(registry *SubAgentRegistry, task *domainagent.AgentTask) string {
-	var name string
-	if card, ok := registry.Get(task.SubAgentType); ok {
-		name = card.Name
-	} else {
-		name = task.SubAgentType // 回落到类型标识
+func BuildTaskReceipt(task *domainagent.AgentTask) string {
+	// 去角色后 SubAgentType 是溯源标签(可空);空则显示"后台任务"。
+	name := task.SubAgentType
+	if name == "" {
+		name = "后台任务"
 	}
 
 	result := ""
@@ -43,7 +42,7 @@ func BuildTaskReceipt(registry *SubAgentRegistry, task *domainagent.AgentTask) s
 	var b strings.Builder
 	b.WriteString("[子任务完成回执]\n")
 	fmt.Fprintf(&b, "任务ID: %d\n", task.ID)
-	fmt.Fprintf(&b, "子Agent: %s(%s)\n", name, task.SubAgentType)
+	fmt.Fprintf(&b, "任务类型: %s\n", name)
 	fmt.Fprintf(&b, "目标: %s\n", task.Goal)
 	b.WriteString("结果:\n")
 	b.WriteString(result)
@@ -78,30 +77,29 @@ func extractInputQuestion(notes []string) string {
 // 用于 report 接口(单任务详细汇报)和前置汇报(多任务转述)。
 // report 接口需完整内容生成汇报 -> fullArtifact=true 给全文;
 // 前置汇报转述多任务 -> fullArtifact=false 给摘要(控制面/数据面分离,#20),
-//   主 Agent 需要详情再 query_task 取 artifact。
-func BuildReportInstruction(registry *SubAgentRegistry, tasks []*domainagent.AgentTask, fullArtifact bool) string {
+//
+//	主 Agent 需要详情再 query_task 取 artifact。
+func BuildReportInstruction(tasks []*domainagent.AgentTask, fullArtifact bool) string {
 	var b strings.Builder
-	b.WriteString("以下是你之前安排的子任务的完成回执,请向用户汇报这些任务的结果,")
+	b.WriteString("以下是你之前安排的后台任务的完成回执,请向用户汇报这些任务的结果,")
 	b.WriteString("用管家口吻转述(不要原样照搬回执格式,要自然语言汇报)。")
 	b.WriteString("汇报完即可,不需要用户再追问。\n\n")
 	for _, task := range tasks {
-		b.WriteString(buildTaskReceiptForReport(registry, task, fullArtifact))
+		b.WriteString(buildTaskReceiptForReport(task, fullArtifact))
 		b.WriteString("\n---\n")
 	}
 	return b.String()
 }
 
 // buildTaskReceiptForReport 按 fullArtifact 决定给全文或摘要。
-func buildTaskReceiptForReport(registry *SubAgentRegistry, task *domainagent.AgentTask, fullArtifact bool) string {
+func buildTaskReceiptForReport(task *domainagent.AgentTask, fullArtifact bool) string {
 	if !fullArtifact {
-		return BuildTaskReceipt(registry, task) // 摘要(控制面)
+		return BuildTaskReceipt(task) // 摘要(控制面)
 	}
 	// fullArtifact=true:给完整 artifact(report 接口详细汇报用)
-	var name string
-	if card, ok := registry.Get(task.SubAgentType); ok {
-		name = card.Name
-	} else {
-		name = task.SubAgentType
+	name := task.SubAgentType
+	if name == "" {
+		name = "后台任务"
 	}
 	result := ""
 	if task.Status == domainagent.TaskStatusFailed {
@@ -116,7 +114,7 @@ func buildTaskReceiptForReport(registry *SubAgentRegistry, task *domainagent.Age
 	var b strings.Builder
 	b.WriteString("[子任务完成回执]\n")
 	fmt.Fprintf(&b, "任务ID: %d\n", task.ID)
-	fmt.Fprintf(&b, "子Agent: %s(%s)\n", name, task.SubAgentType)
+	fmt.Fprintf(&b, "任务类型: %s\n", name)
 	fmt.Fprintf(&b, "目标: %s\n", task.Goal)
 	b.WriteString("结果:\n")
 	b.WriteString(result)

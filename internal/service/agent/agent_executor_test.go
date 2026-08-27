@@ -31,7 +31,7 @@ func TestLocalAgentExecutor_Submit(t *testing.T) {
 	e := NewLocalAgentExecutor(svc)
 	ctx := withUserID(context.Background(), 42)
 
-	receipt, err := e.Submit(ctx, 42, "researcher", domainagent.NewTaskSpec("g"))
+	receipt, err := e.Submit(ctx, 42, domainagent.NewTaskSpec("g"))
 	require.NoError(t, err)
 	assert.NotZero(t, receipt.TaskID)
 	assert.Equal(t, domainagent.TaskStatusPending, receipt.Status)
@@ -41,7 +41,7 @@ func TestLocalAgentExecutor_Submit(t *testing.T) {
 func TestLocalAgentExecutor_Send(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	e := NewLocalAgentExecutor(svc)
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"), "web", "")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
 	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
 
@@ -61,7 +61,7 @@ func TestLocalAgentExecutor_Send(t *testing.T) {
 func TestLocalAgentExecutor_Status(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	e := NewLocalAgentExecutor(svc)
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"), "web", "")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	st, err := e.Status(context.Background(), task.ID)
@@ -74,7 +74,7 @@ func TestLocalAgentExecutor_Status(t *testing.T) {
 func TestLocalAgentExecutor_Cancel(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	e := NewLocalAgentExecutor(svc)
-	task := domainagent.NewAgentTask(42, "researcher", domainagent.NewTaskSpec("g"), "web", "")
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
 
 	ctx := withUserID(context.Background(), 42)

@@ -24,23 +24,20 @@ import (
 type AgentTaskHandler struct {
 	subAgentSvc      *agentpkg.SubAgentService
 	agentService     AgentService
-	registry         *agentpkg.SubAgentRegistry
 	llmConfigService LLMConfigService
 	messageService   MessageService // 落库汇报消息(Kind=report),刷新后历史仍能还原
 }
 
-// NewAgentTaskHandler 创建任务 handler。
+// NewAgentTaskHandler 创建任务 handler。去角色后无 registry。
 func NewAgentTaskHandler(
 	subAgentSvc *agentpkg.SubAgentService,
 	agentService AgentService,
-	registry *agentpkg.SubAgentRegistry,
 	llmConfigService LLMConfigService,
 	messageService MessageService,
 ) *AgentTaskHandler {
 	return &AgentTaskHandler{
 		subAgentSvc:      subAgentSvc,
 		agentService:     agentService,
-		registry:         registry,
 		llmConfigService: llmConfigService,
 		messageService:   messageService,
 	}
@@ -139,7 +136,7 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 	}
 
 	// 构造汇报上下文:system(回执+汇报指令) + user(虚拟触发)
-	instruction := agentpkg.BuildReportInstruction(h.registry, []*domainagent.AgentTask{task}, true)
+	instruction := agentpkg.BuildReportInstruction([]*domainagent.AgentTask{task}, true)
 	// 注:局部变量命名为 reportConversation,避免遮蔽 conversation 包导入(下方累积 segments/steps 要用)。
 	reportConversation := []map[string]interface{}{
 		{"role": "system", "content": instruction},

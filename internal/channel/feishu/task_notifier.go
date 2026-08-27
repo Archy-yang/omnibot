@@ -31,23 +31,20 @@ const (
 // 转述失败回落裸回执:保证消息必达(不因 LLM 失败而丢消息),但回落不落库(无自然语言)。
 type FeishuTaskNotifier struct {
 	sender       Sender
-	registry     *agentpkg.SubAgentRegistry
 	agentSvc     AgentService     // 主 Agent 服务:Run 转述成自然语言
 	msgSvc       MessageService   // 落 report message
 	llmConfigSvc LLMConfigService // 选 LLM(用户自定义优先,与主对话一致)
 }
 
-// NewFeishuTaskNotifier 创建飞书任务推送器。
+// NewFeishuTaskNotifier 创建飞书任务推送器。去角色后不接收 SubAgentRegistry。
 func NewFeishuTaskNotifier(
 	sender Sender,
-	registry *agentpkg.SubAgentRegistry,
 	agentSvc AgentService,
 	msgSvc MessageService,
 	llmConfigSvc LLMConfigService,
 ) *FeishuTaskNotifier {
 	return &FeishuTaskNotifier{
 		sender:       sender,
-		registry:     registry,
 		agentSvc:     agentSvc,
 		msgSvc:       msgSvc,
 		llmConfigSvc: llmConfigSvc,
@@ -90,7 +87,7 @@ func (n *FeishuTaskNotifier) NotifyTaskCompleted(ctx context.Context, openID str
 // ok=false 表示转述失败(Run 报错或空回复)。
 func (n *FeishuTaskNotifier) runAgentReport(ctx context.Context, task *domainagent.AgentTask) (finalResponse string, records []agentpkg.StepRecord, ok bool) {
 	// 构造汇报上下文:system(回执+汇报指令,fullArtifact=true 给完整产物) + user(虚拟触发)
-	instruction := agentpkg.BuildReportInstruction(n.registry, []*domainagent.AgentTask{task}, true)
+	instruction := agentpkg.BuildReportInstruction([]*domainagent.AgentTask{task}, true)
 	conv := []map[string]interface{}{
 		{"role": "system", "content": instruction},
 		{"role": "user", "content": "请汇报这个子任务的结果。"},
@@ -118,7 +115,7 @@ func (n *FeishuTaskNotifier) runAgentReport(ctx context.Context, task *domainage
 // sendReceiptFallback 转述失败时推裸回执(消息必达)。不落库。
 // 用带标题的 2.0 卡片:标题由 header 承载,正文直接用 receipt(不再加文本前缀)。
 func (n *FeishuTaskNotifier) sendReceiptFallback(ctx context.Context, openID string, task *domainagent.AgentTask) error {
-	receipt := agentpkg.BuildTaskReceipt(n.registry, task)
+	receipt := agentpkg.BuildTaskReceipt(task)
 	if err := n.sender.SendCard(ctx, openID, reportCardTitle, receipt, reportCardTemplate); err != nil {
 		logger.ErrorWithFields("feishu: receipt fallback send failed",
 			zap.Int64("task_id", task.ID), zap.String("open_id", openID), zap.Error(err))

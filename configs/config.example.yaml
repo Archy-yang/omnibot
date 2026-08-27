@@ -85,6 +85,7 @@ logger:
 agent:
   sub_agent:
     allowed_capabilities: ["research", "interactive"]
+    timeout: "180s"
 
 # 认证配置(v2.1 邮箱密码登录)
 # jwt_secret 生产必须改为强随机值(建议 ≥32 字符),不要提交到 git;

@@ -10,6 +10,11 @@ import (
 	repoagent "omnibot/internal/repository/agent"
 )
 
+// DefaultSubAgentTimeout 子 Agent 执行超时默认值(180s,对齐旧 researcher 卡预算)。
+// 多步联网研究任务(web_read 多路检索)吃时间,120s(DefaultTimeout)太薄会导致"执行超时"误杀。
+// 子 Agent 专属超时,与主 Agent 兜底(DefaultTimeout 120s)分离;config agent.sub_agent.timeout 可覆盖。
+const DefaultSubAgentTimeout = 180 * time.Second
+
 // SubAgentLLMConfigProvider 子 Agent 的用户 LLM 配置查询接口(方案3)。
 // agent 包不直接依赖 service/user(分层洁癖),由 routes.go 用 user.LLMConfigService 适配注入。
 // nil 时子 Agent 用系统默认 LLM(08 §5.1 原行为)。
@@ -29,6 +34,7 @@ type subAgentRunnerImpl struct {
 	defaultSyncClient   LLMClient
 	globalToolRegistry  *ToolRegistry // 全局工具池,子 Agent 工具从这里选
 	allowedCapabilities []string      // 能力白名单:与工具能力标签交集决定子 Agent 可见工具集(仿 DSH ToolProviderResult)
+	timeout             time.Duration // 子 Agent 执行超时(≤0 回落 DefaultSubAgentTimeout)
 	llmConfigProvider   SubAgentLLMConfigProvider
 	taskRepo            repoagent.AgentTaskRepository // 注入:装配 NoteInjectionHook 读 task.Notes
 }
@@ -36,6 +42,7 @@ type subAgentRunnerImpl struct {
 // NewSubAgentRunner 创建生产 SubAgentRunner。
 // defaultClient 需同时实现 LLMClient 和 StreamingLLMClient(如 OpenAILLMClient)。
 // allowedCapabilities 为子 Agent 可见工具的能力白名单(空则回落 DefaultSubAgentCapabilities)。
+// timeout 为子 Agent 执行超时(≤0 回落 180s;勿用主 Agent 的 DefaultTimeout 120s,会误杀耗时研究任务)。
 // llmConfigProvider 可为 nil(此时子 Agent 一律用系统默认)。
 // taskRepo 可为 nil(此时不装配 NoteInjectionHook,running 态 update 的 notes 不注入)。
 func NewSubAgentRunner(
@@ -43,35 +50,40 @@ func NewSubAgentRunner(
 	defaultStreamClient StreamingLLMClient,
 	globalToolRegistry *ToolRegistry,
 	allowedCapabilities []string,
+	timeout time.Duration,
 	llmConfigProvider SubAgentLLMConfigProvider,
 	taskRepo repoagent.AgentTaskRepository,
 ) SubAgentRunner {
 	if len(allowedCapabilities) == 0 {
 		allowedCapabilities = DefaultSubAgentCapabilities
 	}
+	if timeout <= 0 {
+		timeout = DefaultSubAgentTimeout
+	}
 	return &subAgentRunnerImpl{
 		defaultStreamClient: defaultStreamClient,
 		defaultSyncClient:   defaultSyncClient,
 		globalToolRegistry:  globalToolRegistry,
 		allowedCapabilities: allowedCapabilities,
+		timeout:             timeout,
 		llmConfigProvider:   llmConfigProvider,
 		taskRepo:            taskRepo,
 	}
 }
 
-func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card domainagent.SubAgentCard, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (string, error) {
+func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, taskSpec domainagent.TaskSpec, onStep func(StepRecord)) (string, error) {
 	// 1. 构造子 Agent 独立 ToolRegistry:能力标签 ∩ 配置能力白名单决定可见集(仿 DSH ToolProviderResult),
-	//    取代旧的角色卡固定 card.Tools 列表(分类轴从"角色"下沉到"工具自身能力",可组合非枚举)。
+	//    取代旧的角色卡固定 Tools 列表(分类轴从"角色"下沉到"工具自身能力",可组合非枚举)。
 	//    可见集含 alwaysBaseline(request_input),修复 #19:旧 card.Tools 从未含 request_input,子 Agent 实际调不到。
 	subToolRegistry, _, err := BuildSubAgentToolRegistry(r.globalToolRegistry, r.allowedCapabilities)
 	if err != nil {
-		return "", fmt.Errorf("sub agent %q: %w", card.Type, err)
+		return "", err
 	}
 
-	// 2. 经 agentprompt.PromptRegistry 组装子 Agent system prompt(11-Prompt管理 §5.2):填充 {goal} +
-	//    注入任务包详情(deliverables/criteria/constraints),让子 Agent 明确"做到什么程度算完",
-	//    缓解循环不收敛(见 10-规划 §2.1)。静态 section 组装不可能失败,故忽略 error。
-	systemPrompt, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.SubScope(card.Type), card.PromptTemplate, taskSpec)
+	// 2. 经 agentprompt.PromptRegistry 组装子 Agent system prompt(11-Prompt管理 §5.2,去角色 §5.7):
+	//    共享基础人格 + 通用执行器 persona + 可选 persona_hint + 任务合同(deliverables/criteria/constraints),
+	//    让子 Agent 明确"做到什么程度算完",缓解循环不收敛。静态 section 组装不可能失败,故忽略 error。
+	systemPrompt, _ := agentprompt.BuildSubAgentSystemPrompt(agentprompt.ScopeSub, taskSpec)
 
 	// 3. 选 LLM(方案3):优先用户配置,无则系统默认
 	syncClient := r.defaultSyncClient
@@ -79,21 +91,19 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 	if r.llmConfigProvider != nil {
 		if apiKey, baseURL, model, hasConfig, err := r.llmConfigProvider.GetFullConfig(userID); err == nil && hasConfig && apiKey != "" {
 			// 子 Agent 后台跑(不阻塞用户),LLM 单请求超时给宽松些(60s),
-			// 兼容响应较慢的服务商(如百度千帆首请求)。整体任务超时由 card.Timeout(180s)兜底。
+			// 兼容响应较慢的服务商(如百度千帆首请求)。整体任务超时由框架 DefaultTimeout(120s)兜底。
 			customClient := NewOpenAILLMClient(apiKey, baseURL, model, 60*time.Second)
 			syncClient = customClient
 			streamClient = customClient
 		}
 	}
 
-	// 4. 构造 ReActAgent
-	maxSteps := card.MaxSteps
-	if maxSteps <= 0 {
-		maxSteps = DefaultMaxSteps
-	}
-	timeout := card.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+	// 4. 构造 ReActAgent。MaxSteps/Timeout 由 taskSpec.Constraints 覆盖或框架默认(执行预算归框架,不给 LLM 填)。
+	// Timeout 用子 Agent 专属超时(r.timeout,默认 180s;勿用 DefaultTimeout 120s,会误杀耗时研究任务)。
+	maxSteps := DefaultMaxSteps
+	timeout := r.timeout
+	if taskSpec.Constraints != nil && taskSpec.Constraints.MaxSteps > 0 {
+		maxSteps = taskSpec.Constraints.MaxSteps
 	}
 	// 用 AgentService 聚合 Run(内部 drain RunStream,产生 Records + FinalResponse)。
 	// 不能直接用 ReActAgent.Run(老路径不产生 Records,导致子 Agent 步骤落不了库)。
@@ -115,8 +125,8 @@ func (r *subAgentRunnerImpl) Run(ctx context.Context, taskID, userID int64, card
 		MaxSteps:           maxSteps,
 		SystemPrompt:       systemPrompt,
 		Hooks:              hooks,
-		// P0:card.Timeout(如 180s)必须透传进 ReActAgent,否则内层循环用 DefaultTimeout 120s
-		// 强行截胡 executeTask 外层 ctx 的更长超时(见 51/52 超时 bug)。
+		// P0:Timeout 必须透传进 ReActAgent,否则内层循环用 DefaultTimeout 120s
+		// 与外层 executeTask(ctx) 保持一致,防内层截胡(见 51/52 超时 bug)。
 		Timeout: timeout,
 	})
 

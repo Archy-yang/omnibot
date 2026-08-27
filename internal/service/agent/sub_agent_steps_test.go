@@ -52,19 +52,9 @@ func stepsDiagSetup(t *testing.T, llm StreamingLLMClient) (*SubAgentService, *re
 		},
 	}))
 
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type:           "researcher",
-		Name:           "研究员",
-		Description:    "diag",
-		PromptTemplate: "你是研究员。目标:{goal}",
-		MaxSteps:       10,
-		Timeout:        3 * time.Second,
-	}))
-
 	// 真实 runner:用 mock 流式 LLM(noopSyncLLM 作 sync 占位,流式路径不会用到)
-	runner := NewSubAgentRunner(noopSyncLLM{}, llm, globalReg, nil, nil, nil)
-	svc := NewSubAgentService(taskRepo, registry, runner, stepRepo, nil, nil, nil)
+	runner := NewSubAgentRunner(noopSyncLLM{}, llm, globalReg, nil, 0, nil, nil)
+	svc := NewSubAgentService(taskRepo, runner, stepRepo, nil, nil, nil)
 	return svc, taskRepo, stepRepo
 }
 
@@ -104,7 +94,7 @@ func TestSubAgentSteps_SuccessSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusCompleted, 3*time.Second)
@@ -143,7 +133,7 @@ func TestSubAgentSteps_FailureStillSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, "researcher", domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusFailed, 3*time.Second)

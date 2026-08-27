@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,61 +14,50 @@ import (
 	chatrepo "omnibot/internal/repository/chat"
 )
 
-// 让 stub 满足 SubAgentService 的 StartTask 调用需要:delegate 工具调的是 *SubAgentService.StartTask。
-// 单测里直接用一个真的 SubAgentService(配 stub runner)+ registry,更真实。
+// delegate 工具测试:去角色后不传 sub_agent_type/不依赖 registry,只传任务合同 + 可选 persona_hint/task_type。
 
-func setupDelegateToolTest(t *testing.T) (Tool, *SubAgentService, *SubAgentRegistry) {
+func setupDelegateToolTest(t *testing.T) (Tool, *SubAgentService) {
+	t.Helper()
 	db := setupSubAgentServiceTestDB(t)
 	repo := repoagent.NewAgentTaskRepository(db)
-	registry := NewSubAgentRegistry()
-	require.NoError(t, registry.Register(domainagent.SubAgentCard{
-		Type:           "researcher",
-		Name:           "研究员",
-		Description:    "查阅资料/阅读RSS/检索历史的耗时研究任务",
-		PromptTemplate: "你是研究员。目标:{goal}",
-		MaxSteps:       15,
-		Timeout:        5 * time.Second,
-	}))
-	// stub runner:立即返回 artifact(不真跑 LLM)
-	svc := NewSubAgentService(repo, registry, &mockRunner{artifact: "result"}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
-	tool := CreateDelegateTool(registry, svc)
-	return tool, svc, registry
+	// stub runner:立即返回 artifact(不真跑 LLM)。去角色后工具卡 StartTask,不再有角色清单。
+	svc := NewSubAgentService(repo, &mockRunner{artifact: "result"}, chatrepo.NewAgentStepRepository(db), nil, nil, nil)
+	tool := CreateDelegateTool(svc)
+	return tool, svc
 }
 
-func TestCreateDelegateTool_DescriptionContainsSubAgents(t *testing.T) {
-	tool, _, _ := setupDelegateToolTest(t)
+// TestCreateDelegateTool_DescriptionUniversal 描述是通用执行器,不再列出子 Agent 角色。
+func TestCreateDelegateTool_DescriptionUniversal(t *testing.T) {
+	tool, _ := setupDelegateToolTest(t)
 	assert.Equal(t, "delegate", tool.Name)
-	// 描述含子 Agent 能力
-	assert.Contains(t, tool.Description, "researcher")
-	assert.Contains(t, tool.Description, "研究员")
-	assert.Contains(t, tool.Description, "查阅资料")
+	assert.Contains(t, tool.Description, "后台执行器")
+	assert.NotContains(t, tool.Description, "researcher")
+	assert.NotContains(t, tool.Description, "研究员")
 }
 
+// TestCreateDelegateTool_ExecuteStartsTask 不传 sub_agent_type 也能派活(只 goal)。
 func TestCreateDelegateTool_ExecuteStartsTask(t *testing.T) {
-	tool, _, _ := setupDelegateToolTest(t)
+	tool, _ := setupDelegateToolTest(t)
 
 	ctx := withUserID(context.Background(), 42)
 	result, err := tool.Execute(ctx, map[string]interface{}{
-		"sub_agent_type": "researcher",
-		"goal":           "研究 Go 1.24 新特性",
+		"goal": "研究 Go 1.24 新特性",
 	})
 	require.NoError(t, err)
 
-	// 结果是 JSON,含 task_id
 	var parsed map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
 	assert.NotZero(t, parsed["task_id"])
 	assert.Equal(t, "pending", parsed["status"])
 }
 
-// TestCreateDelegateTool_PassesTaskSpec delegate 传 deliverables/criteria 应落进 task.TaskSpec。
+// TestCreateDelegateTool_PassesTaskSpec delegate 传 deliverables/criteria/background 应落进 task.TaskSpec。
 func TestCreateDelegateTool_PassesTaskSpec(t *testing.T) {
-	tool, svc, _ := setupDelegateToolTest(t)
+	tool, svc := setupDelegateToolTest(t)
 
 	ctx := withUserID(context.Background(), 42)
 	result, err := tool.Execute(ctx, map[string]interface{}{
-		"sub_agent_type": "researcher",
-		"goal":           "研究 Go 框架",
+		"goal": "研究 Go 框架",
 		"deliverables": []interface{}{
 			map[string]interface{}{"name": "candidate_list", "description": "候选框架列表"},
 			map[string]interface{}{"name": "recommendation", "description": "推荐"},
@@ -83,40 +71,46 @@ func TestCreateDelegateTool_PassesTaskSpec(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
 	taskID := int64(parsed["task_id"].(float64))
 
-	// 查回 task,验证 TaskSpec 落库
 	summary, err := svc.QueryTask(42, taskID)
 	require.NoError(t, err)
 	assert.Equal(t, "研究 Go 框架", summary.Goal)
 }
 
+// TestCreateDelegateTool_PassesPersonaHintAndType persona_hint/task_type 流进 taskSpec(任务级角色,非框架枚举)。
+func TestCreateDelegateTool_PassesPersonaHintAndType(t *testing.T) {
+	tool, svc := setupDelegateToolTest(t)
+	ctx := withUserID(context.Background(), 7)
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"goal":         "调研三个部署方案",
+		"persona_hint": "你是严谨的研究员,先多路检索再出结构化报告+来源",
+		"task_type":    "research",
+	})
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
+	task, err := svc.taskRepo.GetByID(int64(parsed["task_id"].(float64)))
+	require.NoError(t, err)
+	assert.Equal(t, "你是严谨的研究员,先多路检索再出结构化报告+来源", task.TaskSpec.PersonaHint)
+	assert.Equal(t, "research", task.TaskSpec.Type)
+	assert.Equal(t, "research", task.SubAgentType)
+}
+
 func TestCreateDelegateTool_ExecuteNoUserID(t *testing.T) {
-	tool, _, _ := setupDelegateToolTest(t)
-	// ctx 不带 userID
+	tool, _ := setupDelegateToolTest(t)
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
-		"sub_agent_type": "researcher",
-		"goal":           "g",
+		"goal": "g",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no user id")
 }
 
-func TestCreateDelegateTool_ExecuteMissingArgs(t *testing.T) {
-	tool, _, _ := setupDelegateToolTest(t)
+func TestCreateDelegateTool_ExecuteMissingGoal(t *testing.T) {
+	tool, _ := setupDelegateToolTest(t)
 	ctx := withUserID(context.Background(), 1)
-	_, err := tool.Execute(ctx, map[string]interface{}{
-		"sub_agent_type": "researcher",
-		// 缺 goal
-	})
+	_, err := tool.Execute(ctx, map[string]interface{}{})
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "required")
 }
 
-func TestCreateDelegateTool_ExecuteUnregisteredType(t *testing.T) {
-	tool, _, _ := setupDelegateToolTest(t)
-	ctx := withUserID(context.Background(), 1)
-	_, err := tool.Execute(ctx, map[string]interface{}{
-		"sub_agent_type": "nonexistent",
-		"goal":           "g",
-	})
-	require.Error(t, err)
-}
+// 编译期:保证 taskSpec 字段名引用合法。
+var _ = domainagent.TaskSpec{}
