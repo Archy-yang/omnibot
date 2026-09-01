@@ -95,8 +95,20 @@ type LMRoutingConfig struct {
 
 // MemoryConfig 记忆系统配置
 type MemoryConfig struct {
-	Extraction ExtractionConfig `mapstructure:"extraction"`
-	Storage    StorageConfig    `mapstructure:"storage"`
+	Extraction ExtractionConfig   `mapstructure:"extraction"`
+	Storage    StorageConfig      `mapstructure:"storage"` // 已废弃占位,向量方案见 12-记忆系统技术方案 §6.2
+	Embedding  EmbeddingAPIConfig `mapstructure:"embedding"`
+}
+
+// EmbeddingAPIConfig 向量化服务配置(12-记忆系统技术方案 §5.3)。
+// provider 为空 = 功能关闭,记忆检索降级为子串匹配。
+type EmbeddingAPIConfig struct {
+	Provider string `mapstructure:"provider"` // openai_compatible | ollama
+	BaseURL  string `mapstructure:"base_url"`
+	APIKey   string `mapstructure:"api_key"`
+	Model    string `mapstructure:"model"`
+	Dims     int    `mapstructure:"dims"`
+	Timeout  string `mapstructure:"timeout"` // Go duration,空回落 10s
 }
 
 // ExtractionConfig 记忆提取配置

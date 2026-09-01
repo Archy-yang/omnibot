@@ -1099,6 +1099,12 @@ type UpdateLLMConfigRequest struct {
 	Model       string  `json:"model" binding:"required"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
+	// 用户级向量配置(12-记忆系统技术方案 §5.3):全空=不设置,部分填写=服务端校验拒绝
+	EmbeddingProvider string `json:"embedding_provider"`
+	EmbeddingBaseURL  string `json:"embedding_base_url"`
+	EmbeddingAPIKey   string `json:"embedding_api_key"`
+	EmbeddingModel    string `json:"embedding_model"`
+	EmbeddingDims     int    `json:"embedding_dims"`
 }
 
 // HandleUpdateLLMConfig 更新用户 LLM 配置
@@ -1122,6 +1128,12 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 		Model:       req.Model,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
+		// 用户级向量配置(§5.3)
+		EmbeddingProvider: req.EmbeddingProvider,
+		EmbeddingBaseURL:  req.EmbeddingBaseURL,
+		EmbeddingAPIKey:   req.EmbeddingAPIKey,
+		EmbeddingModel:    req.EmbeddingModel,
+		EmbeddingDims:     req.EmbeddingDims,
 	}
 
 	if err := h.llmConfigService.UpdateFullConfig(userID, updateReq); err != nil {

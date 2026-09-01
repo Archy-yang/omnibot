@@ -385,3 +385,12 @@ func TestHandleUpdateMemory_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "服务暂时不可用，请稍后再试。")
 }
+
+// SearchMemories/SearchDigests 语义检索接口桩(12-记忆系统技术方案):web handler 测试不涉及检索,返回空。
+func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.DigestHit, error) {
+	return nil, nil
+}
