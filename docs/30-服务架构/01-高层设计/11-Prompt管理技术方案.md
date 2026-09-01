@@ -276,6 +276,7 @@ Assemble(c PromptCtx):
 - **ToolProviderResult ✅ 已落地（v1.10）**：工具可见集按 `内部/service/agent/tool_provider.go` 裁剪，与 prompt scope 概念对齐——但裁剪轴取**工具自身能力标签 ∩ config 白名单**，非角色卡固定列表（DSH 的 knownNames/schemas 分离：knownNames=框架能力词汇表判定配错，visible=能力命中+request_input 基线）。详见 08 框架文档 §5.x。
 - **生命周期 / 事件**：是否需要 Cordis 那套"注册即 disposer + change 事件"，取决于是否要多 Agent 动态装配；本期以纯 registry 起步。
 - **持久化快照**：DSH 用 `PromptContext` 物化动态上下文快照、变更才记日志，供复盘/审计，可后续引入。
+- **记忆索引 section（规划中）**：高级记忆系统将把「最近 10 条记忆全文注入」收敛为「top-N 记忆索引」常驻 section（数据来源与设计见《[12-记忆系统技术方案](12-记忆系统技术方案.md)》§6.5），落地时在本方案注册对应 section（M3 期）。
 
 ---
 
