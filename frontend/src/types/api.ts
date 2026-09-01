@@ -86,6 +86,12 @@ export interface LLMConfig {
   baseUrl?: string;
   temperature?: number;
   maxTokens?: number;
+  /** 用户级向量配置(12-记忆系统技术方案 §5.3):全空=用系统默认 */
+  embeddingProvider?: string;
+  embeddingBaseUrl?: string;
+  embeddingApiKey?: string;
+  embeddingModel?: string;
+  embeddingDims?: number;
 }
 
 /**
@@ -115,6 +121,13 @@ export interface UserLLMConfigResponse {
   status_text: string;
   temperature: number;
   max_tokens: number;
+  /** 用户级向量配置回显(未配置为空;Key 已脱敏,不回填输入框) */
+  embedding_provider?: string;
+  embedding_base_url?: string;
+  embedding_model?: string;
+  embedding_dims?: number;
+  embedding_api_key_masked?: string;
+  has_embedding_config?: boolean;
 }
 
 /**
@@ -127,6 +140,14 @@ export interface UpdateUserLLMConfigRequest {
   model: string;
   temperature?: number;
   max_tokens?: number;
+  /** 用户级向量配置(可选):全空=不设置;部分填写=服务端校验拒绝 */
+  embedding_provider?: string;
+  embedding_base_url?: string;
+  embedding_api_key?: string;
+  embedding_model?: string;
+  embedding_dims?: number;
+  /** 显式清除用户级向量配置(选"使用系统默认"并保存时发送) */
+  clear_embedding?: boolean;
 }
 
 /**

@@ -14,6 +14,7 @@ export const useSettingsStore = defineStore(
     const showSettingsPanel = ref<boolean>(false);
     const configStatus = ref<string>('使用系统默认模型');
     const hasUserConfig = ref<boolean>(false);
+    const hasEmbeddingConfig = ref<boolean>(false);
     const providerOptions = ref<LLMProviderOption[]>([]);
 
     // Actions
@@ -36,10 +37,19 @@ export const useSettingsStore = defineStore(
           model: fullConfig.model,
           temperature: fullConfig.temperature,
           max_tokens: fullConfig.maxTokens,
+          // 用户级向量配置(12-记忆系统技术方案 §5.3):
+          // 已配置且现在选"使用系统默认" → 显式清除;否则透传表单值(undefined 字段不发送)
+          clear_embedding: hasEmbeddingConfig.value && !fullConfig.embeddingProvider,
+          embedding_provider: fullConfig.embeddingProvider,
+          embedding_base_url: fullConfig.embeddingBaseUrl,
+          embedding_api_key: fullConfig.embeddingApiKey,
+          embedding_model: fullConfig.embeddingModel,
+          embedding_dims: fullConfig.embeddingDims,
         });
 
         llmConfig.value = fullConfig;
         hasUserConfig.value = true;
+        hasEmbeddingConfig.value = Boolean(fullConfig.embeddingProvider);
         configStatus.value = '使用你的自定义模型';
       } catch (error) {
         console.error('Failed to update LLM config:', error);
@@ -62,7 +72,14 @@ export const useSettingsStore = defineStore(
             maxTokens: userConfig.max_tokens,
             // API Key 不返回明文，使用时让用户重新输入或保持原样
             apiKey: '',
+            // 向量配置回显:Key 脱敏不回填输入框,用户重新输入才发送
+            embeddingProvider: userConfig.has_embedding_config ? userConfig.embedding_provider : undefined,
+            embeddingBaseUrl: userConfig.has_embedding_config ? userConfig.embedding_base_url : undefined,
+            embeddingModel: userConfig.has_embedding_config ? userConfig.embedding_model : undefined,
+            embeddingDims: userConfig.has_embedding_config ? userConfig.embedding_dims : undefined,
+            embeddingApiKey: '',
           };
+          hasEmbeddingConfig.value = Boolean(userConfig.has_embedding_config);
         }
       } catch (error) {
         console.error('Failed to load config:', error);
@@ -74,6 +91,7 @@ export const useSettingsStore = defineStore(
           temperature: 0.7,
           maxTokens: 2048,
         };
+        hasEmbeddingConfig.value = false;
         throw error;
       }
     };
@@ -104,6 +122,7 @@ export const useSettingsStore = defineStore(
       try {
         await configService.deleteUserLLMConfig();
         hasUserConfig.value = false;
+        hasEmbeddingConfig.value = false;
         configStatus.value = '使用系统默认模型';
         // 清除本地配置但保留默认值
         llmConfig.value = {
@@ -130,6 +149,7 @@ export const useSettingsStore = defineStore(
       showSettingsPanel,
       configStatus,
       hasUserConfig,
+      hasEmbeddingConfig,
       providerOptions,
       // Methods
       toggleTheme,

@@ -176,6 +176,11 @@ const handleSave = async () => {
   }
   isSaving.value = true;
   try {
+    const embeddingError = validateEmbeddingConfig();
+    if (embeddingError) {
+      error(embeddingError);
+      return;
+    }
     await settingsStore.updateLLMConfig(localConfig.value);
     emit('update-config', { llm: localConfig.value });
     success('配置保存成功');
@@ -233,6 +238,40 @@ const handleMaxTokensInput = (e: Event) => {
   const v = parseInt((e.target as HTMLInputElement).value, 10);
   if (!Number.isNaN(v)) localConfig.value.maxTokens = v;
 };
+
+// ===== 用户级向量配置(12-记忆系统技术方案 §5.3) =====
+// 语义:provider 选"使用系统默认"= 不覆盖;已配置过则保存时显式清除(后端 clear_embedding)。
+const handleEmbeddingProviderChange = (e: Event) => {
+  const value = (e.target as HTMLSelectElement).value;
+  if (!value) {
+    // 切回系统默认:清空表单值(store 保存时发 clear_embedding)
+    localConfig.value.embeddingProvider = undefined;
+    localConfig.value.embeddingBaseUrl = undefined;
+    localConfig.value.embeddingModel = undefined;
+    localConfig.value.embeddingDims = undefined;
+    localConfig.value.embeddingApiKey = undefined;
+    return;
+  }
+  localConfig.value.embeddingProvider = value;
+};
+
+const handleEmbeddingDimsInput = (e: Event) => {
+  const v = parseInt((e.target as HTMLInputElement).value, 10);
+  localConfig.value.embeddingDims = Number.isNaN(v) ? undefined : v;
+};
+
+// 保存前校验:镜像后端——向量配置五要素要么全空,要么齐全
+const validateEmbeddingConfig = (): string => {
+  const cfg = localConfig.value;
+  if (!cfg.embeddingProvider) return '';
+  if (!cfg.embeddingBaseUrl || !cfg.embeddingModel || !cfg.embeddingDims || !cfg.embeddingApiKey) {
+    return '向量配置需填写完整(含 API Key 与维度),或选择"使用系统默认"';
+  }
+  if (cfg.embeddingDims <= 0) return '向量维度必须为正整数';
+  return '';
+};
+
+const showEmbeddingApiKey = ref(false);
 </script>
 
 <template>
@@ -377,6 +416,90 @@ const handleMaxTokensInput = (e: Event) => {
         placeholder="4096"
         @input="handleMaxTokensInput"
       />
+    </div>
+
+    <!-- ===== 向量模型(可选,用户级覆盖系统默认) ===== -->
+    <div class="embedding-block">
+      <div class="entry-label">向量模型（可选）</div>
+      <div class="form-field">
+        <label class="form-label" for="settings-embedding-provider">Embedding 服务</label>
+        <select
+          id="settings-embedding-provider"
+          class="form-select"
+          :value="localConfig.embeddingProvider ?? ''"
+          @change="handleEmbeddingProviderChange"
+        >
+          <option value="">使用系统默认</option>
+          <option value="openai_compatible">OpenAI 兼容（千帆 / DashScope 等）</option>
+          <option value="ollama">Ollama 本地</option>
+        </select>
+        <div class="form-hint">用于记忆的语义检索。留空使用系统默认；修改后保存需重新输入 API Key。</div>
+      </div>
+
+      <template v-if="localConfig.embeddingProvider">
+        <div class="form-field">
+          <label class="form-label" for="settings-embedding-baseurl">向量 Base URL</label>
+          <input
+            id="settings-embedding-baseurl"
+            type="text"
+            class="form-input"
+            v-model="localConfig.embeddingBaseUrl"
+            :placeholder="localConfig.embeddingProvider === 'ollama' ? 'http://localhost:11434' : 'https://qianfan.baidubce.com/v2'"
+          />
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="settings-embedding-apikey">向量 API Key</label>
+          <div class="password-wrapper">
+            <input
+              id="settings-embedding-apikey"
+              :type="showEmbeddingApiKey ? 'text' : 'password'"
+              class="form-input"
+              v-model="localConfig.embeddingApiKey"
+              :placeholder="settingsStore.hasEmbeddingConfig ? '已配置，输入新值可更换' : '输入向量 API Key'"
+            />
+            <button
+              type="button"
+              class="password-toggle"
+              :title="showEmbeddingApiKey ? '隐藏' : '显示'"
+              :aria-label="showEmbeddingApiKey ? '隐藏向量 API Key' : '显示向量 API Key'"
+              @click="showEmbeddingApiKey = !showEmbeddingApiKey"
+            >
+              <svg v-if="showEmbeddingApiKey" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="form-field embedding-row">
+          <div class="embedding-col">
+            <label class="form-label" for="settings-embedding-model">向量模型</label>
+            <input
+              id="settings-embedding-model"
+              type="text"
+              class="form-input"
+              v-model="localConfig.embeddingModel"
+              placeholder="如 bge-large-zh、qwen3-embedding:0.6b"
+            />
+          </div>
+          <div class="embedding-col">
+            <label class="form-label" for="settings-embedding-dims">向量维度</label>
+            <input
+              id="settings-embedding-dims"
+              type="number"
+              class="form-input"
+              :value="localConfig.embeddingDims"
+              min="1"
+              placeholder="如 1024"
+              @input="handleEmbeddingDimsInput"
+            />
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- 模型 section 底部按钮 -->
@@ -671,6 +794,21 @@ const handleMaxTokensInput = (e: Event) => {
   min-width: 28px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ===== 向量模型区块 ===== */
+.embedding-block {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+.embedding-row {
+  display: flex;
+  gap: 12px;
+}
+.embedding-col {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ===== 模型 section 底部按钮 ===== */
