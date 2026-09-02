@@ -16,11 +16,23 @@ import (
 	"github.com/mmcdole/gofeed"
 
 	domainagent "omnibot/internal/domain/agent"
+	memorydomain "omnibot/internal/domain/memory"
 )
 
 // MemoryProvider 记忆查询接口
 type MemoryProvider interface {
 	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+}
+
+// MemorySearcher 语义记忆检索(可选增强,12-记忆系统技术方案 §8)。
+// MemoryProvider 实现可额外实现此接口;search_memories 工具优先走语义路径,否则老子串兜底。
+type MemorySearcher interface {
+	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
+}
+
+// DigestSearcher 对话纪要检索(中期记忆,12-记忆系统技术方案 §8)。
+type DigestSearcher interface {
+	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
 }
 
 // CreateGetCurrentTimeTool 获取当前时间工具
@@ -71,7 +83,8 @@ func CreateCalculatorTool() Tool {
 	}
 }
 
-// CreateSearchMemoriesTool 搜索记忆工具
+// CreateSearchMemoriesTool 搜索记忆工具。
+// 服务实现 MemorySearcher 时走语义检索(含来源标识);否则老子串路径兜底(12-记忆系统技术方案 §8)。
 func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 	return Tool{
 		Name:         "search_memories",
@@ -83,7 +96,7 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 			"properties": map[string]interface{}{
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "搜索关键词",
+					"description": "搜索关键词或语义描述",
 				},
 			},
 			"required": []string{"query"},
@@ -94,6 +107,9 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 				return "", fmt.Errorf("query is required")
 			}
 			userID := getUserIDFromContext(ctx)
+			if searcher, ok := memorySvc.(MemorySearcher); ok {
+				return searchMemoriesSemantic(ctx, searcher, userID, query)
+			}
 			memories, err := memorySvc.GetRecentForContext(ctx, userID, 50)
 			if err != nil {
 				return "", fmt.Errorf("查询记忆失败: %w", err)
@@ -103,11 +119,33 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 	}
 }
 
-// CreateSearchHistoryTool 搜索对话历史工具
-func CreateSearchHistoryTool() Tool {
+// searchMemoriesSemantic 语义检索路径:返回记忆内容 + 来源标识。
+func searchMemoriesSemantic(ctx context.Context, searcher MemorySearcher, userID int64, query string) (string, error) {
+	hits, err := searcher.SearchMemories(ctx, userID, query, 10)
+	if err != nil {
+		return "", fmt.Errorf("查询记忆失败: %w", err)
+	}
+	if len(hits) == 0 {
+		return "未找到相关记忆", nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "找到 %d 条相关记忆:\n", len(hits))
+	for i, h := range hits {
+		source := ""
+		if h.Memory.Source == memorydomain.MemorySourceAuto {
+			source = "(自动记忆)"
+		}
+		fmt.Fprintf(&b, "%d. %s%s\n", i+1, h.Memory.Content, source)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// CreateSearchHistoryTool 搜索对话纪要工具(12-记忆系统技术方案 §8):
+// 中期记忆检索,返回纪要内容 + 溯源区间([from,to] 消息 ID,用户可据此回溯明细)。
+func CreateSearchHistoryTool(digestSearcher DigestSearcher) Tool {
 	return Tool{
 		Name:         "search_history",
-		Description:  "搜索用户的历史对话记录",
+		Description:  "搜索用户的过往对话纪要（较早对话的主题和结论），返回内容附带来源对话范围",
 		DisplayLabel: "搜索了历史对话",
 		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
@@ -115,7 +153,7 @@ func CreateSearchHistoryTool() Tool {
 			"properties": map[string]interface{}{
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "搜索关键词",
+					"description": "搜索关键词或语义描述",
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
@@ -125,7 +163,28 @@ func CreateSearchHistoryTool() Tool {
 			"required": []string{"query"},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			return "历史搜索功能将在后续版本中完善", nil
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return "", fmt.Errorf("query is required")
+			}
+			limit := 5
+			if v, ok := args["limit"].(float64); ok && v > 0 {
+				limit = int(v)
+			}
+			userID := getUserIDFromContext(ctx)
+			hits, err := digestSearcher.SearchDigests(ctx, userID, query, limit)
+			if err != nil {
+				return "", fmt.Errorf("搜索对话纪要失败: %w", err)
+			}
+			if len(hits) == 0 {
+				return "未找到相关对话纪要", nil
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "找到 %d 段相关对话纪要:\n", len(hits))
+			for i, h := range hits {
+				fmt.Fprintf(&b, "%d. %s（对话 #%d~#%d）\n", i+1, h.Digest.Summary, h.Digest.FromMessageID, h.Digest.ToMessageID)
+			}
+			return strings.TrimRight(b.String(), "\n"), nil
 		},
 	}
 }

@@ -1058,6 +1058,13 @@ type GetLLMConfigResponse struct {
 	StatusText  string  `json:"status_text"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
+	// 用户级向量配置回显(12-记忆系统技术方案 §5.3):未配置为空;Key 脱敏
+	EmbeddingProvider     string `json:"embedding_provider"`
+	EmbeddingBaseURL      string `json:"embedding_base_url"`
+	EmbeddingModel        string `json:"embedding_model"`
+	EmbeddingDims         int    `json:"embedding_dims"`
+	EmbeddingAPIKeyMasked string `json:"embedding_api_key_masked"`
+	HasEmbeddingConfig    bool   `json:"has_embedding_config"`
 }
 
 // HandleGetLLMConfig 获取用户 LLM 配置
@@ -1083,6 +1090,13 @@ func (h *Handler) HandleGetLLMConfig(c *gin.Context) {
 		StatusText:  configView.StatusText,
 		Temperature: configView.Temperature,
 		MaxTokens:   configView.MaxTokens,
+		// 用户级向量配置回显(§5.3)
+		EmbeddingProvider:     configView.EmbeddingProvider,
+		EmbeddingBaseURL:      configView.EmbeddingBaseURL,
+		EmbeddingModel:        configView.EmbeddingModel,
+		EmbeddingDims:         configView.EmbeddingDims,
+		EmbeddingAPIKeyMasked: configView.EmbeddingAPIKeyMasked,
+		HasEmbeddingConfig:    configView.HasEmbeddingConfig,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1099,6 +1113,14 @@ type UpdateLLMConfigRequest struct {
 	Model       string  `json:"model" binding:"required"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
+	// 用户级向量配置(12-记忆系统技术方案 §5.3):全空=不设置,部分填写=服务端校验拒绝
+	EmbeddingProvider string `json:"embedding_provider"`
+	EmbeddingBaseURL  string `json:"embedding_base_url"`
+	EmbeddingAPIKey   string `json:"embedding_api_key"`
+	EmbeddingModel    string `json:"embedding_model"`
+	EmbeddingDims     int    `json:"embedding_dims"`
+	// 显式清除用户级向量配置(前端选"使用系统默认"并保存时发送)
+	ClearEmbedding bool `json:"clear_embedding"`
 }
 
 // HandleUpdateLLMConfig 更新用户 LLM 配置
@@ -1122,6 +1144,13 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 		Model:       req.Model,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
+		// 用户级向量配置(§5.3)
+		EmbeddingProvider: req.EmbeddingProvider,
+		EmbeddingBaseURL:  req.EmbeddingBaseURL,
+		EmbeddingAPIKey:   req.EmbeddingAPIKey,
+		EmbeddingModel:    req.EmbeddingModel,
+		EmbeddingDims:     req.EmbeddingDims,
+		ClearEmbedding:    req.ClearEmbedding,
 	}
 
 	if err := h.llmConfigService.UpdateFullConfig(userID, updateReq); err != nil {

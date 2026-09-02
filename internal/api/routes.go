@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"io/fs"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"omnibot/frontend"
@@ -77,7 +81,20 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	bindingSvc := userService.NewBindingService(userChannelRepository, bindCodeRepo, 5*time.Minute)
 
 	// 初始化消息服务
-	memorySvc := memoryService.NewMemoryService(memoryRepository)
+	// 12-记忆系统技术方案 §5.3:向量化 provider 按配置装配,未配置=子串降级(记忆照常存取)。
+	memoryEmbedding := buildEmbeddingProvider(cfg)
+	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
+	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository)
+	if aware, ok := memorySvc.(memoryService.EmbeddingAware); ok {
+		aware.SetEmbeddingProvider(memoryEmbedding)
+	}
+	// 用户级向量配置解析(用户级覆盖系统默认,§5.3)
+	if aware, ok := memorySvc.(memoryService.ResolverAware); ok {
+		aware.SetEmbeddingResolver(&userEmbeddingResolver{svc: llmConfigSvc, cache: make(map[int64]struct {
+			fingerprint string
+			provider    memoryService.EmbeddingProvider
+		})})
+	}
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
 	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
@@ -120,7 +137,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	globalToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
 	globalToolRegistry.Register(agentpkg.CreateCalculatorTool())
 	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
+	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
 	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
 	globalToolRegistry.Register(agentpkg.CreateWebReadTool())
 
@@ -131,7 +148,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
 	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
 	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool())
+	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
 
 	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
 	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
@@ -342,6 +359,82 @@ func startFeishuChannel(
 			logger.ErrorWithFields("feishu: long connection ended with error", zap.Error(err))
 		}
 	}()
+}
+
+// buildEmbeddingProvider 从 config 构造向量化 provider(12-记忆系统技术方案 §5.2/§5.3)。
+// 未配置返回 nil(检索降级子串);配置非法 fail-fast 启动失败(防静默错配,§6.3)。
+func buildEmbeddingProvider(cfg *config.Config) memoryService.EmbeddingProvider {
+	embCfg := cfg.Memory.Embedding
+	if embCfg.Provider == "" {
+		return nil
+	}
+	var timeout time.Duration
+	if embCfg.Timeout != "" {
+		if d, err := time.ParseDuration(embCfg.Timeout); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	provider, err := memoryService.NewEmbeddingProvider(memoryService.EmbeddingProviderConfig{
+		Provider: embCfg.Provider,
+		BaseURL:  embCfg.BaseURL,
+		APIKey:   embCfg.APIKey,
+		Model:    embCfg.Model,
+		Dims:     embCfg.Dims,
+		Timeout:  timeout,
+	})
+	if err != nil {
+		logger.Fatal("memory.embedding 配置无效", zap.Error(err))
+	}
+	return provider
+}
+
+// userEmbeddingResolver 用户级向量配置解析器(12-记忆系统技术方案 §5.3):
+// 用户级配置完整 → 构造 provider(带指纹缓存);未配置/异常 → nil(memory 层回落系统默认)。
+type userEmbeddingResolver struct {
+	svc userService.LLMConfigService
+	mu  sync.Mutex
+	// cache: userID → {配置指纹, provider}。指纹变了自动失效(用户改配置后无需重启)。
+	cache map[int64]struct {
+		fingerprint string
+		provider    memoryService.EmbeddingProvider
+	}
+}
+
+func (r *userEmbeddingResolver) ResolveEmbeddingProvider(userID int64) memoryService.EmbeddingProvider {
+	cfg, ok, err := r.svc.GetEmbeddingConfigForUser(userID)
+	if err != nil || !ok {
+		return nil
+	}
+	// 指纹 = 关键字段拼接 + key 哈希(不含明文)
+	sum := sha1.Sum([]byte(cfg.Provider + "|" + cfg.BaseURL + "|" + cfg.Model + "|" + strconv.Itoa(cfg.Dims) + "|" + cfg.APIKey))
+	fingerprint := hex.EncodeToString(sum[:])
+
+	r.mu.Lock()
+	cached, hit := r.cache[userID]
+	r.mu.Unlock()
+	if hit && cached.fingerprint == fingerprint && cached.provider != nil {
+		return cached.provider
+	}
+
+	provider, err := memoryService.NewEmbeddingProvider(memoryService.EmbeddingProviderConfig{
+		Provider: cfg.Provider,
+		BaseURL:  cfg.BaseURL,
+		APIKey:   cfg.APIKey,
+		Model:    cfg.Model,
+		Dims:     cfg.Dims,
+	})
+	if err != nil {
+		logger.Warn("用户级向量配置构造失败,回落系统默认",
+			zap.Int64("user_id", userID), zap.Error(err))
+		provider = nil
+	}
+	r.mu.Lock()
+	r.cache[userID] = struct {
+		fingerprint string
+		provider    memoryService.EmbeddingProvider
+	}{fingerprint, provider}
+	r.mu.Unlock()
+	return provider
 }
 
 // subAgentLLMConfigAdapter 适配 userService.LLMConfigService -> agentpkg.SubAgentLLMConfigProvider。

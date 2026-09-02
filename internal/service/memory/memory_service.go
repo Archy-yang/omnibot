@@ -27,14 +27,47 @@ type MemoryService interface {
 	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
+	// 语义检索(12-记忆系统技术方案 §8):embedding 未配置时自动降级子串
+	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
+	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
 }
 
 type memoryService struct {
-	repo memoryrepo.MemoryRepository
+	repo       memoryrepo.MemoryRepository
+	digestRepo memoryrepo.DigestRepository
+	embedding  EmbeddingProvider // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
+	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
 }
 
-func NewMemoryService(repo memoryrepo.MemoryRepository) MemoryService {
-	return &memoryService{repo: repo}
+func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository) MemoryService {
+	return &memoryService{repo: repo, digestRepo: digestRepo}
+}
+
+// EmbeddingAware 支持注入向量化 provider 的实现增强接口(可选能力,不影响记忆存取)。
+// 装配点用类型断言注入,避免把 setter 塞进查询接口。
+type EmbeddingAware interface {
+	SetEmbeddingProvider(p EmbeddingProvider)
+}
+
+// EmbeddingResolver 按用户解析 embedding provider(用户级覆盖系统默认,12-记忆系统技术方案 §5.3)。
+// 返回 nil 表示该用户无用户级配置,回落系统默认。
+type EmbeddingResolver interface {
+	ResolveEmbeddingProvider(userID int64) EmbeddingProvider
+}
+
+// ResolverAware 支持注入用户级解析器的实现增强接口。
+type ResolverAware interface {
+	SetEmbeddingResolver(r EmbeddingResolver)
+}
+
+// SetEmbeddingProvider 注入系统默认向量化 provider(可选能力,不影响记忆存取)。
+func (s *memoryService) SetEmbeddingProvider(p EmbeddingProvider) {
+	s.embedding = p
+}
+
+// SetEmbeddingResolver 注入用户级 provider 解析器(命中时优先于系统默认)。
+func (s *memoryService) SetEmbeddingResolver(r EmbeddingResolver) {
+	s.resolver = r
 }
 
 func (s *memoryService) Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error) {

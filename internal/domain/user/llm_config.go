@@ -6,17 +6,43 @@ import (
 
 // LLMConfig 用户自定义 LLM 配置
 type LLMConfig struct {
-	ID          int64      `gorm:"primaryKey;autoIncrement"`
-	UserID      int64      `gorm:"not null;uniqueIndex"`
-	Provider    string     `gorm:"size:64;not null;default:'openai'"` // 服务商：openai/anthropic/azure/qwen/doubao/baidu_qianfan/volcengine/aliyun_qwen/custom_openai_compatible
-	APIKey      string     `gorm:"size:512;not null"`                 // 加密后存储
-	BaseURL     *string    `gorm:"size:256"`
-	Model       *string    `gorm:"size:128"`
-	Temperature *float64   `gorm:"type:decimal(3,2)"` // 0-2，保留两位小数
-	MaxTokens   *int       `gorm:"type:int"`
-	Status      int8       `gorm:"default:0;not null"` // 0-正常, 1-禁用
-	CreatedAt   time.Time  `gorm:"not null"`
-	UpdatedAt   time.Time  `gorm:"not null"`
+	ID          int64    `gorm:"primaryKey;autoIncrement"`
+	UserID      int64    `gorm:"not null;uniqueIndex"`
+	Provider    string   `gorm:"size:64;not null;default:'openai'"` // 服务商：openai/anthropic/azure/qwen/doubao/baidu_qianfan/volcengine/aliyun_qwen/custom_openai_compatible
+	APIKey      string   `gorm:"size:512;not null"`                 // 加密后存储
+	BaseURL     *string  `gorm:"size:256"`
+	Model       *string  `gorm:"size:128"`
+	Temperature *float64 `gorm:"type:decimal(3,2)"` // 0-2，保留两位小数
+	MaxTokens   *int     `gorm:"type:int"`
+	// 用户级向量配置(12-记忆系统技术方案 §5.3):全空=用系统默认;APIKey 加密存储。
+	EmbeddingProvider *string `gorm:"size:32"` // openai_compatible | ollama
+	EmbeddingBaseURL  *string `gorm:"size:256"`
+	EmbeddingAPIKey   string  `gorm:"size:512"` // 加密后存储
+	EmbeddingModel    *string `gorm:"size:128"`
+	EmbeddingDims     *int
+	Status            int8      `gorm:"default:0;not null"` // 0-正常, 1-禁用
+	CreatedAt         time.Time `gorm:"not null"`
+	UpdatedAt         time.Time `gorm:"not null"`
+}
+
+// 用户级向量配置支持的 provider(与 memory.EmbeddingProviderConfig 对齐)
+var embeddingProviders = map[string]bool{
+	"openai_compatible": true,
+	"ollama":            true,
+}
+
+// EmbeddingProviderAllowed provider 是否在支持列表内。
+func EmbeddingProviderAllowed(provider string) bool {
+	return embeddingProviders[provider]
+}
+
+// HasEmbeddingConfig 用户级向量配置是否完整(五要素齐全才视为有效)。
+func (c *LLMConfig) HasEmbeddingConfig() bool {
+	return c.EmbeddingProvider != nil && *c.EmbeddingProvider != "" &&
+		c.EmbeddingBaseURL != nil && *c.EmbeddingBaseURL != "" &&
+		c.EmbeddingAPIKey != "" &&
+		c.EmbeddingModel != nil && *c.EmbeddingModel != "" &&
+		c.EmbeddingDims != nil && *c.EmbeddingDims > 0
 }
 
 // LLMConfig 状态常量

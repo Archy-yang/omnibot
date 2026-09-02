@@ -150,6 +150,8 @@ func autoMigrate(db *gorm.DB) error {
 		&conversation.Message{},
 		&conversation.AgentStep{},
 		&memory.Memory{},
+		&memory.ConversationDigest{}, // 12-记忆系统技术方案 §4.2:中期纪要
+		&memory.DigestWatermark{},    // §4.3:摘要管线水位(单用户单行)
 		&agent.AgentTask{},
 		&agent.Artifact{},     // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{},    // #22 任务事件流(状态变化历史,供审计/未来推送)

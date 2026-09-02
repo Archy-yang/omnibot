@@ -60,6 +60,22 @@ memory:
     enabled: true
     batch_size: 10
 
+  # 向量化服务(12-记忆系统技术方案 §5.3)
+  # provider 留空 = 关闭语义检索,记忆检索降级为子串匹配(记忆照常存取)
+  # embedding:
+  #   provider: "openai_compatible"            # openai_compatible | ollama
+  #   base_url: "https://qianfan.baidubce.com/v2"  # 千帆v2/DashScope/SiliconFlow 等 OpenAI 兼容端点
+  #   api_key: "your_embedding_api_key"
+  #   model: "bge-large-zh"
+  #   dims: 1024                               # 必须与模型实际维度一致,启动校验
+  #   timeout: "10s"
+  # 本地 Ollama 示例(先 ollama pull qwen3-embedding:0.6b):
+  # embedding:
+  #   provider: "ollama"
+  #   base_url: "http://localhost:11434"
+  #   model: "qwen3-embedding:0.6b"
+  #   dims: 1024
+
   storage:
     vector_db:
       url: "your_vector_db_url"
