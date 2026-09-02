@@ -16,6 +16,8 @@ type MemoryRepository interface {
 	// CountByUserIDAndSource 按来源计数(注入的存在性提示行用)。
 	CountByUserIDAndSource(userID int64, source string) (int64, error)
 	DeleteByUserID(userID int64) error
+	// DeleteByUserIDAndSource 按来源清空(记忆抽屉双 tab 各清各的,注入分层)。
+	DeleteByUserIDAndSource(userID int64, source string) error
 	GetRecentByUserID(userID int64, limit int) ([]*memorydomain.Memory, error)
 	GetByID(id int64, userID int64) (*memorydomain.Memory, error)
 	DeleteByID(id int64, userID int64) (bool, error)
@@ -64,6 +66,12 @@ func (r *memoryRepository) CountByUserIDAndSource(userID int64, source string) (
 
 func (r *memoryRepository) DeleteByUserID(userID int64) error {
 	return r.db.Where("user_id = ?", userID).Delete(&memorydomain.Memory{}).Error
+}
+
+// DeleteByUserIDAndSource 按来源清空。
+func (r *memoryRepository) DeleteByUserIDAndSource(userID int64, source string) error {
+	return r.db.Where("user_id = ? AND source = ?", userID, source).
+		Delete(&memorydomain.Memory{}).Error
 }
 
 func (r *memoryRepository) GetRecentByUserID(userID int64, limit int) ([]*memorydomain.Memory, error) {

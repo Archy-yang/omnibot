@@ -61,6 +61,8 @@ type MemoryService interface {
 	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
 	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
 	Clear(ctx context.Context, userID int64) error
+	// ClearSource 按来源清空(记忆抽屉双 tab,?source=manual|auto)。
+	ClearSource(ctx context.Context, userID int64, source string) error
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 }
@@ -762,6 +764,7 @@ func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model stri
 type MemoryDTO struct {
 	ID        int64  `json:"id"`
 	Content   string `json:"content"`
+	Source    string `json:"source"` // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
 	CreatedAt string `json:"created_at"`
 }
 
@@ -804,9 +807,14 @@ type UpdateMemoryResponse struct {
 }
 
 func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
+	source := memory.Source
+	if source == "" {
+		source = memorydomain.MemorySourceManual // 迁移期兜底:老数据视为手动
+	}
 	return MemoryDTO{
 		ID:        memory.ID,
 		Content:   memory.Content,
+		Source:    source,
 		CreatedAt: memory.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -880,12 +888,32 @@ func (h *Handler) HandleCreateMemory(c *gin.Context) {
 	})
 }
 
-// HandleClearMemories 清空用户的全部长期记忆
+// HandleClearMemories 清空长期记忆。带 ?source=manual|auto 时只清该来源
+// (记忆抽屉双 tab 各清各的);不带参数清空全部(兼容渠道 #清空记忆 语义)。
 func (h *Handler) HandleClearMemories(c *gin.Context) {
 	// v2.1: 身份由 AuthRequired 中间件注入
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	if err := h.memoryService.Clear(c.Request.Context(), userID); err != nil {
+	message := "已清空你的全部长期记忆。"
+	clearFn := func() error { return h.memoryService.Clear(c.Request.Context(), userID) }
+	if source := c.Query("source"); source != "" {
+		if source != memorydomain.MemorySourceManual && source != memorydomain.MemorySourceAuto {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "无效的记忆来源。",
+			})
+			return
+		}
+		src := source // 捕获
+		clearFn = func() error { return h.memoryService.ClearSource(c.Request.Context(), userID, src) }
+		if source == memorydomain.MemorySourceManual {
+			message = "已清空你手动添加的记忆。"
+		} else {
+			message = "已清空全部自动沉淀的记忆。"
+		}
+	}
+
+	if err := clearFn(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   "服务暂时不可用，请稍后再试。",
@@ -896,7 +924,7 @@ func (h *Handler) HandleClearMemories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": ClearMemoriesResponse{
-			Message: "已清空你的全部长期记忆。",
+			Message: message,
 		},
 	})
 }

@@ -278,3 +278,9 @@ func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, 
 func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
 	return nil, 0, nil
 }
+
+// ClearSource 按 source 清空桩(wechat handler 测试不涉及,记录调用)。
+func (m *mockMemoryService) ClearSource(_ context.Context, userID int64, source string) error {
+	m.clearUserID = userID
+	return nil
+}

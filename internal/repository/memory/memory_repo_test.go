@@ -180,3 +180,39 @@ func TestMemoryRepository_UpdateContentByID(t *testing.T) {
 		assert.Nil(t, updated)
 	})
 }
+
+// TestDeleteByUserIDAndSource 按 source 清空(注入分层:两个 tab 各清各的)。
+func TestDeleteByUserIDAndSource(t *testing.T) {
+	db := newRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+	db.Create(memorydomain.NewMemory(42, "手动A"))
+	db.Create(memorydomain.NewAutoMemory(42, "自动B", nil))
+	db.Create(memorydomain.NewMemory(43, "别人的"))
+
+	if err := repo.DeleteByUserIDAndSource(42, memorydomain.MemorySourceManual); err != nil {
+		t.Fatalf("delete manual: %v", err)
+	}
+	var got []*memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&got)
+	if len(got) != 1 || got[0].Content != "自动B" {
+		t.Errorf("应只剩自动记忆, got %+v", got)
+	}
+	// 别人的不受影响
+	var others int64
+	db.Model(&memorydomain.Memory{}).Where("user_id = ?", 43).Count(&others)
+	if others != 1 {
+		t.Errorf("其他用户不受影响, got %d", others)
+	}
+}
+
+func newRepoTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.AutoMigrate(&memorydomain.Memory{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return db
+}

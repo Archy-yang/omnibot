@@ -19,9 +19,9 @@ type mockBindingService struct {
 	wechatBound bool
 	boundErr    error
 	// GenerateCode 行为
-	code      string
-	expires   time.Time
-	genErr    error
+	code    string
+	expires time.Time
+	genErr  error
 	// BindChannel / ResolveUserID(feishu 端用,web 不调,留空实现)
 }
 

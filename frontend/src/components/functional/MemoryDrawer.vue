@@ -38,6 +38,25 @@ const {
 } = useMemory();
 const { success, error } = useToast();
 
+// ===== 注入分层双 tab(PRD 修订):手动=我交代的(常驻) / 自动=沉淀管线提取(工具检索) =====
+type MemoryTab = 'manual' | 'auto';
+const activeTab = ref<MemoryTab>('manual');
+
+// 老数据无 source 字段视为 manual
+const isAuto = (m: { source?: string }): boolean => m.source === 'auto';
+const manualMemories = computed(() => memories.value.filter((m) => !isAuto(m)));
+const autoMemories = computed(() => memories.value.filter((m) => isAuto(m)));
+const activeMemories = computed(() =>
+  activeTab.value === 'manual' ? manualMemories.value : autoMemories.value
+);
+
+const handleSwitchTab = (tab: MemoryTab): void => {
+  if (activeTab.value === tab) return;
+  activeTab.value = tab;
+  editingId.value = null; // 切 tab 退出编辑态
+  editingContent.value = '';
+};
+
 // 新建态
 const memoryInput = ref<string>('');
 const trimmedMemory = computed(() => memoryInput.value.trim());
@@ -100,10 +119,15 @@ const handleCreateMemory = async (): Promise<void> => {
 };
 
 const handleClearMemories = async (): Promise<void> => {
-  if (!window.confirm('确定要清空全部长期记忆吗?清空后无法恢复。')) return;
+  const source = activeTab.value;
+  const tip =
+    source === 'manual'
+      ? '确定要清空全部「我交代的」记忆吗?清空后无法恢复。'
+      : '确定要清空全部「自动沉淀的」记忆吗?清空后无法恢复;后续对话中助手仍会继续自动沉淀。';
+  if (!window.confirm(tip)) return;
   try {
-    await clearMemories();
-    success('已清空你的全部长期记忆。');
+    await clearMemories(source);
+    success(source === 'manual' ? '已清空你手动添加的记忆。' : '已清空全部自动沉淀的记忆。');
   } catch (err) {
     error(getErrorMessage(err));
   }
@@ -170,8 +194,8 @@ const formatTime = (iso: string): string => {
       <span class="safety-text">请不要保存密码、API Key、身份证号等敏感信息</span>
     </div>
 
-    <!-- 新增记忆区 -->
-    <div class="memory-input-section">
+    <!-- 新增记忆区(仅「我交代的」tab——新增入口只属于手动记忆) -->
+    <div v-if="activeTab === 'manual'" class="memory-input-section">
       <textarea
         v-model="memoryInput"
         class="memory-textarea"
@@ -196,26 +220,61 @@ const formatTime = (iso: string): string => {
 
     <!-- 记忆列表区 -->
     <div class="memory-list-section">
+      <!-- 双 tab:注入分层(PRD 修订) -->
+      <div class="memory-tabs">
+        <button
+          type="button"
+          class="memory-tab"
+          :class="{ active: activeTab === 'manual' }"
+          @click="handleSwitchTab('manual')"
+        >
+          我交代的
+          <span class="tab-count">{{ manualMemories.length }}</span>
+        </button>
+        <button
+          type="button"
+          class="memory-tab"
+          :class="{ active: activeTab === 'auto' }"
+          @click="handleSwitchTab('auto')"
+        >
+          自动沉淀的
+          <span class="tab-count">{{ autoMemories.length }}</span>
+        </button>
+      </div>
+
       <div class="memory-list-header">
-        <span class="memory-list-title">已保存的记忆</span>
+        <span class="memory-list-title">
+          {{ activeTab === 'manual' ? '你交代的记忆(每次对话我都会记得)' : '助手从对话中自动沉淀的记忆' }}
+        </span>
         <div class="memory-list-meta">
-          <span class="memory-count">{{ memories.length }} 条</span>
+          <span class="memory-count">{{ activeMemories.length }} 条</span>
           <button
-            v-if="memories.length > 0"
+            v-if="activeMemories.length > 0"
             type="button"
             class="clear-all-btn"
             :disabled="isClearing"
             @click="handleClearMemories"
           >
-            清空全部
+            清空本类
           </button>
         </div>
       </div>
 
-      <!-- 空状态 -->
-      <div v-if="!isLoading && memories.length === 0" class="memory-empty">
-        <p>我还没有长期记住任何信息。</p>
-        <p class="memory-empty-hint">你可以添加一条希望助手长期记住的偏好、背景或项目说明。</p>
+      <!-- 空状态(两 tab 文案区分) -->
+      <div v-if="!isLoading && activeMemories.length === 0" class="memory-empty">
+        <template v-if="activeTab === 'manual'">
+          <p>你还没有主动交代过任何记忆。</p>
+          <p class="memory-empty-hint">
+            在上方添加一条希望助手长期记住的偏好、背景或项目说明;也可以在微信/飞书发送
+            <code>#记住</code>。
+          </p>
+        </template>
+        <template v-else>
+          <p>还没有自动沉淀的记忆。</p>
+          <p class="memory-empty-hint">
+            和助手聊天时,重要信息会被自动沉淀到这里,你随时可以查看或删除。
+          </p>
+        </template>
       </div>
 
       <!-- 加载中 -->
@@ -226,7 +285,7 @@ const formatTime = (iso: string): string => {
       <!-- 列表 -->
       <div v-else class="memory-list">
         <div
-          v-for="(memory, index) in memories"
+          v-for="(memory, index) in activeMemories"
           :key="memory.id"
           class="memory-card"
           :class="{ editing: editingId === memory.id }"
@@ -327,6 +386,58 @@ const formatTime = (iso: string): string => {
   font-size: 13px;
   color: #92400e;
   line-height: 1.4;
+}
+
+/* ===== 注入分层双 tab ===== */
+.memory-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+.memory-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #f8f9fa;
+  color: #6b7280;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.memory-tab:hover {
+  border-color: #10a37f;
+  color: #10a37f;
+}
+.memory-tab.active {
+  background: #10a37f;
+  border-color: #10a37f;
+  color: #ffffff;
+  font-weight: 500;
+}
+.tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  text-align: center;
+}
+.memory-tab.active .tab-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+.memory-empty-hint code {
+  padding: 1px 5px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 12px;
+  color: #171717;
 }
 
 /* ===== 新增记忆区 ===== */

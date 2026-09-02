@@ -32,9 +32,11 @@ export const memoryService = {
     }
   },
 
-  async clearMemories(): Promise<ClearMemoriesResponse> {
+  async clearMemories(source?: 'manual' | 'auto'): Promise<ClearMemoriesResponse> {
     try {
-      const response = await request.delete<ApiResponse<ClearMemoriesResponse>>('/memories');
+      // 带 source 只清该来源(记忆抽屉双 tab);不带清空全部(渠道 #清空记忆 语义)
+      const url = source ? `/memories?source=${source}` : '/memories';
+      const response = await request.delete<ApiResponse<ClearMemoriesResponse>>(url);
       return response.data.data;
     } catch (error) {
       console.error('Failed to clear memories:', error);

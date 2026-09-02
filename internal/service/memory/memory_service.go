@@ -24,6 +24,8 @@ type MemoryService interface {
 	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
 	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
 	Clear(ctx context.Context, userID int64) error
+	// ClearSource 按来源清空(记忆抽屉双 tab;source 取 MemorySourceManual/Auto)。
+	ClearSource(ctx context.Context, userID int64, source string) error
 	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
@@ -140,6 +142,25 @@ func (s *memoryService) Clear(ctx context.Context, userID int64) error {
 	logger.InfoWithFields("Memories cleared",
 		zap.Int64("user_id", userID),
 		zap.String("operation", "memory_clear"),
+	)
+	return nil
+}
+
+// ClearSource 按来源清空(source 仅接受 manual/auto,由 handler 校验)。
+func (s *memoryService) ClearSource(ctx context.Context, userID int64, source string) error {
+	if err := s.repo.DeleteByUserIDAndSource(userID, source); err != nil {
+		logger.ErrorWithFields("Failed to clear memories by source",
+			zap.Int64("user_id", userID),
+			zap.String("source", source),
+			zap.String("operation", "memory_clear_source"),
+			zap.Error(err),
+		)
+		return err
+	}
+	logger.InfoWithFields("Memories cleared by source",
+		zap.Int64("user_id", userID),
+		zap.String("source", source),
+		zap.String("operation", "memory_clear_source"),
 	)
 	return nil
 }

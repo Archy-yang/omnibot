@@ -156,6 +156,8 @@ export interface UpdateUserLLMConfigRequest {
 export interface MemoryItem {
   id: number;
   content: string;
+  /** 来源:manual=用户交代 / auto=沉淀管线提取(注入分层,双 tab 管理) */
+  source?: string;
   created_at: string;
 }
 

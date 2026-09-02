@@ -31,6 +31,8 @@ type mockMemoryRepository struct {
 	deleteByIDResult bool
 	deleteByIDErr    error
 	updatedID        int64
+	deletedUserID    int64
+	deletedSource    string
 	updatedUserID    int64
 	updatedContent   string
 	updateResult     *memorydomain.Memory
@@ -273,4 +275,11 @@ func (m *mockMemoryRepository) ListManualByUserID(userID int64) ([]*memorydomain
 // CountByUserIDAndSource 注入分层桩:返回 0。
 func (m *mockMemoryRepository) CountByUserIDAndSource(userID int64, source string) (int64, error) {
 	return 0, nil
+}
+
+// DeleteByUserIDAndSource 按 source 清空桩:记录调用供断言。
+func (m *mockMemoryRepository) DeleteByUserIDAndSource(userID int64, source string) error {
+	m.deletedUserID = userID
+	m.deletedSource = source
+	return nil
 }

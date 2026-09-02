@@ -22,6 +22,7 @@ type mockMemoryService struct {
 	rememberErr     error
 	listErr         error
 	clearErr        error
+	clearedSource   string
 	deleteErr       error
 	updateErr       error
 	rememberUserID  int64
@@ -398,4 +399,65 @@ func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, 
 // GetMemoryInjection 注入分层桩(web handler 测试不涉及注入,返回空)。
 func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
 	return nil, 0, nil
+}
+
+// ClearSource 按 source 清空桩:记录调用供断言。
+func (m *mockMemoryService) ClearSource(_ context.Context, userID int64, source string) error {
+	m.clearUserID = userID
+	m.clearedSource = source
+	return m.clearErr
+}
+
+// TestHandleClearMemories_SourceParam ?source=manual|auto → 只清该来源。
+func TestHandleClearMemories_SourceParam(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		source      string
+		wantSource  string
+		wantContain string
+		wantStatus  int
+	}{
+		{name: "清空手动", source: "manual", wantSource: "manual", wantContain: "手动添加", wantStatus: http.StatusOK},
+		{name: "清空自动", source: "auto", wantSource: "auto", wantContain: "自动沉淀", wantStatus: http.StatusOK},
+		{name: "非法来源 400", source: "hack", wantSource: "", wantContain: "无效", wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockMemoryService{}
+			h := &Handler{memoryService: mock}
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodDelete, "/api/v1/memories?source="+tt.source, nil)
+			c.Set("user_id", int64(42))
+			c.Params = gin.Params{}
+
+			h.HandleClearMemories(c)
+
+			assert.Equal(t, tt.wantStatus, w.Code)
+			assert.Equal(t, tt.wantSource, mock.clearedSource)
+			if tt.wantStatus == http.StatusOK {
+				assert.Contains(t, w.Body.String(), tt.wantContain)
+				assert.Equal(t, int64(42), mock.clearUserID)
+			}
+		})
+	}
+}
+
+// TestHandleClearMemories_NoSource 不带 source → 全部清空(兼容渠道语义)。
+func TestHandleClearMemories_NoSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mock := &mockMemoryService{}
+	h := &Handler{memoryService: mock}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v1/memories", nil)
+	c.Set("user_id", int64(42))
+
+	h.HandleClearMemories(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "", mock.clearedSource, "不带 source 应走全量清空")
+	assert.Equal(t, int64(42), mock.clearUserID)
 }
