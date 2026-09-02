@@ -82,7 +82,7 @@ type embeddingBase struct {
 	client  *http.Client
 }
 
-func (b embeddingBase) Dim() int   { return b.dims }
+func (b embeddingBase) Dim() int { return b.dims }
 func (b embeddingBase) post(ctx context.Context, path string, payload interface{}) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {

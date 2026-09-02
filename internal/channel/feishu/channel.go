@@ -143,9 +143,9 @@ func newLarkWSStarter(cfg Config, h *MessageHandler) *larkWSStarter {
 // handler,payload 会写入 zap INFO 日志。
 //
 // 添加新条目的判断标准:
-//   1. 飞书推送的事件我们没注册业务 handler,SDK 打 `not found handler` ERROR
-//   2. 我们看完事件含义后,确认**不需要业务响应**(否则应该写业务 handler)
-//   3. 但希望保留可见性,以便未来需要时直接查 payload 实现
+//  1. 飞书推送的事件我们没注册业务 handler,SDK 打 `not found handler` ERROR
+//  2. 我们看完事件含义后,确认**不需要业务响应**(否则应该写业务 handler)
+//  3. 但希望保留可见性,以便未来需要时直接查 payload 实现
 //
 // 不要把"想做但还没做"的事件加进来——那应该写 TODO + 实际 handler。
 var chatterEventTypes = []string{

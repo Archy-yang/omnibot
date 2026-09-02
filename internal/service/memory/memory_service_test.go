@@ -13,28 +13,28 @@ import (
 )
 
 type mockMemoryRepository struct {
-	created      *memorydomain.Memory
-	memories     []*memorydomain.Memory
-	createErr    error
-	listErr      error
-	deleteErr    error
-	recentErr    error
-	deletedUser  int64
-	recentLimit  int
-	recentUserID int64
-	getByIDID    int64
-	getByIDUser  int64
-	getByIDMem   *memorydomain.Memory
-	getByIDErr   error
-	deletedID    int64
-	deletedIDUser int64
+	created          *memorydomain.Memory
+	memories         []*memorydomain.Memory
+	createErr        error
+	listErr          error
+	deleteErr        error
+	recentErr        error
+	deletedUser      int64
+	recentLimit      int
+	recentUserID     int64
+	getByIDID        int64
+	getByIDUser      int64
+	getByIDMem       *memorydomain.Memory
+	getByIDErr       error
+	deletedID        int64
+	deletedIDUser    int64
 	deleteByIDResult bool
-	deleteByIDErr error
-	updatedID int64
-	updatedUserID int64
-	updatedContent string
-	updateResult *memorydomain.Memory
-	updateErr error
+	deleteByIDErr    error
+	updatedID        int64
+	updatedUserID    int64
+	updatedContent   string
+	updateResult     *memorydomain.Memory
+	updateErr        error
 }
 
 func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
@@ -255,4 +255,22 @@ func TestMemoryService_Update_Error(t *testing.T) {
 
 	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, memory)
+}
+
+// UpdateContentEmbeddingByID 沉淀管线冲突更新桩(service 层测试不涉及,记录调用)。
+func (m *mockMemoryRepository) UpdateContentEmbeddingByID(id int64, userID int64, content string, embedding []float32, embeddingModel string) error {
+	m.updatedID = id
+	m.updatedUserID = userID
+	m.updatedContent = content
+	return nil
+}
+
+// ListManualByUserID 注入分层桩:返回手动记忆(测试未用,返回空)。
+func (m *mockMemoryRepository) ListManualByUserID(userID int64) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+
+// CountByUserIDAndSource 注入分层桩:返回 0。
+func (m *mockMemoryRepository) CountByUserIDAndSource(userID int64, source string) (int64, error) {
+	return 0, nil
 }

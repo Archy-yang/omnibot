@@ -30,6 +30,9 @@ type MemoryService interface {
 	// 语义检索(12-记忆系统技术方案 §8):embedding 未配置时自动降级子串
 	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
 	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
+	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订):
+	// 手动记忆全量(用户意志,按时间正序) + 自动记忆条数(只出存在性提示,内容走工具检索)。
+	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
 }
 
 type memoryService struct {
@@ -101,6 +104,27 @@ func (s *memoryService) Remember(ctx context.Context, userID int64, content stri
 
 func (s *memoryService) List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error) {
 	return s.repo.ListByUserID(userID)
+}
+
+// GetMemoryInjection 常驻注入数据:手动记忆全量 + 自动记忆条数。
+// 注入分层(§6.5 修订):手动=用户意志,常驻;自动=助手笔记,量无界且有噪声风险,只提示存在,内容走 search_memories。
+func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error) {
+	manuals, err := s.repo.ListManualByUserID(userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	manual = make([]string, 0, len(manuals))
+	for _, m := range manuals {
+		manual = append(manual, m.Content)
+	}
+	auto, err := s.repo.CountByUserIDAndSource(userID, memorydomain.MemorySourceAuto)
+	if err != nil {
+		// 计数失败不影响手动注入,只不出提示行
+		logger.WarnWithFields("memory: 自动记忆计数失败,注入缺存在性提示",
+			zap.Int64("user_id", userID), zap.Error(err))
+		return manual, 0, nil
+	}
+	return manual, int(auto), nil
 }
 
 func (s *memoryService) Clear(ctx context.Context, userID int64) error {

@@ -306,3 +306,38 @@ func setResolver(svc MemoryService, r EmbeddingResolver) {
 		aware.SetEmbeddingResolver(r)
 	}
 }
+
+// ===== 注入分层(PRD 修订:手动记忆常驻,自动记忆走工具,§6.5 修订) =====
+
+// TestGetMemoryInjection_ManualOnly 注入只取手动记忆,自动记忆只出条数。
+func TestGetMemoryInjection_ManualOnly(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	manual := memorydomain.NewMemory(42, "用户偏好简洁回复")
+	auto := memorydomain.NewAutoMemory(42, "用户是后端工程师", nil)
+	if err := db.Create(manual).Error; err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+	if err := db.Create(auto).Error; err != nil {
+		t.Fatalf("seed auto: %v", err)
+	}
+
+	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("GetMemoryInjection: %v", err)
+	}
+	if len(manuals) != 1 || manuals[0] != "用户偏好简洁回复" {
+		t.Errorf("manual = %v, want 仅手动记忆", manuals)
+	}
+	if autoCount != 1 {
+		t.Errorf("autoCount = %d, want 1", autoCount)
+	}
+}
+
+// TestGetMemoryInjection_Empty 空库返回零值不报错。
+func TestGetMemoryInjection_Empty(t *testing.T) {
+	svc, _ := retrievalSetup(t)
+	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
+	if err != nil || len(manuals) != 0 || autoCount != 0 {
+		t.Errorf("空库应返回零值, got %v/%d/%v", manuals, autoCount, err)
+	}
+}

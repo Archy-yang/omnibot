@@ -273,3 +273,8 @@ func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string,
 func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.DigestHit, error) {
 	return nil, nil
 }
+
+// GetMemoryInjection 注入分层桩(wechat handler 测试不涉及注入,返回空)。
+func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
+	return nil, 0, nil
+}

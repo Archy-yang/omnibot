@@ -97,7 +97,33 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
-	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
+	// 沉淀管线(M2,§7):轮次结束异步生成纪要+提取记忆,LLM/embedding 均系统默认(系统能力)。
+	// extraction.enabled=false 或 LLM 未装配时管线整体不注入(对话零开销)。
+	agentLLMClient := newAgentLLMClient(cfg)
+	var digestPipeline *memoryService.DigestPipeline
+	if cfg.Memory.Extraction.Enabled && agentLLMClient != nil {
+		digestThreshold := cfg.Memory.Extraction.BatchSize
+		if digestThreshold <= 0 {
+			digestThreshold = 10
+		}
+		digestPipeline = memoryService.NewDigestPipeline(
+			memoryRepo.NewWatermarkRepository(dbConn.GetGormDB()),
+			digestRepository,
+			memoryRepository,
+			msgRepo, // chat 仓储实现 ConversationSource
+			pipelineLLMAdapter{inner: agentLLMClient},
+			memoryEmbedding,
+			digestThreshold,
+		)
+		logger.Info("memory: 沉淀管线已启用",
+			zap.Int("threshold", digestThreshold),
+			zap.Bool("embedding", memoryEmbedding != nil))
+	}
+	msgSvcOpts := []interface{}{memorySvc, stepRepo}
+	if digestPipeline != nil {
+		msgSvcOpts = append(msgSvcOpts, digestPipeline) // chat.TurnSink
+	}
+	msgSvc := chatService.NewMessageService(msgRepo, msgSvcOpts...)
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
 	// v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
@@ -150,12 +176,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
 	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
 
-	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
-	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
-	if err != nil {
-		agentTimeout = 30 * time.Second
-	}
-	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
 
 	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
 	// 先于 agentSvc 装配,因 delegate 工具 + 主 Agent system prompt 依赖子 Agent 框架。
@@ -386,6 +407,31 @@ func buildEmbeddingProvider(cfg *config.Config) memoryService.EmbeddingProvider 
 		logger.Fatal("memory.embedding 配置无效", zap.Error(err))
 	}
 	return provider
+}
+
+// newAgentLLMClient 创建系统默认对话模型客户端(主 Agent/子 Agent/沉淀管线共用)。
+// 返回具体类型(同时实现 LLMClient 与 StreamingLLMClient)。
+func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
+	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
+	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
+	if err != nil {
+		agentTimeout = 30 * time.Second
+	}
+	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+}
+
+// pipelineLLMAdapter 适配 agentpkg.LLMClient → memory.PipelineLLM(§7.2 沉淀管线用系统默认模型)。
+type pipelineLLMAdapter struct {
+	inner agentpkg.LLMClient
+}
+
+func (a pipelineLLMAdapter) Complete(ctx context.Context, system, user string) (string, error) {
+	messages := []map[string]interface{}{
+		{"role": "system", "content": system},
+		{"role": "user", "content": user},
+	}
+	content, _, err := a.inner.ChatCompletion(ctx, messages, nil)
+	return content, err
 }
 
 // userEmbeddingResolver 用户级向量配置解析器(12-记忆系统技术方案 §5.3):
