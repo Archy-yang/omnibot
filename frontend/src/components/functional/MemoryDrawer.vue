@@ -194,33 +194,9 @@ const formatTime = (iso: string): string => {
       <span class="safety-text">请不要保存密码、API Key、身份证号等敏感信息</span>
     </div>
 
-    <!-- 新增记忆区(仅「我交代的」tab——新增入口只属于手动记忆) -->
-    <div v-if="activeTab === 'manual'" class="memory-input-section">
-      <textarea
-        v-model="memoryInput"
-        class="memory-textarea"
-        placeholder="输入希望助手长期记住的偏好、背景或项目说明..."
-        :maxlength="220"
-        rows="4"
-      ></textarea>
-      <div class="memory-toolbar">
-        <span class="char-count" :class="{ 'is-over': memoryLength > 200 }">
-          {{ memoryLength }} / 200
-        </span>
-        <button
-          type="button"
-          class="add-btn"
-          :disabled="!canSubmit"
-          @click="handleCreateMemory"
-        >
-          {{ isCreating ? '添加中...' : '添加' }}
-        </button>
-      </div>
-    </div>
-
     <!-- 记忆列表区 -->
     <div class="memory-list-section">
-      <!-- 双 tab:注入分层(PRD 修订) -->
+      <!-- 双 tab:注入分层(PRD 修订)——tab 栏位置固定,切 tab 不跳 -->
       <div class="memory-tabs">
         <button
           type="button"
@@ -240,6 +216,30 @@ const formatTime = (iso: string): string => {
           自动沉淀的
           <span class="tab-count">{{ autoMemories.length }}</span>
         </button>
+      </div>
+
+      <!-- 新增记忆区(「我交代的」tab 面板内——新增入口只属于手动记忆) -->
+      <div v-if="activeTab === 'manual'" class="memory-input-section">
+        <textarea
+          v-model="memoryInput"
+          class="memory-textarea"
+          placeholder="输入希望助手长期记住的偏好、背景或项目说明..."
+          :maxlength="220"
+          rows="4"
+        ></textarea>
+        <div class="memory-toolbar">
+          <span class="char-count" :class="{ 'is-over': memoryLength > 200 }">
+            {{ memoryLength }} / 200
+          </span>
+          <button
+            type="button"
+            class="add-btn"
+            :disabled="!canSubmit"
+            @click="handleCreateMemory"
+          >
+            {{ isCreating ? '添加中...' : '添加' }}
+          </button>
+        </div>
       </div>
 
       <div class="memory-list-header">
