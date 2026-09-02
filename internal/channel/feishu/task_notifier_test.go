@@ -2,7 +2,10 @@ package feishu
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"omnibot/internal/client/llm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,4 +79,41 @@ func TestFeishuNotifier_FallsBackToReceiptOnAgentError(t *testing.T) {
 	assert.NotContains(t, sender.sentContent, "📋 子任务完成汇报", "标题由 header 承载,正文不应含标题前缀")
 	assert.Equal(t, "", msgSvc.savedReportContent, "回落不应落库")
 	assert.False(t, msgSvc.reportCalled, "回落不应落库")
+}
+
+// TestFeishuNotifier_ReportIncludesHistory 汇报锚定(§3.4 修订):
+// 主 Agent 转述的 conversation 应含对话历史(锚定原始问题),首条为回执指令,末条为虚拟触发。
+func TestFeishuNotifier_ReportIncludesHistory(t *testing.T) {
+	sender := &mockSender{}
+	agentSvc := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "汇报"}}
+	msgSvc := &mockMessageService{}
+	msgSvc.buildContextResult = []llm.ChatMessage{
+		{Role: "user", Content: "帮我查下北京天气"},
+		{Role: "assistant", Content: "已安排后台任务,完成后汇报。"},
+	}
+	notifier := NewFeishuTaskNotifier(sender, agentSvc, msgSvc, nil)
+
+	task := stubFeishuTask()
+	require.NoError(t, notifier.NotifyTaskCompleted(context.Background(), "ou_test_open_id", task))
+
+	conv := agentSvc.capturedConversation
+	require.NotEmpty(t, conv)
+	first := conv[0]
+	assert.Equal(t, "system", first["role"])
+	instruction, _ := first["content"].(string)
+	assert.Contains(t, instruction, "子任务完成回执")
+	assert.Contains(t, instruction, "完成标准")
+
+	var historyJoined bool
+	for _, m := range conv[1:] {
+		if c, _ := m["content"].(string); strings.Contains(c, "帮我查下北京天气") {
+			historyJoined = true
+		}
+	}
+	assert.True(t, historyJoined, "对话历史应进入 notifier 的 report conversation:\n%v", conv)
+
+	last := conv[len(conv)-1]
+	assert.Equal(t, "user", last["role"])
+	lastContent, _ := last["content"].(string)
+	assert.Contains(t, lastContent, "请汇报这个子任务的结果")
 }

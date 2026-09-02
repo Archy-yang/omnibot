@@ -482,7 +482,7 @@ func TestReActAgent_RunStream_ToolCircuitBreaker(t *testing.T) {
 	execCount := 0
 	registry := NewToolRegistry()
 	registry.Register(Tool{
-		Name: "failing_tool",
+		Name:       "failing_tool",
 		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			execCount++
@@ -542,7 +542,7 @@ func TestReActAgent_RunStream_ToolCircuitBreaker_ResetOnSuccess(t *testing.T) {
 	callIdx := 0
 	registry := NewToolRegistry()
 	registry.Register(Tool{
-		Name: "flaky",
+		Name:       "flaky",
 		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			callIdx++
@@ -599,14 +599,14 @@ func TestReActAgent_RunStream_ToolCircuitBreaker_RemovedFromTools(t *testing.T) 
 
 	registry := NewToolRegistry()
 	registry.Register(Tool{
-		Name: "failing_tool",
+		Name:       "failing_tool",
 		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return "", fmt.Errorf("err")
 		},
 	})
 	registry.Register(Tool{
-		Name: "other_tool",
+		Name:       "other_tool",
 		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return "ok", nil
@@ -756,9 +756,9 @@ func TestReActAgent_RunStream_MaxStepsSummaryNoTools(t *testing.T) {
 	llm := &captureToolsLLMClient{mockStreamingLLMClient: inner}
 	registry := NewToolRegistry()
 	registry.Register(Tool{
-		Name: "get_current_time",
+		Name:       "get_current_time",
 		Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
-		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) { return "t", nil },
+		Execute:    func(ctx context.Context, args map[string]interface{}) (string, error) { return "t", nil },
 	})
 	agent := NewReActAgent(ReActAgentConfig{
 		LLMClient:          &noopSyncLLM{},

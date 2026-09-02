@@ -47,7 +47,7 @@ func TestLocalAgentExecutor_Send(t *testing.T) {
 
 	ctx := withUserID(context.Background(), 42)
 	err := e.Send(ctx, task.ID, AgentMessage{
-		Role: "parent_agent",
+		Role:  "parent_agent",
 		Parts: []MessagePart{{Type: "text", Text: "补充信息"}},
 	})
 	require.NoError(t, err)

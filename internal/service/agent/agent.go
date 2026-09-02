@@ -67,13 +67,13 @@ const (
 
 // ReActAgent ReAct 模式 Agent
 type ReActAgent struct {
-	llmClient         LLMClient
-	streamingClient   StreamingLLMClient
-	toolRegistry      *ToolRegistry
-	maxSteps          int
-	timeout           time.Duration
-	systemPrompt      string
-	hooks             []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
+	llmClient       LLMClient
+	streamingClient StreamingLLMClient
+	toolRegistry    *ToolRegistry
+	maxSteps        int
+	timeout         time.Duration
+	systemPrompt    string
+	hooks           []RoundHook // 可插拔执行链(熔断/强制汇总等);nil=纯推理
 }
 
 // NewReActAgent 创建 ReAct Agent
@@ -88,13 +88,13 @@ func NewReActAgent(config ReActAgentConfig) *ReActAgent {
 		config.SystemPrompt = agentprompt.DefaultSystemPrompt
 	}
 	return &ReActAgent{
-		llmClient:         config.LLMClient,
-		streamingClient:   config.StreamingLLMClient,
-		toolRegistry:      config.ToolRegistry,
-		maxSteps:          config.MaxSteps,
-		timeout:           config.Timeout,
-		systemPrompt:      config.SystemPrompt,
-		hooks:             config.Hooks,
+		llmClient:       config.LLMClient,
+		streamingClient: config.StreamingLLMClient,
+		toolRegistry:    config.ToolRegistry,
+		maxSteps:        config.MaxSteps,
+		timeout:         config.Timeout,
+		systemPrompt:    config.SystemPrompt,
+		hooks:           config.Hooks,
 	}
 }
 
@@ -356,6 +356,20 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			}
 
 			// 流结束。如果本轮没有工具调用 → ReAct 循环结束，本轮的 roundContent 就是最终回答。
+			// DSML 整轮聚合兜底(task#63 教训):适配层的逐 delta parseDSML 只能救"整块到达"的形态;
+			// 模型把 DSML 逐 token 拆碎在多个 delta 里时,每个碎片都不完整、解析不出,
+			// 会原样拼进 roundContent。这里对聚合后的完整文本再兜底解析一次,
+			// 解析出工具 → 回填 toolCallAccum 走正常工具分支(循环继续),避免 DSML 变成"最终报告"。
+			if len(toolCallAccum) == 0 {
+				if dsmlTools, clean := parseDSML(roundContent); len(dsmlTools) > 0 {
+					roundContent = clean
+					for _, tc := range dsmlTools {
+						acc := &toolCallAccumulator{id: tc.ID, name: tc.Name}
+						acc.argumentsBuilder.WriteString(tc.ArgumentsDelta)
+						toolCallAccum[tc.Index] = acc
+					}
+				}
+			}
 			if len(toolCallAccum) == 0 {
 				// v1.5.5：记一条 llm_call 步骤（response 是本轮文本回答）。
 				out <- AgentEvent{
