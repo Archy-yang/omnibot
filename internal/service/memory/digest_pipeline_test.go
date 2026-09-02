@@ -18,36 +18,26 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// 沉淀管线测试(12-记忆系统技术方案 §7 / TDD#6/#7):
-//   - 阈值未到 → 不调 LLM、不落纪要、水位不动
-//   - 阈值到 → 生成纪要落 digests(active) + 水位推进到最新消息
-//   - LLM 失败 → 什么都不落、水位不动,下轮重试同一区间
-//   - per-user 单飞:同一用户并发 NotifyTurn 不并发跑
+// 沉淀管线测试(12-记忆系统技术方案 §7 / TDD#6/#7/#8/#9)。
+// §7 修订:纪要与提取合并为单次 LLM 调用({summary, memories[]});
+// 调用失败或 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
 
-// fakePipelineLLM 假 LLM:按 system prompt 前缀区分纪要/提取调用。
+// fakePipelineLLM 假 LLM:单次调用返回固定结果。
 type fakePipelineLLM struct {
-	mu          sync.Mutex
-	summaryResp string
-	summaryErr  error
-	extractResp string
-	extractErr  error
-	systems     []string
+	mu      sync.Mutex
+	resp    string
+	respErr error
+	calls   int
 }
 
-func (f *fakePipelineLLM) Complete(_ context.Context, system, _ string) (string, error) {
+func (f *fakePipelineLLM) Complete(_ context.Context, _, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.systems = append(f.systems, system)
-	if strings.Contains(system, "纪要") {
-		if f.summaryErr != nil {
-			return "", f.summaryErr
-		}
-		return f.summaryResp, nil
+	f.calls++
+	if f.respErr != nil {
+		return "", f.respErr
 	}
-	if f.extractErr != nil {
-		return "", f.extractErr
-	}
-	return f.extractResp, nil
+	return f.resp, nil
 }
 
 // fakeConversationSource 假消息源:区间查询遍历全局种子切片 sourceMsgs(fake 不读 DB)。
@@ -69,6 +59,9 @@ func (f *fakeConversationSource) GetRangeByUserID(_ int64, afterID, toID int64) 
 	return out, nil
 }
 
+// sourceMsgs 种子消息切片(每个测试在 pipelineSetup 中重置)。
+var sourceMsgs []*conversation.Message
+
 func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *fakeConversationSource) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -80,8 +73,9 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
-	llm := &fakePipelineLLM{summaryResp: "纪要内容"}
-	sourceMsgs = nil // 每个测试重置种子切片
+	// 默认返回:纪要 + 无记忆候选
+	llm := &fakePipelineLLM{resp: `{"summary":"纪要内容","memories":[]}`}
+	sourceMsgs = nil
 	source := &fakeConversationSource{latest: 0}
 	p := NewDigestPipeline(
 		memoryrepo.NewWatermarkRepository(db),
@@ -110,9 +104,6 @@ func seedPipelineMessages(t *testing.T, db *gorm.DB, userID int64, n int) {
 	}
 }
 
-// sourceMsgs 种子消息同步给 fakeConversationSource(fake 不读 DB,区间查询走内存切片)。
-var sourceMsgs []*conversation.Message
-
 // TestDigestPipeline_BelowThreshold 阈值未到 → 完全 no-op。
 func TestDigestPipeline_BelowThreshold(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
@@ -122,8 +113,8 @@ func TestDigestPipeline_BelowThreshold(t *testing.T) {
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if len(llm.systems) != 0 {
-		t.Errorf("阈值未到不应调 LLM, got %d 次调用", len(llm.systems))
+	if llm.calls != 0 {
+		t.Errorf("阈值未到不应调 LLM, got %d 次", llm.calls)
 	}
 	var digestCount, wmCount int64
 	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
@@ -133,8 +124,8 @@ func TestDigestPipeline_BelowThreshold(t *testing.T) {
 	}
 }
 
-// TestDigestPipeline_DigestGenerated 阈值到 → 纪要落库(active)+ 水位推进(TDD#7)。
-func TestDigestPipeline_DigestGenerated(t *testing.T) {
+// TestDigestPipeline_SingleCall 阈值到 → 单次 LLM 调用产出纪要落库 + 水位推进(TDD#7)。
+func TestDigestPipeline_SingleCall(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
@@ -142,8 +133,8 @@ func TestDigestPipeline_DigestGenerated(t *testing.T) {
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if len(llm.systems) == 0 {
-		t.Fatal("阈值到应调 LLM 生成纪要")
+	if llm.calls != 1 {
+		t.Fatalf("应只调 1 次 LLM(纪要+提取合并), got %d", llm.calls)
 	}
 	var digests []*memorydomain.ConversationDigest
 	db.Find(&digests)
@@ -165,29 +156,26 @@ func TestDigestPipeline_DigestGenerated(t *testing.T) {
 	}
 
 	// 水位推进到 3
-	wmRepo := memoryrepo.NewWatermarkRepository(db)
-	wm, _ := wmRepo.GetByUserID(42)
+	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm.LastDigestMsgID != 3 {
 		t.Errorf("watermark = %d, want 3", wm.LastDigestMsgID)
 	}
 
 	// 下轮:没有新消息,不再调 LLM
-	calls := len(llm.systems)
-	source.latest = 3
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("RunOnce again: %v", err)
 	}
-	if len(llm.systems) != calls {
-		t.Error("无新消息不应再触发摘要")
+	if llm.calls != 1 {
+		t.Error("无新消息不应再触发沉淀")
 	}
 }
 
-// TestDigestPipeline_LLMFailureRetriesSameRange LLM 失败 → 不落库、水位不动,下轮重试同一区间(TDD#6)。
+// TestDigestPipeline_LLMFailureRetriesSameRange LLM 失败 → 整批作废、水位不动,下轮重试同一区间(TDD#6)。
 func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.summaryErr = fmt.Errorf("llm down")
+	llm.respErr = fmt.Errorf("llm down")
 
 	// RunOnce 返回 error 表示"本轮未完成,水位未推进"(调用方可安全忽略,NotifyTurn 内部记日志)
 	if err := p.RunOnce(context.Background(), 42); err == nil {
@@ -198,15 +186,14 @@ func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	if digestCount != 0 {
 		t.Errorf("LLM 失败不应落纪要, got %d", digestCount)
 	}
-	wmRepo := memoryrepo.NewWatermarkRepository(db)
-	wm, _ := wmRepo.GetByUserID(42)
+	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm.LastDigestMsgID != 0 {
 		t.Errorf("LLM 失败水位不应推进, got %d", wm.LastDigestMsgID)
 	}
 
 	// 恢复后重试:同一区间 [1,3]
 	llm.mu.Lock()
-	llm.summaryErr = nil
+	llm.respErr = nil
 	llm.mu.Unlock()
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("retry: %v", err)
@@ -215,6 +202,28 @@ func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	db.First(&d)
 	if d.FromMessageID != 1 || d.ToMessageID != 3 {
 		t.Errorf("重试区间 = [%d,%d], want [1,3]", d.FromMessageID, d.ToMessageID)
+	}
+}
+
+// TestDigestPipeline_SchemaInvalidDropsBatch schema 非法 → 整批作废(纪要/提取都不落),水位不动(TDD#8)。
+func TestDigestPipeline_SchemaInvalidDropsBatch(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.resp = `这不是JSON`
+
+	if err := p.RunOnce(context.Background(), 42); err == nil {
+		t.Fatal("schema 非法应返回 error(整批作废,下轮重试)")
+	}
+	var digestCount, memCount int64
+	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
+	db.Model(&memorydomain.Memory{}).Count(&memCount)
+	if digestCount != 0 || memCount != 0 {
+		t.Errorf("schema 非法应整批作废, digests=%d mems=%d", digestCount, memCount)
+	}
+	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
+	if wm.LastDigestMsgID != 0 {
+		t.Errorf("schema 非法水位不应推进, got %d", wm.LastDigestMsgID)
 	}
 }
 
@@ -269,14 +278,14 @@ func (b *blockingSource) GetRangeByUserID(userID int64, afterID, toID int64) ([]
 	return b.inner.GetRangeByUserID(userID, afterID, toID)
 }
 
-// ===== M2-C: 记忆提取(§7.3 / TDD#8/#9) =====
+// ===== 记忆提取落库(§7.3 / TDD#8/#9) =====
 
-// TestExtractMemories_ValidSchema 有效 JSON → auto 记忆落库,带溯源与向量。
+// TestExtractMemories_ValidSchema 有效候选 → auto 记忆落库,带溯源与向量。
 func TestExtractMemories_ValidSchema(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.extractResp = `{"memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}},
 		name:    "fake/m1",
@@ -303,39 +312,12 @@ func TestExtractMemories_ValidSchema(t *testing.T) {
 	}
 }
 
-// TestExtractMemories_InvalidSchemaDropsBatch schema 非法 → 整批丢弃,纪要与水位不受影响。
-func TestExtractMemories_InvalidSchemaDropsBatch(t *testing.T) {
-	p, db, llm, source := pipelineSetup(t)
-	seedPipelineMessages(t, db, 42, 3)
-	source.latest = 3
-	llm.extractResp = `这不是JSON`
-
-	if err := p.RunOnce(context.Background(), 42); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	var memCount int64
-	db.Model(&memorydomain.Memory{}).Count(&memCount)
-	if memCount != 0 {
-		t.Errorf("schema 非法应整批丢弃, got %d memories", memCount)
-	}
-	// 纪要照常落库、水位照常推进
-	var digestCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
-	if digestCount != 1 {
-		t.Errorf("纪要不应受提取失败影响, got %d", digestCount)
-	}
-	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
-	if wm.LastDigestMsgID != 3 {
-		t.Errorf("水位应推进, got %d", wm.LastDigestMsgID)
-	}
-}
-
 // TestExtractMemories_DedupeSkip 余弦 ≥0.92 视为重复 → 跳过(TDD#8)。
 func TestExtractMemories_DedupeSkip(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.extractResp = `{"memories":[{"content":"用户喜欢简洁的回复","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户喜欢简洁的回复","source_message_id":1}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户喜欢简洁的回复": {1, 0, 0},
@@ -365,15 +347,15 @@ func TestExtractMemories_ConflictUpdate(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.extractResp = `{"memories":[{"content":"用户现在住在北京","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_id":1}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户现在住在北京": {1, 0, 0},
-			"用户住在上海":   {0.85, 0, 0}, // 归一化后余弦 0.85 ∈ [0.80,0.92)
 		},
 		name: "fake/m1",
 	}
 	p.embedding = emb
+	// 既有记忆:同模型,与候选(1,0,0)方向余弦恰为 0.85 ∈ [0.80,0.92)
 	seedMemory(t, db, 42, "用户住在上海", "fake/m1", []float32{0.85, 0.5268, 0})
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
@@ -397,7 +379,7 @@ func TestExtractMemories_EmbedFailDegrades(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.extractResp = `{"memories":[{"content":"用户是后端工程师","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户是后端工程师","source_message_id":1}]}`
 	p.embedding = &fakeEmbedding{fail: true, name: "fake/m1"}
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
@@ -419,8 +401,8 @@ func TestExtractMemories_Filters(t *testing.T) {
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
 	long := strings.Repeat("长", 201)
-	llm.extractResp = fmt.Sprintf(
-		`{"memories":[{"content":"","source_message_id":1},{"content":"%s","source_message_id":1},{"content":"有效记忆","source_message_id":99}]}`,
+	llm.resp = fmt.Sprintf(
+		`{"summary":"纪要","memories":[{"content":"","source_message_id":1},{"content":"%s","source_message_id":1},{"content":"有效记忆","source_message_id":99}]}`,
 		long)
 	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"有效记忆": {1, 0, 0}}, name: "fake/m1"}
 

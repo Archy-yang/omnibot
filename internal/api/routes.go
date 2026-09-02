@@ -104,7 +104,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	if cfg.Memory.Extraction.Enabled && agentLLMClient != nil {
 		digestThreshold := cfg.Memory.Extraction.BatchSize
 		if digestThreshold <= 0 {
-			digestThreshold = 10
+			digestThreshold = 20 // 攒批越大摊销越低,更贴近"按对话段落"(§7 修订)
 		}
 		digestPipeline = memoryService.NewDigestPipeline(
 			memoryRepo.NewWatermarkRepository(dbConn.GetGormDB()),

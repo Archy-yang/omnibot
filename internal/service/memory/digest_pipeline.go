@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -58,7 +59,7 @@ func NewDigestPipeline(
 	threshold int,
 ) *DigestPipeline {
 	if threshold <= 0 {
-		threshold = 10
+		threshold = 20 // 攒批越大摊销越低,且更贴近"按对话段落"语义(§7 修订)
 	}
 	return &DigestPipeline{
 		watermarkRepo: watermarkRepo,
@@ -128,12 +129,22 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 	}
 	transcript := buildTranscript(messages)
 
-	// 中期:纪要生成(失败中止本轮,水位不动)
-	summary, err := p.llm.Complete(ctx, digestSystemPrompt, transcript)
+	// 单次 LLM 调用同时产出纪要与记忆候选(§7 修订:合并调用)。
+	// 调用失败或结果 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
+	resp, err := p.llm.Complete(ctx, pipelineSystemPrompt, transcript)
 	if err != nil {
-		return fmt.Errorf("生成纪要: %w", err)
+		return fmt.Errorf("沉淀调用失败: %w", err)
 	}
-	summary = strings.TrimSpace(summary)
+	var parsed struct {
+		Summary  string            `json:"summary"`
+		Memories []memoryCandidate `json:"memories"`
+	}
+	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
+		return fmt.Errorf("沉淀结果 schema 非法,整批作废: %w", err)
+	}
+
+	// 中期:纪要落库
+	summary := strings.TrimSpace(parsed.Summary)
 	if summary != "" {
 		digest := memorydomain.NewConversationDigest(userID, summary, fromID+1, toID, len(messages))
 		p.stampEmbedding(digest, summary)
@@ -142,8 +153,8 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		}
 	}
 
-	// 长期:记忆提取(失败仅记日志,不影响纪要与水位推进)
-	p.extractMemories(ctx, userID, transcript, messages, fromID, toID)
+	// 长期:记忆提取落库(逐条容错,单条失败不影响其余)
+	p.applyMemories(ctx, userID, parsed.Memories, fromID, toID)
 
 	// 推进水位
 	return p.watermarkRepo.Upsert(userID, toID)

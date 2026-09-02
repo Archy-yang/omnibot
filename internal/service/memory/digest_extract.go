@@ -2,11 +2,9 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"unicode/utf8"
 
-	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/pkg/logger"
 
@@ -19,37 +17,23 @@ const (
 	conflictUpdateThreshold = 0.80 // 余弦 ∈ [0.80, 0.92) 视为疑似冲突 → 按新事实更新
 )
 
-// extractMemories 长期记忆提取(失败仅记日志,不影响纪要与水位推进)。
+// memoryCandidate LLM 提取的单条记忆候选(schema 与 pipelineSystemPrompt 对齐)。
+type memoryCandidate struct {
+	Content         string `json:"content"`
+	SourceMessageID int64  `json:"source_message_id"`
+}
+
+// applyMemories 长期记忆提取落库(接收管线单次 LLM 调用解析出的候选)。
 //
-// 流程:schema 校验失败整批丢弃 → 逐条过滤(空/超长/溯源越界) → 嵌入 →
-// 与既有同模型记忆余弦比对(跳过/原位更新/新增)。宁漏勿错(PRD 红线)。
-func (p *DigestPipeline) extractMemories(
+// 逐条过滤(空/超长/溯源越界) → 嵌入 → 与既有同模型记忆余弦比对
+// (跳过/原位更新/新增)。单条失败仅记日志,不影响其余。宁漏勿错(PRD 红线)。
+func (p *DigestPipeline) applyMemories(
 	ctx context.Context,
 	userID int64,
-	transcript string,
-	messages []*conversation.Message,
+	candidates []memoryCandidate,
 	fromID, toID int64,
 ) {
-	resp, err := p.llm.Complete(ctx, extractSystemPrompt, transcript)
-	if err != nil {
-		logger.WarnWithFields("memory: 记忆提取 LLM 调用失败",
-			zap.Int64("user_id", userID), zap.Error(err))
-		return
-	}
-
-	var parsed struct {
-		Memories []struct {
-			Content         string `json:"content"`
-			SourceMessageID int64  `json:"source_message_id"`
-		} `json:"memories"`
-	}
-	// schema 校验失败整批丢弃(§7.3)
-	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
-		logger.WarnWithFields("memory: 记忆提取 schema 非法,整批丢弃",
-			zap.Int64("user_id", userID), zap.Error(err))
-		return
-	}
-	if len(parsed.Memories) == 0 {
+	if len(candidates) == 0 {
 		return
 	}
 
@@ -64,7 +48,7 @@ func (p *DigestPipeline) extractMemories(
 		currentModel = p.embedding.Name()
 	}
 
-	for _, c := range parsed.Memories {
+	for _, c := range candidates {
 		content := strings.TrimSpace(c.Content)
 		if content == "" || utf8.RuneCountInString(content) > MaxMemoryContentLength {
 			continue
