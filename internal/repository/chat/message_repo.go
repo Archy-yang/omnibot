@@ -12,6 +12,10 @@ type MessageRepository interface {
 	GetRecentByUserID(userID int64, limit int) ([]*conversation.Message, error)
 	GetByUserIDBefore(userID int64, beforeID int64, limit int) ([]*conversation.Message, error)
 	ExistsByMsgID(msgID string) (bool, error)
+	// GetLatestMessageID 用户最新一条消息 ID;无消息返回 0(12-记忆系统技术方案 §7 沉淀管线用)。
+	GetLatestMessageID(userID int64) (int64, error)
+	// GetRangeByUserID 返回 (afterID, toID] 区间的消息,id 升序(纪要区间即本次处理范围)。
+	GetRangeByUserID(userID int64, afterID, toID int64) ([]*conversation.Message, error)
 }
 
 type messageRepository struct {
@@ -79,4 +83,26 @@ func (r *messageRepository) ExistsByMsgID(msgID string) (bool, error) {
 		Where("msg_id = ?", msgID).
 		Count(&count).Error
 	return count > 0, err
+}
+
+// GetLatestMessageID 用户最新一条消息 ID;无消息返回 0(12-记忆系统技术方案 §7 沉淀管线用)。
+func (r *messageRepository) GetLatestMessageID(userID int64) (int64, error) {
+	var msg conversation.Message
+	err := r.db.Where("user_id = ?", userID).Order("id DESC").First(&msg).Error
+	if err == gorm.ErrRecordNotFound {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+// GetRangeByUserID 返回 (afterID, toID] 区间的消息,id 升序(纪要区间即本次处理范围)。
+func (r *messageRepository) GetRangeByUserID(userID int64, afterID, toID int64) ([]*conversation.Message, error) {
+	var messages []*conversation.Message
+	err := r.db.Where("user_id = ? AND id > ? AND id <= ?", userID, afterID, toID).
+		Order("id ASC").
+		Find(&messages).Error
+	return messages, err
 }

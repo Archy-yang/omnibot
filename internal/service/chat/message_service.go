@@ -57,15 +57,23 @@ type MessageService interface {
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
-// LongTermMemoryProvider 长期记忆上下文提供者
-type LongTermMemoryProvider interface {
-	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
+// MemoryInjectionProvider 常驻注入数据提供者(注入分层,§6.5 修订):
+// 手动记忆全量常驻 + 自动记忆只出存在性提示(内容走 search_memories 工具检索)。
+type MemoryInjectionProvider interface {
+	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
+}
+
+// TurnSink 对话轮次结束的观察者(12-记忆系统技术方案 §7 沉淀管线 NotifyTurn)。
+// 实现方必须异步、不阻塞、不 panic 外泄;nil 时不启用。
+type TurnSink interface {
+	NotifyTurn(userID int64)
 }
 
 type messageService struct {
 	msgRepo   chatrepo.MessageRepository
-	memorySvc LongTermMemoryProvider
+	memorySvc MemoryInjectionProvider
 	stepRepo  chatrepo.AgentStepRepository
+	turnSink  TurnSink
 }
 
 // NewMessageService 创建消息服务
@@ -73,10 +81,12 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 	service := &messageService{msgRepo: msgRepo}
 	for _, svc := range optionalServices {
 		switch s := svc.(type) {
-		case LongTermMemoryProvider:
+		case MemoryInjectionProvider:
 			service.memorySvc = s
 		case chatrepo.AgentStepRepository:
 			service.stepRepo = s
+		case TurnSink:
+			service.turnSink = s
 		}
 	}
 	return service
@@ -165,25 +175,35 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 		return nil
 	}
 
-	memories, err := s.memorySvc.GetRecentForContext(ctx, userID, MaxContextMemories)
+	// 注入分层(§6.5 修订):手动记忆全量常驻(用户意志,小而有界);
+	// 自动记忆不进 prompt(量无界+噪声风险),只出一行存在性提示,内容走 search_memories 工具检索。
+	manual, autoCount, err := s.memorySvc.GetMemoryInjection(ctx, userID)
 	if err != nil {
-		logger.ErrorWithFields("Failed to get long-term memories, degraded to short-term context only",
+		logger.ErrorWithFields("Failed to get memory injection, degraded to short-term context only",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
 		return nil
 	}
-	if len(memories) == 0 {
+	if len(manual) == 0 && autoCount == 0 {
 		return nil
 	}
 
 	var builder strings.Builder
-	builder.WriteString("以下是用户长期记忆，请在回答时自然参考，不要主动提及“我参考了记忆”：\n\n")
-	for i, memory := range memories {
+	builder.WriteString("以下是用户主动交代的长期信息，请在回答时自然参考，不要主动提及“我参考了记忆”：\n\n")
+	for i, memory := range manual {
 		builder.WriteString(fmt.Sprintf("%d. %s", i+1, memory))
-		if i < len(memories)-1 {
+		if i < len(manual)-1 {
 			builder.WriteString("\n")
 		}
+	}
+	if autoCount > 0 {
+		if len(manual) > 0 {
+			builder.WriteString("\n\n")
+		}
+		fmt.Fprintf(&builder,
+			"另有 %d 条从对话中自动沉淀的记忆未列出，当用户提及过往内容而上面没有时，用 search_memories 工具检索。",
+			autoCount)
 	}
 
 	return []llm.ChatMessage{{Role: conversation.RoleSystem, Content: builder.String()}}
@@ -215,7 +235,11 @@ func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, cont
 // SaveAssistantMessage 保存助手消息
 func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
 	msg := conversation.NewAssistantMessage(userID, content)
-	return s.msgRepo.Create(msg)
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+	s.notifyTurn(userID)
+	return nil
 }
 
 // SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4），并落 Agent 运行步骤链（v1.5.5）。
@@ -239,6 +263,7 @@ func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, u
 			)
 		}
 	}
+	s.notifyTurn(userID)
 	return nil
 }
 
@@ -262,6 +287,7 @@ func (s *messageService) SaveAssistantMessageWithToolCalls(ctx context.Context, 
 			)
 		}
 	}
+	s.notifyTurn(userID)
 	return nil
 }
 
@@ -286,7 +312,15 @@ func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID i
 			)
 		}
 	}
+	s.notifyTurn(userID)
 	return nil
+}
+
+// notifyTurn 轮次收尾通知沉淀管线(nil 安全)。
+func (s *messageService) notifyTurn(userID int64) {
+	if s.turnSink != nil {
+		s.turnSink.NotifyTurn(userID)
+	}
 }
 
 // ListByUser 获取用户的历史消息（按时间正序）。
