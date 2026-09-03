@@ -17,8 +17,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  // 生产环境构建使用相对路径，以便从 /chat/ 路径正确提供静态资源
-  base: './',
+  // 生产环境构建挂在 /chat/ 子路径下:资源与路由都以 /chat/ 为 base
+  // (配合后端 /chat/*filepath 静态服务 + SPA 回退;router 用 BASE_URL 作 history base)
+  base: '/chat/',
   build: {
     outDir: 'dist',
     emptyOutDir: true,

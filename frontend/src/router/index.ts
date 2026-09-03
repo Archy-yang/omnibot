@@ -32,7 +32,9 @@ const routes: RouteRecordRaw[] = [
 ];
 
 const router = createRouter({
-  history: createWebHistory(),
+  // base 跟随 vite BASE_URL:生产构建为 '/chat/'(应用挂在后端 /chat/ 子路径下),
+  // dev 为 '/'。此前无 base 时 /chat/ 匹配不到任何路由 → 嵌入版白屏。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes,
 });
 

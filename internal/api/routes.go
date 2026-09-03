@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -309,7 +311,32 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 	webFS := http.FS(distFS)
 	staticHandler := http.StripPrefix("/chat/", http.FileServer(webFS))
-	r.GET("/chat/*filepath", gin.WrapH(staticHandler))
+	// SPA 服务(路由 base '/chat/' 修复 + 缓存策略):
+	//   - 文件不存在时回退 index.html(前端路由深链 /chat/login 等由前端路由接管)
+	//   - index.html 必须 no-cache——资产文件名带内容哈希,每次发版哈希变化,
+	//     浏览器缓存旧 index.html 会去请求已不存在的旧资产 → 404 白屏
+	//   - 带哈希的资产可长缓存(内容不变则哈希不变)
+	r.GET("/chat/*filepath", func(c *gin.Context) {
+		path := c.Param("filepath")
+		if path == "/" || path == "/index.html" {
+			c.Header("Cache-Control", "no-cache, must-revalidate")
+		} else if strings.Contains(path, "/assets/") {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		// SPA 回退:请求的文件不存在(非静态资源) → index.html 交前端路由
+		if path != "/" && path != "/index.html" {
+			if _, err := fs.Stat(distFS, strings.TrimPrefix(path, "/")); err != nil {
+				c.Header("Cache-Control", "no-cache, must-revalidate")
+				indexFile, indexErr := distFS.Open("index.html")
+				if indexErr == nil {
+					defer indexFile.Close()
+					c.Data(http.StatusOK, "text/html; charset=utf-8", mustReadAll(indexFile))
+					return
+				}
+			}
+		}
+		staticHandler.ServeHTTP(c.Writer, c.Request)
+	})
 
 	// 根路径重定向到 /chat
 	r.GET("/", func(c *gin.Context) {
@@ -407,6 +434,15 @@ func buildEmbeddingProvider(cfg *config.Config) memoryService.EmbeddingProvider 
 		logger.Fatal("memory.embedding 配置无效", zap.Error(err))
 	}
 	return provider
+}
+
+// mustReadAll 读满整个 reader(SPA 回退用;index.html 小,一次性读入)。
+func mustReadAll(r io.Reader) []byte {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return []byte("<!doctype html><title>OmniBot</title>")
+	}
+	return data
 }
 
 // newAgentLLMClient 创建系统默认对话模型客户端(主 Agent/子 Agent/沉淀管线共用)。
