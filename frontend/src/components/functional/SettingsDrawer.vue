@@ -16,7 +16,8 @@
 import { ref, watch, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
-import type { LLMConfig } from '@/types/api';
+import type { LLMConfig, SkillItem } from '@/types/api';
+import { skillService } from '@/services/skill';
 import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/user';
@@ -132,6 +133,7 @@ watch(
       settingsStore.loadConfig();
       showApiKey.value = false; // 每次打开重置密码显示态(安全)
       loadChannelBinding();
+      loadSkills();
     }
   }
 );
@@ -272,6 +274,47 @@ const validateEmbeddingConfig = (): string => {
 };
 
 const showEmbeddingApiKey = ref(false);
+
+// ===== 技能管理(13-插件系统):清单 + 启停 =====
+const skills = ref<SkillItem[]>([]);
+const skillsLoading = ref(false);
+// 记录切换中的技能名,行内展示 loading 且防重复点击
+const togglingSkills = ref<Set<string>>(new Set());
+
+const loadSkills = async () => {
+  skillsLoading.value = true;
+  try {
+    const data = await skillService.listSkills();
+    skills.value = data.skills;
+  } catch (err) {
+    console.error('Failed to load skills:', err);
+    // 静默失败:技能区拉不到不阻断抽屉其他功能
+  } finally {
+    skillsLoading.value = false;
+  }
+};
+
+const handleSkillToggle = async (skill: SkillItem, event: Event) => {
+  const enabled = (event.target as HTMLInputElement).checked;
+  if (togglingSkills.value.has(skill.name)) {
+    (event.target as HTMLInputElement).checked = !enabled; // 回滚 UI
+    return;
+  }
+  togglingSkills.value.add(skill.name);
+  try {
+    await skillService.updateSkill(skill.name, enabled);
+    skill.enabled = enabled;
+    success(enabled ? `已启用「${skill.display_name || skill.name}」` : `已停用「${skill.display_name || skill.name}」`);
+  } catch (err) {
+    (event.target as HTMLInputElement).checked = !enabled; // 失败回滚
+    error(err instanceof Error ? err.message : '更新技能状态失败');
+  } finally {
+    togglingSkills.value.delete(skill.name);
+  }
+};
+
+const skillSourceLabel = (source: string): string =>
+  source === 'mcp' ? '外部接入' : '内置';
 </script>
 
 <template>
@@ -513,6 +556,45 @@ const showEmbeddingApiKey = ref(false);
       >
         {{ isSaving ? '保存中...' : '保存' }}
       </button>
+    </div>
+
+    <!-- ===== 技能 section(13-插件系统):助手本领清单,可逐个启停 ===== -->
+    <div class="section-skills">
+      <div class="section-title">技能</div>
+
+      <div v-if="skillsLoading" class="skills-loading">加载中...</div>
+      <div v-else-if="skills.length === 0" class="skills-empty">
+        暂无可用技能
+      </div>
+      <ul v-else class="skill-list">
+        <li
+          v-for="skill in skills"
+          :key="skill.name"
+          class="skill-item"
+          :class="{ 'is-disabled': !skill.available }"
+        >
+          <div class="skill-info">
+            <div class="skill-name-row">
+              <span class="skill-name">{{ skill.display_name || skill.name }}</span>
+              <span class="skill-source-badge" :class="`is-${skill.source}`">
+                {{ skillSourceLabel(skill.source) }}
+              </span>
+            </div>
+            <div class="skill-desc">{{ skill.description }}</div>
+          </div>
+          <label class="skill-switch" :title="skill.available ? '' : '该技能暂不可用'">
+            <input
+              type="checkbox"
+              role="switch"
+              :aria-label="`启用${skill.display_name || skill.name}`"
+              :checked="skill.enabled"
+              :disabled="!skill.available || togglingSkills.has(skill.name)"
+              @change="handleSkillToggle(skill, $event)"
+            />
+            <span class="skill-switch-slider"></span>
+          </label>
+        </li>
+      </ul>
     </div>
 
     <!-- ===== 关于 section ===== -->
@@ -1079,5 +1161,124 @@ const showEmbeddingApiKey = ref(false);
 
 .drawer-footer-spacer {
   height: 32px;
+}
+
+/* ===== 技能 section(13-插件系统) ===== */
+.section-skills {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+.skills-loading,
+.skills-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  padding: 8px 0;
+}
+.skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.skill-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f5f5f5;
+}
+.skill-item:last-child {
+  border-bottom: none;
+}
+.skill-item.is-disabled .skill-name,
+.skill-item.is-disabled .skill-desc {
+  color: #9ca3af;
+}
+.skill-info {
+  flex: 1;
+  min-width: 0;
+}
+.skill-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skill-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #171717;
+}
+.skill-source-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #6b7280;
+  white-space: nowrap;
+}
+.skill-source-badge.is-mcp {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.skill-desc {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 开关(checkbox + slider,无现成组件,轻量原生实现) */
+.skill-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+.skill-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.skill-switch input:disabled {
+  cursor: not-allowed;
+}
+.skill-switch-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: #d1d5db;
+  transition: background 150ms ease;
+  pointer-events: none;
+}
+.skill-switch-slider::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  top: 2px;
+  left: 2px;
+  transition: transform 150ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.skill-switch input:checked + .skill-switch-slider {
+  background: #10a37f;
+}
+.skill-switch input:checked + .skill-switch-slider::before {
+  transform: translateX(16px);
+}
+.skill-switch input:disabled + .skill-switch-slider {
+  opacity: 0.5;
 }
 </style>

@@ -28,10 +28,12 @@ import (
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
+	skillRepo "omnibot/internal/repository/skill"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
+	skillService "omnibot/internal/service/skill"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -160,23 +162,30 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Web 聊天 API 路由
 	// 创建 Agent 服务
-	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按 card.Tools 选
+	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按能力白名单选。
+	// 13-插件系统:能力工具由 SkillService 统一供给(定义落库可启停),框架工具另行注册。
 	globalToolRegistry := agentpkg.NewToolRegistry()
-	globalToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
-	globalToolRegistry.Register(agentpkg.CreateCalculatorTool())
-	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
-	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
-	globalToolRegistry.Register(agentpkg.CreateWebReadTool())
-
-	// agentToolRegistry:主 Agent 工具集。方向B--移除抓取类(rss/web_fetcher/web_reader),
-	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具仍在
-	// globalToolRegistry 供子 Agent 选。
+	// agentToolRegistry:主 Agent 工具集。方向B--抓取类(rss/web_read)对主 Agent 不可见,
+	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取技能
+	// RegisterBuiltinSubOnly:只进 globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
-	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
-	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
-	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
+	skillRepoImpl := skillRepo.NewSkillRepository(dbConn.GetGormDB())
+	skillSvc := skillService.NewSkillService(skillRepoImpl)
+	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
+	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchMemoriesTool(memorySvc) })
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchHistoryTool(memorySvc) })
+	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
+	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
+	if err := skillSvc.SeedBuiltins(); err != nil {
+		logger.Error("技能定义 seed 失败: " + err.Error())
+	}
+	if err := skillSvc.BindRegistries(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("技能 registry 绑定失败: " + err.Error())
+	}
+	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("技能应用到工具池失败: " + err.Error())
+	}
 
 	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
 
@@ -229,6 +238,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
+	webHandler.SetSkillService(skillSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -286,6 +296,14 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.DELETE("", webHandler.HandleClearMemories)
 		memoryAPIGroup.DELETE("/:id", webHandler.HandleDeleteMemory)
 		memoryAPIGroup.PUT("/:id", webHandler.HandleUpdateMemory)
+	}
+
+	// 技能管理路由(13-插件系统):清单 + 启停
+	skillAPIGroup := r.Group("/api/v1/skills")
+	skillAPIGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		skillAPIGroup.GET("", webHandler.HandleListSkills)
+		skillAPIGroup.PUT("/:name", webHandler.HandleUpdateSkill)
 	}
 
 	// 用户 LLM 配置路由

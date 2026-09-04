@@ -85,6 +85,8 @@ type Handler struct {
 	agentService     AgentService
 	// 后台 Agent 框架(08 §4.5 前置汇报兜底)。nil 时不启用前置汇报(向后兼容)。
 	subAgentSvc *agentpkg.SubAgentService
+	// 技能管理(13-Skill与MCP插件系统)。nil 时技能接口返回 503(向后兼容)。
+	skillService SkillService
 }
 
 // NewHandler 创建 Web 聊天处理器

@@ -9,6 +9,7 @@ import (
 	"omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/memory"
+	"omnibot/internal/domain/skill"
 	"omnibot/internal/domain/user"
 	"omnibot/pkg/config"
 	zaplogger "omnibot/pkg/logger"
@@ -155,6 +156,7 @@ func autoMigrate(db *gorm.DB) error {
 		&agent.AgentTask{},
 		&agent.Artifact{},     // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{},    // #22 任务事件流(状态变化历史,供审计/未来推送)
+		&skill.Skill{},        // 13-插件系统:技能定义+启停(单一事实源)
 	)
 }
 

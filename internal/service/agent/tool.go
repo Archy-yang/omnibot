@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 // Tool 工具定义（参考 OpenAI Function Calling 格式）
@@ -39,8 +40,11 @@ type ToolCall struct {
 	Arguments map[string]interface{}
 }
 
-// ToolRegistry 工具注册中心
+// ToolRegistry 工具注册中心。
+// 并发安全:技能启停会在运行中原位增删工具(skill 服务 ApplyTo),而 Agent 执行链
+// 在读 registry,故读写都走 RWMutex(13-Skill与MCP插件系统技术方案 §5.2)。
 type ToolRegistry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 }
 
@@ -53,6 +57,8 @@ func NewToolRegistry() *ToolRegistry {
 
 // Register 注册工具，重名返回错误
 func (r *ToolRegistry) Register(tool Tool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, exists := r.tools[tool.Name]; exists {
 		return fmt.Errorf("tool %q already registered", tool.Name)
 	}
@@ -60,14 +66,25 @@ func (r *ToolRegistry) Register(tool Tool) error {
 	return nil
 }
 
+// Remove 注销工具(技能启停的幂等重建用)。不存在时静默返回。
+func (r *ToolRegistry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+}
+
 // Get 获取工具
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	return tool, ok
 }
 
 // ListAll 列出所有已注册工具
 func (r *ToolRegistry) ListAll() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		result = append(result, tool)
@@ -77,6 +94,8 @@ func (r *ToolRegistry) ListAll() []Tool {
 
 // ToOpenAITools 转为 OpenAI tools 格式
 func (r *ToolRegistry) ToOpenAITools() []map[string]interface{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tools := make([]map[string]interface{}, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, map[string]interface{}{

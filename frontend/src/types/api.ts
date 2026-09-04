@@ -216,3 +216,36 @@ export interface UpdateMemoryResponse {
  * 用户 LLM 服务商列表响应类型
  */
 export type UserLLMProvidersResponse = GetLLMProvidersResponse;
+
+/**
+ * 技能条目(13-插件系统):助手当前具备的一项能力
+ */
+export interface SkillItem {
+  /** 工具名(唯一标识) */
+  name: string;
+  /** 面向用户的中文名 */
+  display_name: string;
+  /** 一句话说明 */
+  description: string;
+  /** 来源:builtin=内置;mcp=外部接入(M2) */
+  source: string;
+  /** 是否启用 */
+  enabled: boolean;
+  /** 执行体是否可用(false=暂不可用,界面上置灰) */
+  available: boolean;
+}
+
+/**
+ * 技能清单响应类型
+ */
+export interface ListSkillsResponse {
+  skills: SkillItem[];
+}
+
+/**
+ * 技能启停响应类型
+ */
+export interface UpdateSkillResponse {
+  name: string;
+  enabled: boolean;
+}
