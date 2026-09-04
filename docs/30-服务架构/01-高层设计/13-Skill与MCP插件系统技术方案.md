@@ -143,34 +143,43 @@ SettingsDrawer 新增「技能」tab：技能清单（名称/说明/来源徽标
 
 ## 6. M2：MCP 客户端
 
-### 6.1 配置（系统级）
+### 6.1 配置（系统级，实现已落地）
 
 ```yaml
-# config.yaml(不入 git,密钥明文仅存在于配置文件,与 llm.providers 现状一致)
+# config.yaml(不入 git,密钥明文仅存在于配置文件,与 llm/feishu 凭据现状一致)
 mcp:
   servers:
     - name: "github"
       base_url: "https://mcp.example.com/mcp"
-      api_key: "sk-xxx"        # 入库时 AES 加密,界面只回显掩码
+      api_key: "sk-xxx"
       enabled: true
 ```
 
 `pkg/config` 增加 `MCPConfig`/`MCPServerConfig`。增删改走配置文件 + 重启（第一版不做热加载，页面只读展示 + 启停已发现技能）。
 
-### 6.2 客户端与接入流程
+> 实现细化（相对草案）：**server 配置以 config.yaml 为单一事实源，不建 `mcpservers` 表、密钥完全不落库**
+> ——比"加密落库"更强的保证，与 llm/feishu 凭据同信任域。`skills.MCPServer` 列存 server 名（引用配置）。
 
-- 库：`github.com/mark3labs/mcp-go`（client，Streamable HTTP 传输）。
+### 6.2 客户端与接入流程（实现按 mcp-go v0.32.0 落地）
+
+- 库：`github.com/mark3labs/mcp-go`（client，Streamable HTTP 传输；go 1.24 兼容上限 v0.32.0）。
 - `internal/service/skill/mcp_source.go`：
-  - 启动时对每个 enabled server：`NewClient → Initialize → ListTools`，成功则把工具 upsert 进 `skills`（`source=mcp`，`executor_key=server 工具名`，`Enabled=false` 默认停用）；失败（超时/鉴权/不可达）则该 server 全部 skill 标记不可用，启动不阻塞。
-  - 执行：`CallTool(ctx, name, args)`，超时 30s，错误按"技能暂时不可用"口径返回。
-  - 连接策略：每次 Execute 惰性建立连接、失败重建（单用户低频，不维护长连接池）。
-- 重启时对已消失的远端工具：保留行但标记不可用（executor 缺失自然隐藏），不删除——避免服务抖动导致启停状态丢失。
+  - `MCPClient` 窄接口（Start/Initialize/ListTools/CallTool）+ `MCPClientFactory`，测试注入 mock；
+    真实实现 `NewStreamableHTTPMCPClient`（APIKey 走 `Authorization: Bearer` 头）。
+  - 启动时对每个 enabled server：`Start → Initialize → ListTools`，成功则把工具 upsert 进 `skills`
+    （`source=mcp`，`Enabled=false` 默认停用，重复同步保留用户启停）；失败（超时/鉴权/不可达）
+    则该 server 技能隐藏，**启动不阻塞**。
+  - 与内置技能重名的远端工具跳过 + 日志告警（不覆盖内置）。
+  - 从配置移除的 server：`DeleteMCPSkillsNotIn` 清理其技能行。
+  - 执行：同步成功即注册执行闭包（`CallTool` + 30s 超时 + 文本内容抽取）；`IsError` 的远端结果
+    以错误返回（助手如实告知用户）；server 下线（执行体缺失）技能隐藏。
+- 远端工具默认 `MainVisible=true`（抓取类限制只针对内置工具）。
 
 ### 6.3 安全
 
-- APIKey AES 加密落库（同 `user_llm_configs` 模式）；日志不输出 key 与完整工具参数（安全红线）。
+- 密钥仅存于 config.yaml（不入 git、不入库）；日志不输出 key 与完整工具参数（安全红线）。
 - MCP 返回内容进入对话前不额外信任：与 web_read 同级处理（当前以文本注入上下文，不做指令隔离，作为已知限制记录）。
-- 未 Enabled 的 mcp skill 不进 registry ⇒ 不会向外部服务发起任何请求（对齐 PRD 4.4）。
+- 未 Enabled 的 mcp skill 不进 registry，且 server 未开启（`enabled: false`）时**不发起任何连接**（对齐 PRD 4.4）。
 
 ## 7. 测试计划（TDD）
 

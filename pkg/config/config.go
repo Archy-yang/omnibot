@@ -14,11 +14,27 @@ type Config struct {
 	Feishu   FeishuConfig   `mapstructure:"feishu"`
 	LLM      LLMConfig      `mapstructure:"llm"`
 	Memory   MemoryConfig   `mapstructure:"memory"`
+	MCP      MCPConfig      `mapstructure:"mcp"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Agent    AgentConfig    `mapstructure:"agent"`
+}
+
+// MCPConfig MCP 接入配置(13-插件系统 M2)。
+// server 配置以 config.yaml 为单一事实源(系统级,与 llm/feishu 凭据同域);
+// 发现的远端工具落 skills 表(source=mcp,默认停用),密钥不入库。
+type MCPConfig struct {
+	Servers []MCPServerConfig `mapstructure:"servers"`
+}
+
+// MCPServerConfig 单个 MCP server 配置。
+type MCPServerConfig struct {
+	Name    string `mapstructure:"name"`
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+	Enabled bool   `mapstructure:"enabled"`
 }
 
 // AgentConfig 后台 Agent 框架配置(08-后台Agent任务框架)。

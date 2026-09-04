@@ -20,6 +20,8 @@ type mockSkillRepository struct {
 	enabledName   string
 	enabledValue  bool
 	setEnabledErr error
+	upsertedMCP  []skilldomain.MCPToolDef
+	deletedNotIn []string
 }
 
 func (m *mockSkillRepository) UpsertBuiltin(def skilldomain.BuiltinDef) error {
@@ -58,6 +60,32 @@ func (m *mockSkillRepository) SetEnabled(name string, enabled bool) error {
 		}
 	}
 	return nil
+}
+
+func (m *mockSkillRepository) UpsertMCPTool(def skilldomain.MCPToolDef) error {
+	m.upsertedMCP = append(m.upsertedMCP, def)
+	// 镜像真实 repo 的 upsert 语义:按 Name 更新定义字段,**保留既有 Enabled**
+	for _, r := range m.rows {
+		if r.Name == def.Name {
+			r.DisplayName = def.DisplayName
+			r.Description = def.Description
+			r.ParamsSchema = def.ParamsSchema
+			r.MainVisible = def.MainVisible
+			r.MCPServer = def.MCPServer
+			return nil
+		}
+	}
+	m.rows = append(m.rows, &skilldomain.Skill{
+		Name: def.Name, DisplayName: def.DisplayName, Description: def.Description,
+		Source: skilldomain.SourceMCP, Enabled: def.Enabled, MainVisible: def.MainVisible,
+		MCPServer: def.MCPServer, ParamsSchema: def.ParamsSchema,
+	})
+	return nil
+}
+
+func (m *mockSkillRepository) DeleteMCPSkillsNotIn(serverNames []string) (int64, error) {
+	m.deletedNotIn = serverNames
+	return 0, nil
 }
 
 // ---- 工具 ----

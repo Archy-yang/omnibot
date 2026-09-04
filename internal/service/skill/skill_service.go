@@ -28,6 +28,10 @@ type SkillView struct {
 // SkillRepository 技能持久化窄接口(service 层声明,repository 层实现)。
 type SkillRepository interface {
 	UpsertBuiltin(def skilldomain.BuiltinDef) error
+	// UpsertMCPTool upsert MCP 发现的远端工具:插入默认停用,更新定义字段不碰 Enabled。
+	UpsertMCPTool(def skilldomain.MCPToolDef) error
+	// DeleteMCPSkillsNotIn 清理不在配置内的 MCP server 的技能行(配置移除后)。
+	DeleteMCPSkillsNotIn(serverNames []string) (int64, error)
 	List() ([]*skilldomain.Skill, error)
 	GetByName(name string) (*skilldomain.Skill, error)
 	SetEnabled(name string, enabled bool) error
@@ -36,19 +40,22 @@ type SkillRepository interface {
 // SkillService 技能调度中枢:定义落库(可清单/启停),运行时 registry 由它构建。
 // 框架工具(request_input/delegate 等)不归它管,装配点另行注册。
 type SkillService struct {
-	repo        SkillRepository
-	mu          sync.RWMutex
-	builders    map[string]ToolBuilder
-	mainVisible map[string]bool
-	main        *agentpkg.ToolRegistry
-	global      *agentpkg.ToolRegistry
+	repo         SkillRepository
+	mu           sync.RWMutex
+	builders     map[string]ToolBuilder
+	mainVisible  map[string]bool
+	mcpFactory   MCPClientFactory
+	mcpExecutors map[string]mcpExecutor
+	main         *agentpkg.ToolRegistry
+	global       *agentpkg.ToolRegistry
 }
 
 func NewSkillService(repo SkillRepository) *SkillService {
 	return &SkillService{
-		repo:        repo,
-		builders:    make(map[string]ToolBuilder),
-		mainVisible: make(map[string]bool),
+		repo:         repo,
+		builders:     make(map[string]ToolBuilder),
+		mainVisible:  make(map[string]bool),
+		mcpExecutors: make(map[string]mcpExecutor),
 	}
 }
 
@@ -179,14 +186,15 @@ func (s *SkillService) ApplyTo(main, global *agentpkg.ToolRegistry) error {
 }
 
 // buildTool 由 skill 行构造运行时 Tool。
-// builtin:定义以代码 builder 为准(与执行体同源,发版即更新;DB 定义仅存档/展示);
-// builder 缺失(如 M2 远端技能执行体不可用)→ false,技能隐藏。
+// builtin:定义以代码 builder 为准(与执行体同源,发版即更新);
+// mcp:定义以库内行为准(同步自 ListTools),执行体来自 CallTool 闭包;
+// 执行体缺失 → false,技能隐藏(13-技术方案 §3 原则 3)。
 func (s *SkillService) buildTool(row *skilldomain.Skill) (agentpkg.Tool, bool) {
 	s.mu.RLock()
 	builder, ok := s.builders[row.Name]
 	s.mu.RUnlock()
-	if !ok {
-		return agentpkg.Tool{}, false
+	if ok {
+		return builder(), true
 	}
-	return builder(), true
+	return s.buildMCPTool(row)
 }

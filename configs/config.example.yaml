@@ -109,3 +109,13 @@ agent:
 auth:
   jwt_secret: "change-me-in-production-to-a-32-plus-char-random-string"
   token_ttl: "720h"
+
+# MCP 外部能力服务接入(13-插件系统 M2,系统级配置)
+# 发现的远端工具出现在设置-技能清单中,默认停用,须在界面逐个开启。
+# 密钥仅存于本文件(不入 git),不会入库。
+# mcp:
+#   servers:
+#     - name: "github"
+#       base_url: "https://mcp.example.com/mcp"
+#       api_key: "sk-xxx"
+#       enabled: true

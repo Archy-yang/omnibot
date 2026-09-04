@@ -20,11 +20,11 @@ type Skill struct {
 	Source       string    `gorm:"size:16;not null;default:builtin"`
 	Capabilities string    `gorm:"size:128"` // 逗号分隔,如 "research,web"
 	ParamsSchema string    `gorm:"type:text"` // JSON Schema 字符串
-	Enabled      bool      `gorm:"not null;default:true"`
+	Enabled      bool      `gorm:"not null"` // 插入时显式赋值:builtin=true,mcp=false(勿加 default 标签——GORM 会省略零值,默认值会覆盖 false)
 	// MainVisible 是否对主 Agent 可见。false = 子 Agent 专属技能(如抓取类 rss/web_read,
 	// 方向 B:主 Agent 是管家,联网抓取必须 delegate 派活)。false 技能仍进子 Agent 全局池。
-	MainVisible bool      `gorm:"not null;default:true"`
-	MCPServerID *int64    `gorm:"index"` // source=mcp 时指向所属 server(M2)
+	MainVisible bool   `gorm:"not null;default:true"`
+	MCPServer   string `gorm:"size:64;index"` // source=mcp 时所属 server 名(config.yaml 内的 name)
 	CreatedAt    time.Time `gorm:"not null"`
 	UpdatedAt    time.Time `gorm:"not null"`
 }
@@ -42,4 +42,15 @@ type BuiltinDef struct {
 	Capabilities []string
 	Parameters   map[string]interface{}
 	MainVisible  bool
+}
+
+// MCPToolDef MCP server 发现的远端工具定义(source=mcp,启动同步时 upsert)。
+type MCPToolDef struct {
+	Name         string
+	DisplayName  string
+	Description  string
+	MCPServer    string // 所属 server 名(config.yaml)
+	ParamsSchema string // InputSchema JSON
+	MainVisible  bool
+	Enabled      bool // 仅插入时生效(默认停用);upsert 不覆盖用户启停
 }

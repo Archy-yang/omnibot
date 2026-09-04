@@ -187,6 +187,24 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		logger.Error("技能应用到工具池失败: " + err.Error())
 	}
 
+	// M2:MCP server 同步(13-技术方案 §6.2)。发现的远端工具落 skills 表(默认停用),
+	// 单个 server 失败不阻塞启动。同步成功后 ApplyTo,已启用技能即刻可用。
+	if len(cfg.MCP.Servers) > 0 {
+		skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
+		specs := make([]skillService.MCPServerSpec, 0, len(cfg.MCP.Servers))
+		for _, s := range cfg.MCP.Servers {
+			specs = append(specs, skillService.MCPServerSpec{
+				Name: s.Name, BaseURL: s.BaseURL, APIKey: s.APIKey, Enabled: s.Enabled,
+			})
+		}
+		if err := skillSvc.SyncMCPServers(context.Background(), specs); err != nil {
+			logger.Error("MCP server 同步失败: " + err.Error())
+		}
+		if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+			logger.Error("MCP 技能应用到工具池失败: " + err.Error())
+		}
+	}
+
 	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
 
 	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
