@@ -27,10 +27,15 @@ func (h *Handler) HandleListSkills(c *gin.Context) {
 	}
 	views, err := h.skillService.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取技能清单失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "获取技能清单失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"skills": views})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"skills": views,
+		},
+	})
 }
 
 // updateSkillRequest PUT /api/v1/skills/:name 请求体
@@ -51,8 +56,14 @@ func (h *Handler) HandleUpdateSkill(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if err := h.skillService.SetEnabled(name, *req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新技能状态失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "更新技能状态失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"name": name, "enabled": *req.Enabled})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"name":    name,
+			"enabled": *req.Enabled,
+		},
+	})
 }

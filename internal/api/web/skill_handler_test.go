@@ -60,13 +60,15 @@ func TestHandleListSkills(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Skills []skillsvc.SkillView `json:"skills"`
+		Data struct {
+			Skills []skillsvc.SkillView `json:"skills"`
+		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Skills, 2)
-	assert.Equal(t, "calculator", resp.Skills[0].Name)
-	assert.True(t, resp.Skills[0].Enabled)
-	assert.False(t, resp.Skills[1].Enabled)
+	require.Len(t, resp.Data.Skills, 2)
+	assert.Equal(t, "calculator", resp.Data.Skills[0].Name)
+	assert.True(t, resp.Data.Skills[0].Enabled)
+	assert.False(t, resp.Data.Skills[1].Enabled)
 }
 
 func TestHandleListSkills_ServiceError(t *testing.T) {
