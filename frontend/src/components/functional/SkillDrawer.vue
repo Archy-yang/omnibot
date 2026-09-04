@@ -75,6 +75,10 @@ const editingId = ref<number | null>(null);
 const formName = ref('');
 const formBaseUrl = ref('');
 const formApiKey = ref(''); // 编辑时留空 = 保留原 key
+const formAuthType = ref<'none' | 'bearer' | 'oauth'>('bearer');
+const formClientId = ref('');
+const formClientSecret = ref(''); // 编辑时留空 = 保留原 secret
+const formScopes = ref('');
 const formEnabled = ref(true);
 const formSaving = ref(false);
 
@@ -95,6 +99,10 @@ const resetForm = () => {
   formName.value = '';
   formBaseUrl.value = '';
   formApiKey.value = '';
+  formAuthType.value = 'bearer';
+  formClientId.value = '';
+  formClientSecret.value = '';
+  formScopes.value = '';
   formEnabled.value = true;
   showServerForm.value = false;
 };
@@ -109,6 +117,10 @@ const openEditForm = (server: MCPServerItem) => {
   formName.value = server.name;
   formBaseUrl.value = server.base_url;
   formApiKey.value = ''; // 留空 = 保留原 key
+  formAuthType.value = (server.auth_type as 'none' | 'bearer' | 'oauth') || 'bearer';
+  formClientId.value = ''; // 后端留空 = 保留原值
+  formClientSecret.value = '';
+  formScopes.value = '';
   formEnabled.value = server.enabled;
   showServerForm.value = true;
 };
@@ -131,6 +143,10 @@ const handleSaveServer = async () => {
     name: formName.value.trim(),
     base_url: formBaseUrl.value.trim(),
     api_key: formApiKey.value, // 空 = 保留原值(编辑时)
+    auth_type: formAuthType.value,
+    oauth_client_id: formClientId.value,
+    oauth_client_secret: formClientSecret.value,
+    oauth_scopes: formScopes.value,
     enabled: formEnabled.value,
   };
   try {
@@ -183,6 +199,19 @@ const handleSyncServer = async (server: MCPServerItem) => {
   }
 };
 
+const handleAuthorizeServer = async (server: MCPServerItem) => {
+  busyServerId.value = server.id;
+  try {
+    const res = await mcpServerService.authorizeServer(server.id);
+    window.open(res.authorization_url, '_blank');
+    success('已打开服务商授权页,完成后回到本页点「同步」');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '发起授权失败');
+  } finally {
+    busyServerId.value = null;
+  }
+};
+
 const toolCountText = (server: MCPServerItem): string => {
   if (server.tool_count < 0) return '未同步';
   return `${server.tool_count} 个工具`;
@@ -215,6 +244,9 @@ watch(
         <div class="server-info">
           <div class="server-name-row">
             <span class="server-name">{{ server.name }}</span>
+            <span v-if="server.auth_type === 'oauth'" class="server-badge" :class="server.authorized ? '' : 'is-off'">
+              {{ server.authorized ? '已授权' : '待授权' }}
+            </span>
             <span class="server-badge" :class="{ 'is-off': !server.enabled }">
               {{ server.enabled ? '已启用' : '已停用' }}
             </span>
@@ -223,6 +255,13 @@ watch(
           <div class="server-url">{{ server.base_url }}</div>
         </div>
         <div class="server-actions">
+          <button
+            v-if="server.auth_type === 'oauth' && !server.authorized"
+            type="button"
+            class="server-btn is-primary"
+            :disabled="busyServerId === server.id"
+            @click="handleAuthorizeServer(server)"
+          >授权</button>
           <button
             type="button"
             class="server-btn"
@@ -268,6 +307,14 @@ watch(
         />
       </div>
       <div class="form-field">
+        <label class="form-label" for="mcp-auth-type">鉴权方式</label>
+        <select id="mcp-auth-type" v-model="formAuthType" class="form-input">
+          <option value="bearer">API Key（静态令牌）</option>
+          <option value="oauth">OAuth 2.1（远程托管服务标准）</option>
+          <option value="none">无鉴权</option>
+        </select>
+      </div>
+      <div v-if="formAuthType === 'bearer'" class="form-field">
         <label class="form-label" for="mcp-key">访问密钥</label>
         <input
           id="mcp-key"
@@ -278,6 +325,40 @@ watch(
           autocomplete="new-password"
         />
       </div>
+      <template v-if="formAuthType === 'oauth'">
+        <p class="section-hint">保存后点服务行的「授权」完成跳转授权;Client ID 留空时将尝试自动注册。</p>
+        <div class="form-field">
+          <label class="form-label" for="mcp-client-id">Client ID（可留空自动注册）</label>
+          <input
+            id="mcp-client-id"
+            v-model="formClientId"
+            class="form-input"
+            type="text"
+            :placeholder="editingId === null ? '留空尝试动态注册' : '留空则保留原值'"
+          />
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="mcp-client-secret">Client Secret（可留空）</label>
+          <input
+            id="mcp-client-secret"
+            v-model="formClientSecret"
+            class="form-input"
+            type="password"
+            :placeholder="editingId === null ? '公共客户端可留空' : '留空则保留原值'"
+            autocomplete="new-password"
+          />
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="mcp-scopes">Scopes（逗号分隔,可留空）</label>
+          <input
+            id="mcp-scopes"
+            v-model="formScopes"
+            class="form-input"
+            type="text"
+            placeholder="如 repo,read:user"
+          />
+        </div>
+      </template>
       <label class="server-enable-row">
         <input v-model="formEnabled" type="checkbox" />
         <span>保存后立即连接并同步工具</span>
@@ -433,6 +514,13 @@ watch(
 .server-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.server-btn.is-primary {
+  color: #10a37f;
+  border-color: #a7f3d0;
+}
+.server-btn.is-primary:hover {
+  background: #f0fdf4;
 }
 .server-btn.is-danger {
   color: #dc2626;

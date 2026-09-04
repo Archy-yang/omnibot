@@ -110,7 +110,7 @@ func TestAddServer_EncryptsAndSyncs(t *testing.T) {
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
 
-	view, err := svc.AddServer("github", "https://mcp.example.com/mcp", "sk-secret-1", true)
+	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "sk-secret-1", Enabled: true})
 	require.NoError(t, err)
 	assert.True(t, view.HasAPIKey)
 	assert.Equal(t, 1, view.ToolCount)
@@ -128,16 +128,16 @@ func TestAddServer_Validation(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, &mockSkillRepository{}, enabledClient("t"))
 
-	_, err := svc.AddServer("", "https://x.com", "", true)
+	_, err := svc.AddServer(MCPServerInput{Name: "", BaseURL: "https://x.com", APIKey: "", Enabled: true})
 	require.Error(t, err)
 
-	_, err = svc.AddServer("a", "ftp://x.com", "", true)
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "ftp://x.com", APIKey: "", Enabled: true})
 	require.Error(t, err)
 
-	_, err = svc.AddServer("a", "https://x.com", "", true)
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://x.com", APIKey: "", Enabled: true})
 	require.NoError(t, err)
 
-	_, err = svc.AddServer("a", "https://y.com", "", true) // 重名
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://y.com", APIKey: "", Enabled: true}) // 重名
 	require.Error(t, err)
 }
 
@@ -149,7 +149,7 @@ func TestAddServer_DisabledNoConnect(t *testing.T) {
 	client := &mockMCPClient{}
 	svc.SetMCPClientFactory(mockFactory(client))
 
-	_, err := svc.AddServer("off", "https://x.com", "", false)
+	_, err := svc.AddServer(MCPServerInput{Name: "off", BaseURL: "https://x.com", APIKey: "", Enabled: false})
 	require.NoError(t, err)
 	assert.False(t, client.started, "停用的 server 不得发起连接")
 	assert.Empty(t, skillRepo.upsertedMCP)
@@ -162,12 +162,12 @@ func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	_, err := svc.AddServer("github", "https://old.com", "sk-1", true)
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true})
 	require.NoError(t, err)
 	cipherKey := serverRepo.servers[0].APIKey
 
 	// 空 key 更新 → 保留
-	view, err := svc.UpdateServer(serverRepo.servers[0].ID, "github", "https://new.com", "", true)
+	view, err := svc.UpdateServer(serverRepo.servers[0].ID, MCPServerInput{Name: "github", BaseURL: "https://new.com", Enabled: true})
 	require.NoError(t, err)
 	assert.Equal(t, cipherKey, serverRepo.servers[0].APIKey, "空 key 不得清掉原密钥")
 	assert.Equal(t, "https://new.com", view.BaseURL)
@@ -178,7 +178,7 @@ func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	view, err := svc.AddServer("github", "https://old.com", "sk-1", true)
+	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true})
 	require.NoError(t, err)
 
 	svc.mu.RLock()
@@ -186,7 +186,7 @@ func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 	svc.mu.RUnlock()
 	require.True(t, had)
 
-	_, err = svc.UpdateServer(view.ID, "github", "https://old.com", "", false)
+	_, err = svc.UpdateServer(view.ID, MCPServerInput{Name: "github", BaseURL: "https://old.com", Enabled: false})
 	require.NoError(t, err)
 	svc.mu.RLock()
 	_, had = svc.mcpExecutors["gh_search"]
@@ -201,7 +201,7 @@ func TestDeleteServer_CascadesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	view, _ := svc.AddServer("github", "https://x.com", "sk-1", true)
+	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true})
 
 	err := svc.DeleteServer(view.ID)
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestSyncServer_Manual(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{startErr: assert.AnError})
-	view, _ := svc.AddServer("broken", "https://x.com", "", true) // 同步失败但落库成功
+	view, _ := svc.AddServer(MCPServerInput{Name: "broken", BaseURL: "https://x.com", APIKey: "", Enabled: true}) // 同步失败但落库成功
 
 	res, err := svc.SyncServer(view.ID)
 	require.NoError(t, err, "同步失败以结果字段表达,不作为调用错误")
@@ -246,7 +246,7 @@ func TestListServers_MaskedView(t *testing.T) {
 		mcpRow("t3", "github", false),
 	}}
 	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{}) // 空工具列表,不干扰预置计数
-	_, err := svc.AddServer("github", "https://x.com", "sk-abc", true)
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-abc", Enabled: true})
 	require.NoError(t, err)
 
 	views, err := svc.ListServers()
@@ -264,7 +264,7 @@ func TestSyncAllServers_FromDB(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	_, err := svc.AddServer("github", "https://x.com", "sk-1", true)
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true})
 	require.NoError(t, err)
 
 	// 新 service 实例模拟重启:执行体为空,SyncAllServers 重建

@@ -60,6 +60,19 @@ export const mcpServerService = {
       throw error;
     }
   },
+
+  /** 发起 OAuth 授权:返回服务商授权页 URL,前端新窗口打开 */
+  async authorizeServer(id: number): Promise<{ authorization_url: string; state: string }> {
+    try {
+      const response = await request.post<ApiResponse<{ authorization_url: string; state: string }>>(
+        `/mcp/servers/${id}/authorize`
+      );
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to authorize MCP server:', error);
+      throw error;
+    }
+  },
 };
 
 export default mcpServerService;

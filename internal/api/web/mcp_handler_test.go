@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,19 +17,24 @@ import (
 )
 
 type mockMCPManager struct {
-	views      []skilldomain.ServerView
-	addName    string
-	addURL     string
-	addKey     string
-	addEnabled bool
-	addErr     error
-	updatedID  int64
-	deletedID  int64
-	syncedID   int64
-	syncResult *skillsvc.SyncResult
-	syncErr    error
-	updateErr  error
-	listErr    error
+	views         []skilldomain.ServerView
+	addName       string
+	addURL        string
+	addKey        string
+	addEnabled    bool
+	addErr        error
+	updatedID     int64
+	deletedID     int64
+	syncedID      int64
+	syncResult    *skillsvc.SyncResult
+	syncErr       error
+	updateErr     error
+	listErr       error
+	authorizedID  int64
+	authorizeErr  error
+	callbackErr   error
+	callbackCode  string
+	callbackState string
 }
 
 func (m *mockMCPManager) ListServers() ([]skilldomain.ServerView, error) {
@@ -38,20 +44,36 @@ func (m *mockMCPManager) ListServers() ([]skilldomain.ServerView, error) {
 	return m.views, nil
 }
 
-func (m *mockMCPManager) AddServer(name, baseURL, apiKey string, enabled bool) (*skilldomain.ServerView, error) {
-	m.addName, m.addURL, m.addKey, m.addEnabled = name, baseURL, apiKey, enabled
+func (m *mockMCPManager) AddServer(in skillsvc.MCPServerInput) (*skilldomain.ServerView, error) {
+	m.addName, m.addURL, m.addKey, m.addEnabled = in.Name, in.BaseURL, in.APIKey, in.Enabled
 	if m.addErr != nil {
 		return nil, m.addErr
 	}
-	return &skilldomain.ServerView{ID: 1, Name: name, BaseURL: baseURL, Enabled: enabled, HasAPIKey: apiKey != "", ToolCount: 2}, nil
+	return &skilldomain.ServerView{ID: 1, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled, HasAPIKey: in.APIKey != "", ToolCount: 2}, nil
 }
 
-func (m *mockMCPManager) UpdateServer(id int64, name, baseURL, apiKey string, enabled bool) (*skilldomain.ServerView, error) {
+func (m *mockMCPManager) UpdateServer(id int64, in skillsvc.MCPServerInput) (*skilldomain.ServerView, error) {
 	m.updatedID = id
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
-	return &skilldomain.ServerView{ID: id, Name: name, BaseURL: baseURL, Enabled: enabled}, nil
+	return &skilldomain.ServerView{ID: id, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled}, nil
+}
+
+func (m *mockMCPManager) BeginOAuth(ctx context.Context, id int64) (*skillsvc.OAuthBeginResult, error) {
+	m.authorizedID = id
+	if m.authorizeErr != nil {
+		return nil, m.authorizeErr
+	}
+	return &skillsvc.OAuthBeginResult{AuthorizationURL: "https://auth.example.com/authorize?client_id=c", State: "st-1"}, nil
+}
+
+func (m *mockMCPManager) HandleOAuthCallback(ctx context.Context, code, state string) error {
+	if m.callbackErr != nil {
+		return m.callbackErr
+	}
+	m.callbackCode, m.callbackState = code, state
+	return nil
 }
 
 func (m *mockMCPManager) DeleteServer(id int64) error {
@@ -81,6 +103,8 @@ func setupMCPRouter(mgr MCPManager) *gin.Engine {
 	g.PUT("/servers/:id", h.HandleUpdateMCPServer)
 	g.DELETE("/servers/:id", h.HandleDeleteMCPServer)
 	g.POST("/servers/:id/sync", h.HandleSyncMCPServer)
+	g.POST("/servers/:id/authorize", h.HandleAuthorizeMCPServer)
+	g.GET("/oauth/callback", h.HandleOAuthCallback)
 	return r
 }
 
@@ -169,4 +193,51 @@ func TestHandleDeleteAndSyncMCPServer(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 5, resp.Data.ToolCount)
+}
+
+func TestHandleAuthorizeMCPServer(t *testing.T) {
+	mgr := &mockMCPManager{}
+	r := setupMCPRouter(mgr)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/mcp/servers/9/authorize", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, int64(9), mgr.authorizedID)
+
+	var resp struct {
+		Data struct {
+			AuthorizationURL string `json:"authorization_url"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.Data.AuthorizationURL, "authorize?")
+
+	// 业务失败 → 400
+	mgr.authorizeErr = assert.AnError
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/mcp/servers/9/authorize", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleOAuthCallback(t *testing.T) {
+	mgr := &mockMCPManager{}
+	r := setupMCPRouter(mgr)
+
+	// 缺参 → 400
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/mcp/oauth/callback", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 正常回调
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/mcp/oauth/callback?code=c1&state=st-9", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "c1", mgr.callbackCode)
+	assert.Equal(t, "st-9", mgr.callbackState)
+
+	// state 校验失败 → 400 + 可读信息
+	mgr.callbackErr = assert.AnError
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/mcp/oauth/callback?code=c2&state=st-9", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

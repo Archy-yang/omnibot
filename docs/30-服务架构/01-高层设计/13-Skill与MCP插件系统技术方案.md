@@ -162,6 +162,22 @@ mcp:
       enabled: true
 ```
 
+### 6.4 OAuth 2.1 支持（M4，已落地）
+
+远程托管 MCP server 的标准鉴权（MCP 2025-03-26 规范引入）。基于 `mcp-go` OAuthHandler：
+授权码 + PKCE，支持**授权服务器元数据发现**（`/.well-known/oauth-authorization-server`）、
+**动态客户端注册**（RFC 7591，Client ID 留空时自动注册）、**refresh token 自动刷新**。
+
+- `mcp_servers` 表新增列：`auth_type`（none/bearer/oauth）、`oauth_client_id`、
+  `oauth_client_secret`（加密）、`oauth_scopes`、`oauth_tokens`（Token JSON 整体加密）。
+- Token 持久化：`dbTokenStore`（实现 mcp-go `TokenStore`）——授权换新与刷新自动落库，重启不丢。
+- 流程：`POST /api/v1/mcp/servers/:id/authorize`（挂起 state+verifier，返回授权 URL）
+  → 用户在服务商页授权 → 重定向 `GET /api/v1/mcp/oauth/callback`（不挂 JWT，一次性 state 防 CSRF）
+  → 换 token 加密落库 → 「同步」发现工具。
+- redirect_uri = `<app.external_url>/api/v1/mcp/oauth/callback`（配置 `app.external_url`，
+  空回落 `http://localhost:<port>`；自部署在公网需设置该项）。
+- 未授权的 oauth server 同步被拒（"尚未完成 OAuth 授权"）；token 过期连接前自动刷新，失败如实上报。
+
 ### 6.2 客户端与接入流程（实现按 mcp-go v0.32.0 落地）
 
 - 库：`github.com/mark3labs/mcp-go`（client，Streamable HTTP 传输；go 1.24 兼容上限 v0.32.0）。

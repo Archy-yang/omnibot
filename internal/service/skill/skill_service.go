@@ -58,6 +58,11 @@ type SkillService struct {
 	mcpExecutors map[string]mcpExecutor
 	main         *agentpkg.ToolRegistry
 	global       *agentpkg.ToolRegistry
+
+	// OAuth 运行态(M4)
+	oauthRedirectBase string // 回调基址(装配点注入 app.external_url)
+	pendingMu         sync.RWMutex
+	pendingOAuth      map[string]*pendingOAuth // state → 进行中的授权流程
 }
 
 func NewSkillService(repo SkillRepository) *SkillService {
@@ -66,6 +71,7 @@ func NewSkillService(repo SkillRepository) *SkillService {
 		builders:     make(map[string]ToolBuilder),
 		mainVisible:  make(map[string]bool),
 		mcpExecutors: make(map[string]mcpExecutor),
+		pendingOAuth: make(map[string]*pendingOAuth),
 	}
 }
 

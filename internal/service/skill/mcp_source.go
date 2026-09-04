@@ -23,21 +23,39 @@ type MCPClient interface {
 	CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
 }
 
-// MCPServerSpec 单个 MCP server 配置(来自 config.yaml,系统级;密钥不落库)。
+// MCPServerSpec 单个 MCP server 连接配置(调用前已解密;测试注入 mock factory)。
 type MCPServerSpec struct {
 	Name    string
 	BaseURL string
 	APIKey  string
 	Enabled bool
+	// OAuth(M4):AuthType=oauth 时走 OAuth 客户端(TokenStore 由 dbTokenStore 提供)。
+	AuthType          string
+	OAuthClientID     string
+	OAuthClientSecret string
+	OAuthScopes       string
+	TokenStore        clienttransport.TokenStore
 }
 
 // MCPClientFactory 由配置构造客户端(装配点注入真实实现,测试注入 mock)。
 type MCPClientFactory func(spec MCPServerSpec) (MCPClient, error)
 
-// NewStreamableHTTPMCPClient 真实客户端工厂:Streamable HTTP 传输,APIKey 走 Bearer 头。
+// NewStreamableHTTPMCPClient 真实客户端工厂:
+//   - bearer/none: Streamable HTTP,APIKey 走 Bearer 头
+//   - oauth:      Streamable HTTP + OAuthHandler(授权头/自动刷新由 mcp-go 处理)
 func NewStreamableHTTPMCPClient(spec MCPServerSpec) (MCPClient, error) {
 	opts := []clienttransport.StreamableHTTPCOption{
 		clienttransport.WithHTTPTimeout(MCPToolTimeout),
+	}
+	if spec.AuthType == skilldomain.AuthTypeOAuth {
+		return client.NewOAuthStreamableHttpClient(spec.BaseURL, clienttransport.OAuthConfig{
+			ClientID:     spec.OAuthClientID,
+			ClientSecret: spec.OAuthClientSecret,
+			RedirectURI:  "", // 连接阶段不需要;授权流程由 service 层的 handler 负责
+			Scopes:       splitScopes(spec.OAuthScopes),
+			TokenStore:   spec.TokenStore,
+			PKCEEnabled:  true,
+		}, opts...)
 	}
 	if spec.APIKey != "" {
 		opts = append(opts, clienttransport.WithHTTPHeaders(map[string]string{

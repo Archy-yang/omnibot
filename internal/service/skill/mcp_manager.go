@@ -76,10 +76,38 @@ func validateServerInput(name, baseURL string) error {
 	return nil
 }
 
+// MCPServerInput 新增/更新入参(api_key/client_secret 空 = 更新时保留原值)。
+type MCPServerInput struct {
+	Name              string
+	BaseURL           string
+	APIKey            string
+	AuthType          string // none/bearer/oauth,空 = bearer
+	OAuthClientID     string
+	OAuthClientSecret string
+	OAuthScopes       string
+	Enabled           bool
+}
+
+// normalizeAuthType 鉴权方式校验与归一。
+func normalizeAuthType(t string) (string, error) {
+	switch t {
+	case "":
+		return skilldomain.AuthTypeBearer, nil
+	case skilldomain.AuthTypeNone, skilldomain.AuthTypeBearer, skilldomain.AuthTypeOAuth:
+		return t, nil
+	default:
+		return "", fmt.Errorf("不支持的鉴权方式 %q", t)
+	}
+}
+
 // AddServer 新增 MCP server:加密落库 → enabled 则立即同步(失败不回滚,可手动重试)。
-func (s *SkillService) AddServer(name, baseURL, apiKey string, enabled bool) (*skilldomain.ServerView, error) {
-	name = strings.TrimSpace(name)
-	if err := validateServerInput(name, baseURL); err != nil {
+func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, error) {
+	name := strings.TrimSpace(in.Name)
+	if err := validateServerInput(name, in.BaseURL); err != nil {
+		return nil, err
+	}
+	authType, err := normalizeAuthType(in.AuthType)
+	if err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -91,23 +119,38 @@ func (s *SkillService) AddServer(name, baseURL, apiKey string, enabled bool) (*s
 	if existing, _ := repo.GetByName(name); existing != nil {
 		return nil, fmt.Errorf("已存在同名服务 %q", name)
 	}
-	cipher, err := encryptSecret(apiKey)
+	cipher, err := encryptSecret(in.APIKey)
 	if err != nil {
 		return nil, err
 	}
-	row := &skilldomain.MCPServer{Name: name, BaseURL: baseURL, APIKey: cipher, Enabled: enabled}
+	cipherSecret, err := encryptSecret(in.OAuthClientSecret)
+	if err != nil {
+		return nil, err
+	}
+	row := &skilldomain.MCPServer{
+		Name: name, BaseURL: in.BaseURL, APIKey: cipher, Enabled: in.Enabled,
+		AuthType:          authType,
+		OAuthClientID:     strings.TrimSpace(in.OAuthClientID),
+		OAuthClientSecret: cipherSecret,
+		OAuthScopes:       strings.TrimSpace(in.OAuthScopes),
+	}
 	if err := repo.Create(row); err != nil {
 		return nil, fmt.Errorf("保存服务失败: %w", err)
 	}
-	if enabled {
+	if in.Enabled {
 		s.syncServerRow(row) // 结果只进日志;用户可手动重试
 	}
 	return s.serverToView(row)
 }
 
-// UpdateServer 更新配置并按需重新同步(enabled 切换会装卸执行体;apiKey 空 = 保留原值)。
-func (s *SkillService) UpdateServer(id int64, name, baseURL, apiKey string, enabled bool) (*skilldomain.ServerView, error) {
-	if err := validateServerInput(name, baseURL); err != nil {
+// UpdateServer 更新配置并按需重新同步(enabled 切换会装卸执行体;apiKey/client_secret 空 = 保留原值)。
+func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.ServerView, error) {
+	name := strings.TrimSpace(in.Name)
+	if err := validateServerInput(name, in.BaseURL); err != nil {
+		return nil, err
+	}
+	authType, err := normalizeAuthType(in.AuthType)
+	if err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -125,16 +168,28 @@ func (s *SkillService) UpdateServer(id int64, name, baseURL, apiKey string, enab
 	}
 
 	wasEnabled := row.Enabled
-	row.Name = strings.TrimSpace(name)
-	row.BaseURL = baseURL
-	row.Enabled = enabled
-	if apiKey != "" {
-		cipher, err := encryptSecret(apiKey)
+	row.Name = name
+	row.BaseURL = in.BaseURL
+	row.Enabled = in.Enabled
+	row.AuthType = authType
+	if in.APIKey != "" {
+		cipher, err := encryptSecret(in.APIKey)
 		if err != nil {
 			return nil, err
 		}
 		row.APIKey = cipher
 	}
+	if in.OAuthClientID != "" {
+		row.OAuthClientID = strings.TrimSpace(in.OAuthClientID)
+	}
+	if in.OAuthClientSecret != "" {
+		cipher, err := encryptSecret(in.OAuthClientSecret)
+		if err != nil {
+			return nil, err
+		}
+		row.OAuthClientSecret = cipher
+	}
+	row.OAuthScopes = strings.TrimSpace(in.OAuthScopes)
 	if err := repo.Update(row); err != nil {
 		return nil, fmt.Errorf("保存服务失败: %w", err)
 	}
@@ -216,12 +271,14 @@ func (s *SkillService) ListServers() ([]skilldomain.ServerView, error) {
 // serverToView 行 → 掩码视图(工具数直接统计该 server 的 mcp 技能行,缺省 -1=从未同步成功)。
 func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.ServerView, error) {
 	view := &skilldomain.ServerView{
-		ID:        row.ID,
-		Name:      row.Name,
-		BaseURL:   row.BaseURL,
-		Enabled:   row.Enabled,
-		HasAPIKey: row.APIKey != "",
-		ToolCount: -1,
+		ID:         row.ID,
+		Name:       row.Name,
+		BaseURL:    row.BaseURL,
+		Enabled:    row.Enabled,
+		HasAPIKey:  row.APIKey != "",
+		AuthType:   row.AuthType,
+		Authorized: row.Authorized(),
+		ToolCount:  -1,
 	}
 	if skillRepo := s.skillRepo(); skillRepo != nil {
 		if rows, err := skillRepo.List(); err == nil {
@@ -321,14 +378,43 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 		fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
 		return res
 	}
-	apiKey, err := decryptSecret(row.APIKey)
-	if err != nil {
-		res.Err = fmt.Sprintf("密钥解密失败: %v", err)
-		fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
-		return res
+
+	spec := MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, Enabled: true, AuthType: row.AuthType}
+	switch row.AuthType {
+	case skilldomain.AuthTypeOAuth:
+		// 未授权 → 不连接,提示先走授权流程
+		if row.OAuthTokens == "" {
+			res.Err = "尚未完成 OAuth 授权,请先点击「授权」"
+			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
+			return res
+		}
+		// token 过期则先刷新(失败如实上报,不静默用旧 token)
+		if _, err := s.refreshTokenIfExpired(context.Background(), row.ID); err != nil {
+			res.Err = fmt.Sprintf("OAuth 令牌刷新失败: %v", err)
+			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
+			return res
+		}
+		clientSecret, err := decryptSecret(row.OAuthClientSecret)
+		if err != nil {
+			res.Err = fmt.Sprintf("客户端密钥解密失败: %v", err)
+			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
+			return res
+		}
+		spec.OAuthClientID = row.OAuthClientID
+		spec.OAuthClientSecret = clientSecret
+		spec.OAuthScopes = row.OAuthScopes
+		spec.TokenStore = s.newDBTokenStore(row.ID)
+	default: // bearer / none
+		apiKey, err := decryptSecret(row.APIKey)
+		if err != nil {
+			res.Err = fmt.Sprintf("密钥解密失败: %v", err)
+			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
+			return res
+		}
+		spec.APIKey = apiKey
 	}
 
-	mcpClient, err := factory(MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, APIKey: apiKey, Enabled: true})
+	mcpClient, err := factory(spec)
 	if err != nil {
 		res.Err = fmt.Sprintf("创建客户端失败: %v", err)
 	} else if err := mcpClient.Start(context.Background()); err != nil {

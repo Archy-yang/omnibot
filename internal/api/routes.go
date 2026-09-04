@@ -192,6 +192,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// M3:MCP server 在线配置(DB 为单一事实源,config.yaml 仅首次启动 seed)。
 	skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
 	skillSvc.SetMCPServerRepository(mcpServerRepo)
+	// M4:OAuth 回调基址(redirect_uri 须与服务商登记一致)
+	oauthRedirectBase := cfg.App.ExternalURL
+	if oauthRedirectBase == "" {
+		oauthRedirectBase = fmt.Sprintf("http://localhost:%d", cfg.App.Port)
+	}
+	skillSvc.SetOAuthRedirectBase(oauthRedirectBase)
 	if len(cfg.MCP.Servers) > 0 {
 		specs := make([]skillService.MCPServerSpec, 0, len(cfg.MCP.Servers))
 		for _, s := range cfg.MCP.Servers {
@@ -332,7 +338,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		skillAPIGroup.PUT("/:name", webHandler.HandleUpdateSkill)
 	}
 
-	// MCP server 在线管理路由(M3):增删改查 + 手动同步
+	// MCP server 在线管理路由(M3):增删改查 + 手动同步 + OAuth 授权(M4)
 	mcpAPIGroup := r.Group("/api/v1/mcp")
 	mcpAPIGroup.Use(middleware.AuthRequired(jwtSvc))
 	{
@@ -341,7 +347,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		mcpAPIGroup.PUT("/servers/:id", webHandler.HandleUpdateMCPServer)
 		mcpAPIGroup.DELETE("/servers/:id", webHandler.HandleDeleteMCPServer)
 		mcpAPIGroup.POST("/servers/:id/sync", webHandler.HandleSyncMCPServer)
+		mcpAPIGroup.POST("/servers/:id/authorize", webHandler.HandleAuthorizeMCPServer)
 	}
+
+	// OAuth 回调(M4):浏览器由服务商重定向直达,不挂 JWT——安全性由一次性 state 保障
+	r.GET("/api/v1/mcp/oauth/callback", webHandler.HandleOAuthCallback)
 
 	// 用户 LLM 配置路由
 	userAPIGroup := r.Group("/api/v1/user")

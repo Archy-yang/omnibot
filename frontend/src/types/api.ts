@@ -258,8 +258,12 @@ export interface MCPServerItem {
   name: string;
   base_url: string;
   enabled: boolean;
-  /** 是否配置了密钥 */
+  /** 是否配置了密钥(bearer 型) */
   has_api_key: boolean;
+  /** 鉴权方式:none/bearer/oauth */
+  auth_type: string;
+  /** OAuth 型是否已完成授权 */
+  authorized: boolean;
   /** 上次同步发现的工具数(-1=从未同步成功) */
   tool_count: number;
 }
@@ -278,6 +282,12 @@ export interface UpsertMCPServerRequest {
   name: string;
   base_url: string;
   api_key?: string;
+  /** none/bearer/oauth,空 = bearer */
+  auth_type?: string;
+  oauth_client_id?: string;
+  /** 更新时留空 = 保留原值 */
+  oauth_client_secret?: string;
+  oauth_scopes?: string;
   enabled: boolean;
 }
 

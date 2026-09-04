@@ -64,10 +64,16 @@ type AuthConfig struct {
 }
 
 // AppConfig 应用基本配置
+//
+// ExternalURL 是对外可访问的基址(M4 OAuth 回调构建 redirect_uri 用,如
+// "https://bot.example.com");空时回落 http://localhost:<port>。
+// OAuth 回调固定为 <ExternalURL>/api/v1/mcp/oauth/callback——该 URI 需在
+// OAuth 服务商侧登记一致。
 type AppConfig struct {
-	Name string `mapstructure:"name"`
-	Env  string `mapstructure:"env"`
-	Port int    `mapstructure:"port"`
+	Name        string `mapstructure:"name"`
+	Env         string `mapstructure:"env"`
+	Port        int    `mapstructure:"port"`
+	ExternalURL string `mapstructure:"external_url"` // 对外基址(OAuth 回调 redirect_uri 用),空回落 localhost
 }
 
 // WechatConfig 微信公众号配置

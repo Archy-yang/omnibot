@@ -10,6 +10,9 @@ app:
   name: "omnibot"
   env: "development"
   port: 8080
+  # 对外可访问基址(MCP OAuth 回调构建 redirect_uri 用);空回落 http://localhost:8080
+  # OAuth 回调固定为 <external_url>/api/v1/mcp/oauth/callback,须与服务商登记一致
+  external_url: ""
 
 # 数据库配置
 # 开发可用 sqlite 内存库快速起步;生产推荐 Postgres。
