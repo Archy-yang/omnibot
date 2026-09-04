@@ -87,6 +87,8 @@ type Handler struct {
 	subAgentSvc *agentpkg.SubAgentService
 	// 技能管理(13-Skill与MCP插件系统)。nil 时技能接口返回 503(向后兼容)。
 	skillService SkillService
+	// MCP server 在线管理(M3)。nil 时 MCP 接口返回 503(向后兼容)。
+	mcpManager MCPManager
 }
 
 // NewHandler 创建 Web 聊天处理器

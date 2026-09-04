@@ -22,6 +22,7 @@ type mockSkillRepository struct {
 	setEnabledErr error
 	upsertedMCP  []skilldomain.MCPToolDef
 	deletedNotIn []string
+	deletedServers []string
 }
 
 func (m *mockSkillRepository) UpsertBuiltin(def skilldomain.BuiltinDef) error {
@@ -86,6 +87,18 @@ func (m *mockSkillRepository) UpsertMCPTool(def skilldomain.MCPToolDef) error {
 func (m *mockSkillRepository) DeleteMCPSkillsNotIn(serverNames []string) (int64, error) {
 	m.deletedNotIn = serverNames
 	return 0, nil
+}
+
+func (m *mockSkillRepository) DeleteMCPSkillsByServer(serverName string) (int64, error) {
+	m.deletedServers = append(m.deletedServers, serverName)
+	kept := m.rows[:0]
+	for _, r := range m.rows {
+		if !(r.Source == skilldomain.SourceMCP && r.MCPServer == serverName) {
+			kept = append(kept, r)
+		}
+	}
+	m.rows = kept
+	return 1, nil
 }
 
 // ---- 工具 ----

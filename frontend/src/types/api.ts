@@ -249,3 +249,43 @@ export interface UpdateSkillResponse {
   name: string;
   enabled: boolean;
 }
+
+/**
+ * MCP server 视图(13-插件系统 M3):密钥只回显 has_api_key,不明文
+ */
+export interface MCPServerItem {
+  id: number;
+  name: string;
+  base_url: string;
+  enabled: boolean;
+  /** 是否配置了密钥 */
+  has_api_key: boolean;
+  /** 上次同步发现的工具数(-1=从未同步成功) */
+  tool_count: number;
+}
+
+/**
+ * MCP server 清单响应类型
+ */
+export interface ListMCPServersResponse {
+  servers: MCPServerItem[];
+}
+
+/**
+ * MCP server 新增/更新请求类型(api_key 空 = 保留原值)
+ */
+export interface UpsertMCPServerRequest {
+  name: string;
+  base_url: string;
+  api_key?: string;
+  enabled: boolean;
+}
+
+/**
+ * MCP server 同步响应类型
+ */
+export interface SyncMCPServerResponse {
+  server_name: string;
+  tool_count: number;
+  err?: string;
+}

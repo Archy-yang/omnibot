@@ -143,10 +143,17 @@ SettingsDrawer 新增「技能」tab：技能清单（名称/说明/来源徽标
 
 ## 6. M2：MCP 客户端
 
-### 6.1 配置（系统级，实现已落地）
+### 6.1 配置（M3 起在线配置，已落地）
+
+**M3 修订**：MCP server 配置从 config.yaml 迁移到 **数据库（`mcp_servers` 表）**，Web 端「技能」抽屉在线增删改查——兑现 PRD 4.2 的完整形态。config.yaml 的 `mcp.servers` 段降级为**首次启动 seed**（库空且有配置时导入一次，加密落库，此后 DB 为唯一事实源）。
+
+- APIKey **AES 加密落库**（`crypto.Encrypt`，密文带 `enc:` 前缀），接口只回显 `has_api_key` 布尔；更新时空 key = 保留原值。
+- 增/改/删 server **立即同步**（连接 → ListTools → 落 skills 表/清技能行），无需重启；同步失败以 `SyncResult.Err` 可读返回，不阻断保存。
+- 停用 server（enabled=false）= 不连接 + 执行体移除（技能隐藏）；删除 server 级联删其技能行。
+- API：`GET/POST /api/v1/mcp/servers`、`PUT/DELETE /api/v1/mcp/servers/:id`、`POST /api/v1/mcp/servers/:id/sync`。
 
 ```yaml
-# config.yaml(不入 git,密钥明文仅存在于配置文件,与 llm/feishu 凭据现状一致)
+# config.yaml —— 仅首次启动 seed(库内已有配置时本段被忽略)
 mcp:
   servers:
     - name: "github"
@@ -154,11 +161,6 @@ mcp:
       api_key: "sk-xxx"
       enabled: true
 ```
-
-`pkg/config` 增加 `MCPConfig`/`MCPServerConfig`。增删改走配置文件 + 重启（第一版不做热加载，页面只读展示 + 启停已发现技能）。
-
-> 实现细化（相对草案）：**server 配置以 config.yaml 为单一事实源，不建 `mcpservers` 表、密钥完全不落库**
-> ——比"加密落库"更强的保证，与 llm/feishu 凭据同信任域。`skills.MCPServer` 列存 server 名（引用配置）。
 
 ### 6.2 客户端与接入流程（实现按 mcp-go v0.32.0 落地）
 

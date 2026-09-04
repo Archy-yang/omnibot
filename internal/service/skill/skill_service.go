@@ -32,15 +32,25 @@ type SkillRepository interface {
 	UpsertMCPTool(def skilldomain.MCPToolDef) error
 	// DeleteMCPSkillsNotIn 清理不在配置内的 MCP server 的技能行(配置移除后)。
 	DeleteMCPSkillsNotIn(serverNames []string) (int64, error)
+	// DeleteMCPSkillsByServer 删除指定 server 的全部技能行(server 删除级联/重新同步)。
+	DeleteMCPSkillsByServer(serverName string) (int64, error)
 	List() ([]*skilldomain.Skill, error)
 	GetByName(name string) (*skilldomain.Skill, error)
 	SetEnabled(name string, enabled bool) error
+}
+
+// skillRepo 带锁读取技能仓储。
+func (s *SkillService) skillRepo() SkillRepository {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repo
 }
 
 // SkillService 技能调度中枢:定义落库(可清单/启停),运行时 registry 由它构建。
 // 框架工具(request_input/delegate 等)不归它管,装配点另行注册。
 type SkillService struct {
 	repo         SkillRepository
+	serverRepo   MCPServerRepository
 	mu           sync.RWMutex
 	builders     map[string]ToolBuilder
 	mainVisible  map[string]bool

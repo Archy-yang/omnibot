@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -111,32 +110,7 @@ func (s *SkillService) syncOneServer(ctx context.Context, spec MCPServerSpec) {
 		return
 	}
 
-	for _, tool := range result.Tools {
-		// 与内置技能重名 → 跳过(不覆盖内置,13-技术方案 §4)
-		s.mu.RLock()
-		_, conflict := s.builders[tool.Name]
-		s.mu.RUnlock()
-		if conflict {
-			fmt.Printf("[skill] mcp tool %q (server %s) conflicts with builtin, skipped\n", tool.Name, spec.Name)
-			continue
-		}
-
-		schemaJSON, _ := json.Marshal(tool.InputSchema)
-		def := skilldomain.MCPToolDef{
-			Name:         tool.Name,
-			DisplayName:  tool.Name,
-			Description:  tool.Description,
-			MCPServer:    spec.Name,
-			ParamsSchema: string(schemaJSON),
-			MainVisible:  true, // 远端技能默认主 Agent 也可用(抓取类限制只针对内置)
-			Enabled:      false,
-		}
-		if err := s.repo.UpsertMCPTool(def); err != nil {
-			fmt.Printf("[skill] mcp tool %q upsert failed: %v\n", tool.Name, err)
-			continue
-		}
-		s.registerMCPExecutor(tool.Name, makeMCPToolExecutor(mcpClient, tool.Name))
-	}
+	s.ingestServerTools(spec.Name, mcpClient, result.Tools)
 }
 
 // registerMCPExecutor 注册 mcp 技能执行体(技能名 → CallTool 闭包)。

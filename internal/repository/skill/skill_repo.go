@@ -15,6 +15,8 @@ type SkillRepository interface {
 	UpsertMCPTool(def skilldomain.MCPToolDef) error
 	// DeleteMCPSkillsNotIn 清理不在配置内的 MCP server 的技能行。
 	DeleteMCPSkillsNotIn(serverNames []string) (int64, error)
+	// DeleteMCPSkillsByServer 删除指定 server 的全部技能行(server 删除级联)。
+	DeleteMCPSkillsByServer(serverName string) (int64, error)
 	List() ([]*skilldomain.Skill, error)
 	GetByName(name string) (*skilldomain.Skill, error)
 	SetEnabled(name string, enabled bool) error
@@ -102,5 +104,12 @@ func (r *skillRepository) DeleteMCPSkillsNotIn(serverNames []string) (int64, err
 		tx = tx.Where("mcp_server NOT IN ?", serverNames)
 	}
 	res := tx.Delete(&skilldomain.Skill{})
+	return res.RowsAffected, res.Error
+}
+
+// DeleteMCPSkillsByServer 删除指定 server 的全部技能行(server 删除级联)。
+func (r *skillRepository) DeleteMCPSkillsByServer(serverName string) (int64, error) {
+	res := r.db.Where("source = ? AND mcp_server = ?", skilldomain.SourceMCP, serverName).
+		Delete(&skilldomain.Skill{})
 	return res.RowsAffected, res.Error
 }

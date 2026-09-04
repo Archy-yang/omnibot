@@ -15,7 +15,7 @@ import (
 func setupSkillTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&skilldomain.Skill{}))
+	require.NoError(t, db.AutoMigrate(&skilldomain.Skill{}, &skilldomain.MCPServer{}))
 	return db
 }
 

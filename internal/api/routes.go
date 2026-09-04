@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -170,6 +171,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// RegisterBuiltinSubOnly:只进 globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
 	skillRepoImpl := skillRepo.NewSkillRepository(dbConn.GetGormDB())
+	mcpServerRepo := skillRepo.NewMCPServerRepository(dbConn.GetGormDB())
 	skillSvc := skillService.NewSkillService(skillRepoImpl)
 	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
 	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
@@ -187,22 +189,27 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		logger.Error("技能应用到工具池失败: " + err.Error())
 	}
 
-	// M2:MCP server 同步(13-技术方案 §6.2)。发现的远端工具落 skills 表(默认停用),
-	// 单个 server 失败不阻塞启动。同步成功后 ApplyTo,已启用技能即刻可用。
+	// M3:MCP server 在线配置(DB 为单一事实源,config.yaml 仅首次启动 seed)。
+	skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
+	skillSvc.SetMCPServerRepository(mcpServerRepo)
 	if len(cfg.MCP.Servers) > 0 {
-		skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
 		specs := make([]skillService.MCPServerSpec, 0, len(cfg.MCP.Servers))
 		for _, s := range cfg.MCP.Servers {
 			specs = append(specs, skillService.MCPServerSpec{
 				Name: s.Name, BaseURL: s.BaseURL, APIKey: s.APIKey, Enabled: s.Enabled,
 			})
 		}
-		if err := skillSvc.SyncMCPServers(context.Background(), specs); err != nil {
-			logger.Error("MCP server 同步失败: " + err.Error())
+		if n, err := skillSvc.SeedServersFromConfig(specs); err != nil {
+			logger.Error("MCP 配置 seed 失败: " + err.Error())
+		} else if n > 0 {
+			logger.Info(fmt.Sprintf("已从 config.yaml 导入 %d 个 MCP server(此后以数据库配置为准)", n))
 		}
-		if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
-			logger.Error("MCP 技能应用到工具池失败: " + err.Error())
-		}
+	}
+	if err := skillSvc.SyncAllServers(context.Background()); err != nil {
+		logger.Error("MCP server 启动同步失败: " + err.Error())
+	}
+	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("MCP 技能应用到工具池失败: " + err.Error())
 	}
 
 	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
@@ -257,6 +264,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetSkillService(skillSvc)
+	webHandler.SetMCPManager(skillSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -322,6 +330,17 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	{
 		skillAPIGroup.GET("", webHandler.HandleListSkills)
 		skillAPIGroup.PUT("/:name", webHandler.HandleUpdateSkill)
+	}
+
+	// MCP server 在线管理路由(M3):增删改查 + 手动同步
+	mcpAPIGroup := r.Group("/api/v1/mcp")
+	mcpAPIGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		mcpAPIGroup.GET("/servers", webHandler.HandleListMCPServers)
+		mcpAPIGroup.POST("/servers", webHandler.HandleCreateMCPServer)
+		mcpAPIGroup.PUT("/servers/:id", webHandler.HandleUpdateMCPServer)
+		mcpAPIGroup.DELETE("/servers/:id", webHandler.HandleDeleteMCPServer)
+		mcpAPIGroup.POST("/servers/:id/sync", webHandler.HandleSyncMCPServer)
 	}
 
 	// 用户 LLM 配置路由
