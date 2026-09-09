@@ -223,10 +223,33 @@ mcp:
 | 11 | `TestMCPServerKey_EncryptedAtRest` | 落库密文、回显掩码 |
 | 12 | 名称冲突：mcp 工具与内置重名 → 跳过 + 告警 |
 
+## 7.5 M5：飞书 CLI 桥接（2026-09-09 落地）
+
+> 选型验证结论（三轮实测）：飞书官方托管 MCP（mcp.feishu.cn）不支持多维表格且需自定义头 + TAT 刷新；
+> 本地 lark-mcp 覆盖全但文档编辑弱于托管版；官方 **lark-cli**（`@larksuite/cli`，2500+ API）
+> 以用户身份全覆盖（文档 block 级编辑 + 多维表格 + 日历/邮件等），device flow 一次授权、
+> token 入系统钥匙串自动刷新——个人助手场景的正解，M5 采纳。lark-mcp/stdio 传输放弃，
+> 托管端点（自定义头 + TAT）留作"应用身份/多用户"场景的后续备选。
+
+新增 builtin skill `feishu`：受控执行 lark-cli（`internal/service/agent/feishu_tool.go`）。
+
+- **执行模型**：单工具覆盖全业务域。参数 `args: string[]` 逐字传给 CLI（`exec.CommandContext`
+  参数数组直传，不经 shell，防注入）；多行内容走参数 `-` + `stdin` 透传，免转义。
+- **安全收口**：域白名单（docs/base/drive/im/wiki/sheets/calendar/task/mail/… 及 schema/skills/api；
+  排除 auth/config——凭证与授权、event/apps——事件与部署）；拒绝 `--yes`（高危写不经对话）；
+  超时默认 60s；输出截断 32KB（错误场景保留尾部——CLI 的 JSON 错误含修复建议，对 LLM 有价值）。
+- **可用性**：运行时检查——CLI 缺失/未授权时执行返回引导文案（安装 + `lark-cli auth login`），
+  用户授权后自愈，无需重启；技能默认启用（`MainVisible=true`，主/子 Agent 均可用）。
+- **身份**：固定 user（本期单用户）；CLI 的 token 管理完全自管，本工具零凭证管理。
+- **配置**：`feishu.cli.bin_path`（默认 `lark-cli`）、`feishu.cli.timeout_seconds`（默认 60）。
+- 测试：`feishu_tool_test.go` 9 项（定义/参数透传/stdin/`--yes` 拒绝/白名单/超时/截断/缺失引导/空参）。
+
 ## 8. 边界与不做
 
 - 用户自定义执行体（脚本/代码）：安全红线，不做。
-- stdio 传输、MCP 热加载、resources/prompts 等 MCP 高级特性：二期。
+- stdio 传输、MCP 热加载、resources/prompts 等 MCP 高级特性：放弃（被 lark-cli 覆盖，见 §7.5）；
+  MCP 托管端点自定义头 + TAT（飞书）留作后续备选。
+- lark-cli 高危写（`--yes`）：本期不对 Agent 开放。
 - 提示词型 skill：另一条线（PromptRegistry），本期不混入。
 
 ## 9. 迭代计划
@@ -235,8 +258,9 @@ mcp:
 |--------|------|--------|
 | M1 | skill 抽象 + 内置工具迁移 + 清单/启停 API + 前端技能 tab | 本方案 §5、PRD 4.1/4.3 |
 | M2 | MCP 客户端 + 配置 + 技能来源 mcp | 本方案 §6、PRD 4.2/4.4 |
+| M5 | 飞书 CLI 桥接（用户身份全能通道） | 本方案 §7.5 |
 
 ---
 
-**文档版本**：v1.0
+**文档版本**：v1.1（M5）
 **创建日期**：2026-09-04

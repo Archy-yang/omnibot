@@ -90,9 +90,17 @@ type WechatConfig struct {
 // 不入库不日志(安全红线)。enabled=false 时跳过飞书 channel 初始化,
 // 不影响 Web/微信正常启动(开发态友好)。
 type FeishuConfig struct {
-	AppID     string `mapstructure:"app_id"`
-	AppSecret string `mapstructure:"app_secret"`
-	Enabled   bool   `mapstructure:"enabled"`
+	AppID     string    `mapstructure:"app_id"`
+	AppSecret string    `mapstructure:"app_secret"`
+	Enabled   bool      `mapstructure:"enabled"`
+	CLI       FeishuCLI `mapstructure:"cli"` // lark-cli 桥接(M5,技能"feishu"的执行体)
+}
+
+// FeishuCLI lark-cli 桥接配置(13-技术方案 §7,M5)。
+// 身份/token 由 CLI 自管(device flow 授权 + 钥匙串);此处仅控制执行参数。
+type FeishuCLI struct {
+	BinPath        string `mapstructure:"bin_path"`        // 默认 "lark-cli"(PATH 查找)
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单次执行超时,默认 60
 }
 
 // LLMConfig 大模型配置

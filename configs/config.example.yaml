@@ -42,6 +42,12 @@ feishu:
   app_id: "cli_xxx"
   app_secret: "your_feishu_app_secret"
   enabled: false
+  # lark-cli 桥接(M5):技能"feishu"以用户身份执行 lark-cli 操作飞书。
+  # 前置:npm i -g @larksuite/cli && lark-cli config init --app-id <id> --app-secret-stdin
+  #       && lark-cli auth login --domain docs,base,im,drive,wiki
+  cli:
+    bin_path: "lark-cli"     # 可执行文件路径(PATH 查找)
+    timeout_seconds: 60      # 单次执行超时
 
 # 大模型配置(v1.4+ 用户可在 Web 设置面板自定义,覆盖此处 system default)
 # 推荐 DeepSeek / 豆包 / 千问等 OpenAI 兼容服务商,本地仅占位即可。

@@ -179,6 +179,13 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchHistoryTool(memorySvc) })
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
+	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool {
+		return agentpkg.CreateFeishuTool(agentpkg.FeishuCLIConfig{
+			BinPath: cfg.Feishu.CLI.BinPath,
+			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
+		})
+	})
 	if err := skillSvc.SeedBuiltins(); err != nil {
 		logger.Error("技能定义 seed 失败: " + err.Error())
 	}
