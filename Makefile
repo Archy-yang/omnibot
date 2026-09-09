@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend clean run dev test test-backend test-all lint help install-tools
+.PHONY: all build build-frontend build-backend clean run dev start stop restart status logs test test-backend test-all lint help install-tools
 
 # Go related variables
 GO_CMD = go
@@ -17,8 +17,13 @@ VITE_CMD = npx vite
 # Database
 DB_FILE = omnibot.db
 
-# Default target
-all: build
+# 守护进程(CLAUDE.md 铁律:启动/重启必须走 make,禁止手动 kill / nohup)
+CONFIG_PATH = configs/config.yaml
+PID_FILE = $(BIN_DIR)/omnibot.pid
+LOG_FILE = logs/omnibot.log
+
+# Default target: 完整构建(前端+后端)并后台启动
+all: build start
 
 ##@ Build
 
@@ -35,15 +40,59 @@ build-backend:  ## Build Go backend binary
 	@echo "✅ Backend built: $(SERVER_BIN)"
 
 build-frontend:  ## Build Vue frontend
-	@echo "🔨 Building frontend..."
-	@cd $(FRONTEND_DIR) && $(NPM_CMD) run build
+	@echo "🎨 Building frontend..."
+	@cd $(FRONTEND_DIR) && $(NPM_CMD) install && $(NPM_CMD) run build
 	@echo "✅ Frontend built: $(FRONTEND_DIR)/dist"
 
 build-all: build-backend build-frontend  ## Build both backend and frontend
 
+##@ Service (daemon)
+
+start: stop  ## Start the server in background (idempotent: stops old process first)
+	@mkdir -p logs
+	@nohup ./$(SERVER_BIN) -config $(CONFIG_PATH) >> $(LOG_FILE) 2>&1 & \
+	echo "$$!" > $(PID_FILE)
+	@sleep 1; if kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
+		echo "✅ 已启动 PID=$$(cat $(PID_FILE))  日志: $(LOG_FILE)"; \
+	else \
+		echo "❌ 启动失败,最近日志:"; tail -20 $(LOG_FILE); exit 1; \
+	fi
+
+restart: stop start  ## Restart only (no rebuild)
+
+stop:  ## Stop the running server (pidfile first, pgrep fallback)
+	@pids=""; \
+	[ -f $(PID_FILE) ] && pids=$$(cat $(PID_FILE)) 2>/dev/null; \
+	for p in $$(pgrep -f "$(SERVER_BIN) -config" 2>/dev/null); do \
+		[ "$$p" != "$$" ] && pids="$$pids $$p"; \
+	done; \
+	if [ -n "$$(echo $$pids | tr -d ' ')" ]; then \
+		echo "🛑 停止进程:$$pids"; \
+		kill $$pids 2>/dev/null || true; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			alive=0; for p in $$pids; do kill -0 $$p 2>/dev/null && alive=1; done; \
+			[ $$alive -eq 0 ] && break; sleep 0.5; \
+		done; \
+		for p in $$pids; do kill -0 $$p 2>/dev/null && kill -9 $$p 2>/dev/null || true; done; \
+	else \
+		echo "ℹ️ 无运行中的服务"; \
+	fi; \
+	rm -f $(PID_FILE)
+
+status:  ## Show server status + recent log tail
+	@if [ -f $(PID_FILE) ] && kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
+		echo "🟢 运行中 PID=$$(cat $(PID_FILE))"; \
+	else \
+		echo "🔴 未运行"; \
+	fi
+	@[ -f $(LOG_FILE) ] && tail -5 $(LOG_FILE) || true
+
+logs:  ## Follow server log
+	@tail -f $(LOG_FILE)
+
 ##@ Development
 
-run: build  ## Build and run the server
+run: build  ## Build and run the server (foreground)
 	@echo "🚀 Starting OmniBot server..."
 	@./$(SERVER_BIN)
 
@@ -158,7 +207,6 @@ clean:  ## Clean build artifacts and temporary files
 ##@ Help
 
 help:  ## Display this help message
-	@awk 'BEGIN {FS = ":.*##"; printf "\n\033[1mOmniBot - 全平台智能助手\033[0m\n\n\033[36mUsage:\033[0m\n  make \033[32m<target>\033[0m\n\n  \033[36mExamples:\033[0m\n    make build                  # Build both\n    make build TARGET=backend   # Build backend only\n    make build TARGET=frontend  # Build frontend only\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[32m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\n\033[1mOmniBot - 全平台智能助手\033[0m\n\n\033[36mUsage:\033[0m\n  make \033[32m<target>\033[0m\n\n  \033[36mExamples:\033[0m\n    make                        # Build & start (daemon)\n    make restart                # Restart without rebuild\n    make build TARGET=backend   # Build backend only\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[32m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-# Display help by default
-.DEFAULT_GOAL := help
+.DEFAULT_GOAL := all

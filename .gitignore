@@ -7,3 +7,6 @@ configs/config.yaml
 *.db
 smoke_p2.db
 configs/config.smoke.yaml
+
+# 运行日志(make 启动的服务输出)
+logs/
