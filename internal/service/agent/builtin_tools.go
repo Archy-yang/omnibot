@@ -87,8 +87,9 @@ func CreateCalculatorTool() Tool {
 // 服务实现 MemorySearcher 时走语义检索(含来源标识);否则老子串路径兜底(12-记忆系统技术方案 §8)。
 func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 	return Tool{
-		Name:         "search_memories",
-		Description:  "搜索用户的长期记忆，查找与查询相关的记忆内容",
+		Name: "search_memories",
+		Description: "搜索用户的记忆。优先返回进行中的事项（含当前状态与相关记忆全景，" +
+			"适合问\"某件事怎么样了/进展如何\"），以及与查询相关的长期记忆条目",
 		DisplayLabel: "翻了翻记忆",
 		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
@@ -108,6 +109,10 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 			}
 			userID := getUserIDFromContext(ctx)
 			if searcher, ok := memorySvc.(MemorySearcher); ok {
+				// M6.2 两段式:事项命中优先(返回"这件事"的全景),再回落散点记忆
+				if matterSearcher, ok := memorySvc.(MatterSearcher); ok {
+					return searchMemoriesMatterFirst(ctx, matterSearcher, searcher, userID, query)
+				}
 				return searchMemoriesSemantic(ctx, searcher, userID, query)
 			}
 			memories, err := memorySvc.GetRecentForContext(ctx, userID, 50)
@@ -117,6 +122,11 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 			return filterMemories(memories, query), nil
 		},
 	}
+}
+
+// MatterSearcher 事项优先检索(可选增强,M6.2):命中事项时返回其当前状态+关联记忆全景。
+type MatterSearcher interface {
+	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 }
 
 // searchMemoriesSemantic 语义检索路径:返回记忆内容 + 来源标识。
@@ -136,6 +146,48 @@ func searchMemoriesSemantic(ctx context.Context, searcher MemorySearcher, userID
 			source = "(自动记忆)"
 		}
 		fmt.Fprintf(&b, "%d. %s%s\n", i+1, h.Memory.Content, source)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// searchMemoriesMatterFirst 两段式检索:第一段事项(最多 2 个,命中即给全景),
+// 第二段散点记忆(排除已随事项展示过的,避免重复)。
+func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearcher, searcher MemorySearcher, userID int64, query string) (string, error) {
+	matterHits, err := matterSearcher.SearchMatters(ctx, userID, query, 2)
+	if err != nil {
+		return "", fmt.Errorf("查询记忆失败: %w", err)
+	}
+
+	seen := make(map[int64]bool)
+	var b strings.Builder
+	for _, mh := range matterHits {
+		fmt.Fprintf(&b, "【事项】%s\n当前状态:%s\n", mh.Matter.Title, mh.Matter.StateDesc)
+		for _, f := range mh.Facts {
+			seen[f.ID] = true
+			fmt.Fprintf(&b, "- %s(%s)\n", f.Content, f.Kind)
+		}
+		b.WriteString("\n")
+	}
+
+	hits, err := searcher.SearchMemories(ctx, userID, query, 10)
+	if err != nil {
+		return "", fmt.Errorf("查询记忆失败: %w", err)
+	}
+	shown := 0
+	for _, h := range hits {
+		if seen[h.Memory.ID] {
+			continue
+		}
+		source := ""
+		if h.Memory.Source == memorydomain.MemorySourceAuto {
+			source = "(自动记忆)"
+		}
+		shown++
+		fmt.Fprintf(&b, "%d. %s%s\n", shown, h.Memory.Content, source)
+	}
+
+	if len(matterHits) == 0 && shown == 0 {
+		return "未找到相关记忆", nil
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }

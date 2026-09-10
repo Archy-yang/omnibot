@@ -7,6 +7,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import ChatAvatar from '@/components/chat/ChatAvatar.vue';
 import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
+import SkillDrawer from '@/components/functional/SkillDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
@@ -18,8 +19,9 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
-// 记忆抽屉本地状态(设置抽屉走 settingsStore.showSettingsPanel)
+// 记忆/技能抽屉本地状态(设置抽屉走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
+const showSkillDrawer = ref(false);
 
 const isEmpty = computed(() => messages.value.length === 0);
 const inputPlaceholder = computed(() =>
@@ -27,8 +29,9 @@ const inputPlaceholder = computed(() =>
 );
 
 // AppNav 高亮:抽屉打开时高亮对应按钮,都没开时高亮 chat
-const navCurrent = computed<'chat' | 'memory' | 'settings'>(() => {
+const navCurrent = computed<'chat' | 'memory' | 'skills' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
+  if (showSkillDrawer.value) return 'skills';
   if (showSettingsPanel.value) return 'settings';
   return 'chat';
 });
@@ -66,6 +69,7 @@ const handleSend = async (content: string) => {
     <AppNav
       :current="navCurrent"
       @open-memory="showMemoryDrawer = true"
+      @open-skills="showSkillDrawer = true"
       @open-settings="toggleSettingsPanel"
     />
 
@@ -122,6 +126,11 @@ const handleSend = async (content: string) => {
     <MemoryDrawer
       :visible="showMemoryDrawer"
       @close="showMemoryDrawer = false"
+    />
+
+    <SkillDrawer
+      :visible="showSkillDrawer"
+      @close="showSkillDrawer = false"
     />
 
     <Toast :toasts="toasts" />

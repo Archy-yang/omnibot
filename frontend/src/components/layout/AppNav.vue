@@ -10,12 +10,14 @@
  */
 defineProps<{
   /** 当前哪个抽屉打开:用于高亮对应按钮(可选) */
-  current?: 'chat' | 'memory' | 'settings';
+  current?: 'chat' | 'memory' | 'skills' | 'settings';
 }>();
 
 defineEmits<{
   /** 点击「记忆」:打开记忆抽屉 */
   'open-memory': [];
+  /** 点击「技能」:打开技能抽屉(13-插件系统,MCP 接入 + 技能启停) */
+  'open-skills': [];
   /** 点击「设置」:打开设置抽屉 */
   'open-settings': [];
 }>();
@@ -49,6 +51,17 @@ defineEmits<{
           <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2 2 0 0 0 2-2V6.5a.5.5 0 0 1 .5-.5H20a2 2 0 0 0 0-4h-5.5z"/>
         </svg>
         <span>记忆</span>
+      </button>
+      <button
+        class="nav-btn"
+        :class="{ 'is-active': current === 'skills' }"
+        type="button"
+        @click="$emit('open-skills')"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+        </svg>
+        <span>技能</span>
       </button>
       <button
         class="nav-btn"

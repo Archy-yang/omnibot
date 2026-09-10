@@ -17,6 +17,7 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
+	memorydomain "omnibot/internal/domain/memory"
 	chat "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	userSvc "omnibot/internal/service/user"
@@ -33,11 +34,11 @@ var weChatBindCodeRe = regexp.MustCompile(`^绑定 (\d{6})$`)
 
 const (
 	// 绑定结果回复(PRD 5.1)
-	bindSuccessReplyWeChat       = "绑定成功!现在可以在微信跟我聊了"
-	bindCodeInvalidReply         = "绑定码无效或已过期,请在 web 端重新获取"
-	weChatAlreadyBoundReply      = "该微信号已绑定其他账号"
+	bindSuccessReplyWeChat         = "绑定成功!现在可以在微信跟我聊了"
+	bindCodeInvalidReply           = "绑定码无效或已过期,请在 web 端重新获取"
+	weChatAlreadyBoundReply        = "该微信号已绑定其他账号"
 	accountWeChatAlreadyBoundReply = "你的账号已绑定微信,如需更换请稍后(暂不支持)"
-	fallbackReplyWeChat          = "服务暂时不可用,请稍后再试"
+	fallbackReplyWeChat            = "服务暂时不可用,请稍后再试"
 	// 未绑定引导(PRD 5.4)
 	unboundGuideWeChat = "你还没有绑定 OmniBot 账号。请先在 web 端登录,在设置里获取绑定码,然后在这里发送「绑定 + 空格 + 绑定码」(例如 绑定 123456)完成绑定。"
 	// 关注欢迎语 + 绑定引导(PRD 5.4)
@@ -139,7 +140,7 @@ type Handler struct {
 	config           Config
 	wechatChannel    *channelwechat.Channel // v1.9 注入,负责出站 XML 序列化
 	llmClient        LLMClient
-	bindingService  BindingService
+	bindingService   BindingService
 	llmConfigService userSvc.LLMConfigService
 	msgService       chat.MessageService
 	memoryService    memoryService.MemoryService
@@ -166,10 +167,10 @@ func NewHandler(
 	optionalServices ...interface{},
 ) *Handler {
 	handler := &Handler{
-		config:        config,
-		llmClient:     llmClient,
+		config:         config,
+		llmClient:      llmClient,
 		bindingService: bindingSvc,
-		wechatChannel: channelwechat.NewChannel(),
+		wechatChannel:  channelwechat.NewChannel(),
 	}
 
 	// 解析可选参数(支持 LLMConfigService / MessageService / MemoryService / *channelwechat.Channel)
@@ -493,7 +494,12 @@ func (h *Handler) handleMemoryCommand(userID int64, content string) (string, boo
 		var builder strings.Builder
 		builder.WriteString("我目前记住了这些信息：\n\n")
 		for i, memory := range memories {
-			builder.WriteString(fmt.Sprintf("%d. %s", i+1, memory.Content))
+			// 来源标记(PRD AC4.3):自动沉淀与手动交代区分
+			tag := ""
+			if memory.Source == memorydomain.MemorySourceAuto {
+				tag = "（自动记忆）"
+			}
+			builder.WriteString(fmt.Sprintf("%d. %s%s（记录于 %s）", i+1, memory.Content, tag, memory.CreatedAt.Format("2006-01-02")))
 			if i < len(memories)-1 {
 				builder.WriteString("\n")
 			}

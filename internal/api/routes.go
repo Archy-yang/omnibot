@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,15 +24,19 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	domainagent "omnibot/internal/domain/agent"
+	"omnibot/internal/domain/conversation"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
+	skillRepo "omnibot/internal/repository/skill"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
+	skillService "omnibot/internal/service/skill"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -84,20 +91,58 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 12-记忆系统技术方案 §5.3:向量化 provider 按配置装配,未配置=子串降级(记忆照常存取)。
 	memoryEmbedding := buildEmbeddingProvider(cfg)
 	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
-	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository)
+	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository, memoryRepo.NewMatterRepository(dbConn.GetGormDB()))
 	if aware, ok := memorySvc.(memoryService.EmbeddingAware); ok {
 		aware.SetEmbeddingProvider(memoryEmbedding)
 	}
-	// 用户级向量配置解析(用户级覆盖系统默认,§5.3)
+	// 用户级向量配置解析(用户级覆盖系统默认,§5.3;M5.1 起沉淀管线共用同一缓存)
+	embeddingResolver := &userEmbeddingResolver{svc: llmConfigSvc, cache: make(map[int64]struct {
+		fingerprint string
+		provider    memoryService.EmbeddingProvider
+	})}
 	if aware, ok := memorySvc.(memoryService.ResolverAware); ok {
-		aware.SetEmbeddingResolver(&userEmbeddingResolver{svc: llmConfigSvc, cache: make(map[int64]struct {
-			fingerprint string
-			provider    memoryService.EmbeddingProvider
-		})})
+		aware.SetEmbeddingResolver(embeddingResolver)
 	}
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
-	msgSvc := chatService.NewMessageService(msgRepo, memorySvc, stepRepo)
+	// 沉淀管线(M2,§7;M5.1 修订):轮次结束异步生成纪要+提取记忆。
+	// LLM/embedding 均按用户解析:用户 Web 端配置优先,系统默认兜底,皆无则静默跳过。
+	// extraction.enabled=false 时管线整体不注入(对话零开销)。
+	agentLLMClient := newAgentLLMClient(cfg)
+	var digestPipeline *memoryService.DigestPipeline
+	if cfg.Memory.Extraction.Enabled {
+		digestThreshold := cfg.Memory.Extraction.BatchSize
+		if digestThreshold <= 0 {
+			digestThreshold = 20 // 攒批越大摊销越低,更贴近"按对话段落"(§7 修订)
+		}
+		digestPipeline = memoryService.NewDigestPipeline(
+			memoryRepo.NewWatermarkRepository(dbConn.GetGormDB()),
+			digestRepository,
+			memoryRepository,
+			memoryRepo.NewMatterRepository(dbConn.GetGormDB()), // M6:事项层
+			msgRepo, // chat 仓储实现 ConversationSource
+			&userPipelineLLM{svc: llmConfigSvc, system: agentLLMClient, cache: make(map[int64]struct {
+				fingerprint string
+				client      agentpkg.LLMClient
+			})},
+			memoryEmbedding,
+			digestThreshold,
+		)
+		digestPipeline.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
+		// 留痕(M5.3):task+step 可观测,静默不进回执;留痕失败管线自动降级为仅日志
+		digestPipeline.SetAudit(&digestAuditAdapter{
+			taskRepo: agentRepo.NewAgentTaskRepository(dbConn.GetGormDB()),
+			stepRepo: stepRepo,
+		})
+		logger.Info("memory: 沉淀管线已启用",
+			zap.Int("threshold", digestThreshold),
+			zap.Bool("embedding", memoryEmbedding != nil))
+	}
+	msgSvcOpts := []interface{}{memorySvc, stepRepo}
+	if digestPipeline != nil {
+		msgSvcOpts = append(msgSvcOpts, digestPipeline) // chat.TurnSink
+	}
+	msgSvc := chatService.NewMessageService(msgRepo, msgSvcOpts...)
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
 	// v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
@@ -132,30 +177,69 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// Web 聊天 API 路由
 	// 创建 Agent 服务
-	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按 card.Tools 选
+	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按能力白名单选。
+	// 13-插件系统:能力工具由 SkillService 统一供给(定义落库可启停),框架工具另行注册。
 	globalToolRegistry := agentpkg.NewToolRegistry()
-	globalToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
-	globalToolRegistry.Register(agentpkg.CreateCalculatorTool())
-	globalToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	globalToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
-	globalToolRegistry.Register(agentpkg.CreateRSSReaderTool())
-	globalToolRegistry.Register(agentpkg.CreateWebReadTool())
-
-	// agentToolRegistry:主 Agent 工具集。方向B--移除抓取类(rss/web_fetcher/web_reader),
-	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具仍在
-	// globalToolRegistry 供子 Agent 选。
+	// agentToolRegistry:主 Agent 工具集。方向B--抓取类(rss/web_read)对主 Agent 不可见,
+	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取技能
+	// RegisterBuiltinSubOnly:只进 globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
-	agentToolRegistry.Register(agentpkg.CreateGetCurrentTimeTool())
-	agentToolRegistry.Register(agentpkg.CreateCalculatorTool())
-	agentToolRegistry.Register(agentpkg.CreateSearchMemoriesTool(memorySvc))
-	agentToolRegistry.Register(agentpkg.CreateSearchHistoryTool(memorySvc))
-
-	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
-	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
-	if err != nil {
-		agentTimeout = 30 * time.Second
+	skillRepoImpl := skillRepo.NewSkillRepository(dbConn.GetGormDB())
+	mcpServerRepo := skillRepo.NewMCPServerRepository(dbConn.GetGormDB())
+	skillSvc := skillService.NewSkillService(skillRepoImpl)
+	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
+	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchMemoriesTool(memorySvc) })
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchHistoryTool(memorySvc) })
+	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
+	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
+	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool {
+		return agentpkg.CreateFeishuTool(agentpkg.FeishuCLIConfig{
+			BinPath: cfg.Feishu.CLI.BinPath,
+			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
+		})
+	})
+	if err := skillSvc.SeedBuiltins(); err != nil {
+		logger.Error("技能定义 seed 失败: " + err.Error())
 	}
-	agentLLMClient := agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+	if err := skillSvc.BindRegistries(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("技能 registry 绑定失败: " + err.Error())
+	}
+	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("技能应用到工具池失败: " + err.Error())
+	}
+
+	// M3:MCP server 在线配置(DB 为单一事实源,config.yaml 仅首次启动 seed)。
+	skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
+	skillSvc.SetMCPServerRepository(mcpServerRepo)
+	// M4:OAuth 回调基址(redirect_uri 须与服务商登记一致)
+	oauthRedirectBase := cfg.App.ExternalURL
+	if oauthRedirectBase == "" {
+		oauthRedirectBase = fmt.Sprintf("http://localhost:%d", cfg.App.Port)
+	}
+	skillSvc.SetOAuthRedirectBase(oauthRedirectBase)
+	if len(cfg.MCP.Servers) > 0 {
+		specs := make([]skillService.MCPServerSpec, 0, len(cfg.MCP.Servers))
+		for _, s := range cfg.MCP.Servers {
+			specs = append(specs, skillService.MCPServerSpec{
+				Name: s.Name, BaseURL: s.BaseURL, APIKey: s.APIKey, Enabled: s.Enabled,
+			})
+		}
+		if n, err := skillSvc.SeedServersFromConfig(specs); err != nil {
+			logger.Error("MCP 配置 seed 失败: " + err.Error())
+		} else if n > 0 {
+			logger.Info(fmt.Sprintf("已从 config.yaml 导入 %d 个 MCP server(此后以数据库配置为准)", n))
+		}
+	}
+	if err := skillSvc.SyncAllServers(context.Background()); err != nil {
+		logger.Error("MCP server 启动同步失败: " + err.Error())
+	}
+	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("MCP 技能应用到工具池失败: " + err.Error())
+	}
+
+	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
 
 	// 后台 Agent 框架装配(08 §4.6):任务表 + 子 Agent 注册中心 + 生产 runner + 服务
 	// 先于 agentSvc 装配,因 delegate 工具 + 主 Agent system prompt 依赖子 Agent 框架。
@@ -206,6 +290,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
+	webHandler.SetSkillService(skillSvc)
+	webHandler.SetMCPManager(skillSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -265,6 +351,29 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.PUT("/:id", webHandler.HandleUpdateMemory)
 	}
 
+	// 技能管理路由(13-插件系统):清单 + 启停
+	skillAPIGroup := r.Group("/api/v1/skills")
+	skillAPIGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		skillAPIGroup.GET("", webHandler.HandleListSkills)
+		skillAPIGroup.PUT("/:name", webHandler.HandleUpdateSkill)
+	}
+
+	// MCP server 在线管理路由(M3):增删改查 + 手动同步 + OAuth 授权(M4)
+	mcpAPIGroup := r.Group("/api/v1/mcp")
+	mcpAPIGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		mcpAPIGroup.GET("/servers", webHandler.HandleListMCPServers)
+		mcpAPIGroup.POST("/servers", webHandler.HandleCreateMCPServer)
+		mcpAPIGroup.PUT("/servers/:id", webHandler.HandleUpdateMCPServer)
+		mcpAPIGroup.DELETE("/servers/:id", webHandler.HandleDeleteMCPServer)
+		mcpAPIGroup.POST("/servers/:id/sync", webHandler.HandleSyncMCPServer)
+		mcpAPIGroup.POST("/servers/:id/authorize", webHandler.HandleAuthorizeMCPServer)
+	}
+
+	// OAuth 回调(M4):浏览器由服务商重定向直达,不挂 JWT——安全性由一次性 state 保障
+	r.GET("/api/v1/mcp/oauth/callback", webHandler.HandleOAuthCallback)
+
 	// 用户 LLM 配置路由
 	userAPIGroup := r.Group("/api/v1/user")
 	userAPIGroup.Use(middleware.AuthRequired(jwtSvc))
@@ -288,7 +397,32 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 	webFS := http.FS(distFS)
 	staticHandler := http.StripPrefix("/chat/", http.FileServer(webFS))
-	r.GET("/chat/*filepath", gin.WrapH(staticHandler))
+	// SPA 服务(路由 base '/chat/' 修复 + 缓存策略):
+	//   - 文件不存在时回退 index.html(前端路由深链 /chat/login 等由前端路由接管)
+	//   - index.html 必须 no-cache——资产文件名带内容哈希,每次发版哈希变化,
+	//     浏览器缓存旧 index.html 会去请求已不存在的旧资产 → 404 白屏
+	//   - 带哈希的资产可长缓存(内容不变则哈希不变)
+	r.GET("/chat/*filepath", func(c *gin.Context) {
+		path := c.Param("filepath")
+		if path == "/" || path == "/index.html" {
+			c.Header("Cache-Control", "no-cache, must-revalidate")
+		} else if strings.Contains(path, "/assets/") {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		// SPA 回退:请求的文件不存在(非静态资源) → index.html 交前端路由
+		if path != "/" && path != "/index.html" {
+			if _, err := fs.Stat(distFS, strings.TrimPrefix(path, "/")); err != nil {
+				c.Header("Cache-Control", "no-cache, must-revalidate")
+				indexFile, indexErr := distFS.Open("index.html")
+				if indexErr == nil {
+					defer indexFile.Close()
+					c.Data(http.StatusOK, "text/html; charset=utf-8", mustReadAll(indexFile))
+					return
+				}
+			}
+		}
+		staticHandler.ServeHTTP(c.Writer, c.Request)
+	})
 
 	// 根路径重定向到 /chat
 	r.GET("/", func(c *gin.Context) {
@@ -386,6 +520,129 @@ func buildEmbeddingProvider(cfg *config.Config) memoryService.EmbeddingProvider 
 		logger.Fatal("memory.embedding 配置无效", zap.Error(err))
 	}
 	return provider
+}
+
+// mustReadAll 读满整个 reader(SPA 回退用;index.html 小,一次性读入)。
+func mustReadAll(r io.Reader) []byte {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return []byte("<!doctype html><title>OmniBot</title>")
+	}
+	return data
+}
+
+// newAgentLLMClient 创建系统默认对话模型客户端(主 Agent/子 Agent/沉淀管线共用)。
+// 返回具体类型(同时实现 LLMClient 与 StreamingLLMClient)。
+func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
+	defaultProviderCfg := cfg.LLM.Providers[cfg.LLM.Routing.Default]
+	agentTimeout, err := time.ParseDuration(defaultProviderCfg.Timeout)
+	if err != nil {
+		agentTimeout = 30 * time.Second
+	}
+	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+}
+
+// digestAuditAdapter 适配 agent_tasks/agent_steps → memory.DigestAudit(M5.3):
+// 每轮沉淀 = 一条 task(SubAgentType=digest,Reported=true 静默——不进主 Agent 回执轮询),
+// 步骤锚 task_id 记执行链。留痕失败由管线侧降级为仅日志,这里只透传错误。
+type digestAuditAdapter struct {
+	taskRepo agentRepo.AgentTaskRepository
+	stepRepo chatRepo.AgentStepRepository
+}
+
+func (a *digestAuditAdapter) BeginTask(userID, fromID, toID int64, msgCount int) (int64, error) {
+	spec := domainagent.TaskSpec{
+		Goal: fmt.Sprintf("记忆沉淀:消息 #%d-#%d(%d 条)", fromID, toID, msgCount),
+		Type: "digest",
+	}
+	t := domainagent.NewAgentTask(userID, spec, "web", "")
+	t.Reported = true // 静默:digest 是系统能力,完成/失败都不打扰主 Agent
+	if err := a.taskRepo.Create(t); err != nil {
+		return 0, err
+	}
+	if err := a.taskRepo.UpdateStatus(t.ID, domainagent.TaskStatusRunning, nil, nil); err != nil {
+		return 0, err
+	}
+	return t.ID, nil
+}
+
+func (a *digestAuditAdapter) RecordStep(taskID, userID int64, seq int, kind, tool, request, response, status string, durationMs int64) error {
+	step := &conversation.AgentStep{
+		UserID: userID, TaskID: &taskID, Seq: seq,
+		Kind: kind, Status: status, DurationMs: durationMs,
+		Tool: tool, Request: request, Response: response,
+		CreatedAt: time.Now(),
+	}
+	return a.stepRepo.CreateBatch([]*conversation.AgentStep{step})
+}
+
+func (a *digestAuditAdapter) EndTask(taskID int64, status, artifact, errMsg string) error {
+	var artifactPtr, errMsgPtr *string
+	if artifact != "" {
+		artifactPtr = &artifact
+	}
+	if errMsg != "" {
+		errMsgPtr = &errMsg
+	}
+	return a.taskRepo.UpdateStatus(taskID, status, artifactPtr, errMsgPtr)
+}
+
+// userPipelineLLM 沉淀管线 LLM 按用户解析(M5.1 修订 §7.2):
+// 用户在 Web 端配置了自定义 LLM → 用该配置构造客户端(指纹缓存,改配置免重启);
+// 未配置 → 回落系统默认;两者皆无 → ErrPipelineNoLLM(管线静默跳过,水位不推进)。
+type userPipelineLLM struct {
+	svc    userService.LLMConfigService
+	system agentpkg.LLMClient // 系统默认兜底,可 nil
+	mu     sync.Mutex
+	cache  map[int64]struct {
+		fingerprint string
+		client      agentpkg.LLMClient
+	}
+}
+
+func (a *userPipelineLLM) clientFor(userID int64) (agentpkg.LLMClient, error) {
+	apiKey, baseURL, model, hasCustom, err := a.svc.GetConfigForUser(userID)
+	if err != nil {
+		logger.Warn("memory: 读用户 LLM 配置失败,沉淀回落系统默认",
+			zap.Int64("user_id", userID), zap.Error(err))
+	}
+	if hasCustom {
+		// 指纹 = 关键字段拼接 + key 哈希(不含明文);指纹变了自动重建
+		sum := sha1.Sum([]byte(baseURL + "|" + model + "|" + apiKey))
+		fingerprint := hex.EncodeToString(sum[:])
+		a.mu.Lock()
+		cached, hit := a.cache[userID]
+		a.mu.Unlock()
+		if hit && cached.fingerprint == fingerprint && cached.client != nil {
+			return cached.client, nil
+		}
+		// 非流式长输入:TTFB 放宽到 120s(全文生成完才回响应头,对话的 30s 默认不够)
+		client := agentpkg.NewOpenAILLMClientWithTTFB(apiKey, baseURL, model, 120*time.Second, 120*time.Second)
+		a.mu.Lock()
+		a.cache[userID] = struct {
+			fingerprint string
+			client      agentpkg.LLMClient
+		}{fingerprint, client}
+		a.mu.Unlock()
+		return client, nil
+	}
+	if a.system != nil {
+		return a.system, nil
+	}
+	return nil, memoryService.ErrPipelineNoLLM
+}
+
+func (a *userPipelineLLM) Complete(ctx context.Context, userID int64, system, user string) (string, error) {
+	client, err := a.clientFor(userID)
+	if err != nil {
+		return "", err
+	}
+	messages := []map[string]interface{}{
+		{"role": "system", "content": system},
+		{"role": "user", "content": user},
+	}
+	content, _, err := client.ChatCompletion(ctx, messages, nil)
+	return content, err
 }
 
 // userEmbeddingResolver 用户级向量配置解析器(12-记忆系统技术方案 §5.3):

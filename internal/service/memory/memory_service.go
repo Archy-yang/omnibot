@@ -24,23 +24,31 @@ type MemoryService interface {
 	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
 	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
 	Clear(ctx context.Context, userID int64) error
+	// ClearSource 按来源清空(记忆抽屉双 tab;source 取 MemorySourceManual/Auto)。
+	ClearSource(ctx context.Context, userID int64, source string) error
 	GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error)
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 	// 语义检索(12-记忆系统技术方案 §8):embedding 未配置时自动降级子串
 	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
+	// SearchMatters 事项优先检索(M6.2 两段式第一段):命中事项返回其状态+挂靠记忆全景。
+	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
+	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订):
+	// 手动记忆全量(用户意志,按时间正序) + 自动记忆条数(只出存在性提示,内容走工具检索)。
+	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
 }
 
 type memoryService struct {
 	repo       memoryrepo.MemoryRepository
 	digestRepo memoryrepo.DigestRepository
-	embedding  EmbeddingProvider // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
-	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
+	matterRepo memoryrepo.MatterRepository // M6.2:事项优先检索;nil=无事项层(永不命中)
+	embedding  EmbeddingProvider           // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
+	resolver   EmbeddingResolver           // 用户级覆盖;SetEmbeddingResolver 注入,可选
 }
 
-func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository) MemoryService {
-	return &memoryService{repo: repo, digestRepo: digestRepo}
+func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository, matterRepo memoryrepo.MatterRepository) MemoryService {
+	return &memoryService{repo: repo, digestRepo: digestRepo, matterRepo: matterRepo}
 }
 
 // EmbeddingAware 支持注入向量化 provider 的实现增强接口(可选能力,不影响记忆存取)。
@@ -103,6 +111,27 @@ func (s *memoryService) List(ctx context.Context, userID int64) ([]*memorydomain
 	return s.repo.ListByUserID(userID)
 }
 
+// GetMemoryInjection 常驻注入数据:手动记忆全量 + 自动记忆条数。
+// 注入分层(§6.5 修订):手动=用户意志,常驻;自动=助手笔记,量无界且有噪声风险,只提示存在,内容走 search_memories。
+func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error) {
+	manuals, err := s.repo.ListManualByUserID(userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	manual = make([]string, 0, len(manuals))
+	for _, m := range manuals {
+		manual = append(manual, m.Content)
+	}
+	auto, err := s.repo.CountByUserIDAndSource(userID, memorydomain.MemorySourceAuto)
+	if err != nil {
+		// 计数失败不影响手动注入,只不出提示行
+		logger.WarnWithFields("memory: 自动记忆计数失败,注入缺存在性提示",
+			zap.Int64("user_id", userID), zap.Error(err))
+		return manual, 0, nil
+	}
+	return manual, int(auto), nil
+}
+
 func (s *memoryService) Clear(ctx context.Context, userID int64) error {
 	if err := s.repo.DeleteByUserID(userID); err != nil {
 		logger.ErrorWithFields("Failed to clear memories",
@@ -116,6 +145,25 @@ func (s *memoryService) Clear(ctx context.Context, userID int64) error {
 	logger.InfoWithFields("Memories cleared",
 		zap.Int64("user_id", userID),
 		zap.String("operation", "memory_clear"),
+	)
+	return nil
+}
+
+// ClearSource 按来源清空(source 仅接受 manual/auto,由 handler 校验)。
+func (s *memoryService) ClearSource(ctx context.Context, userID int64, source string) error {
+	if err := s.repo.DeleteByUserIDAndSource(userID, source); err != nil {
+		logger.ErrorWithFields("Failed to clear memories by source",
+			zap.Int64("user_id", userID),
+			zap.String("source", source),
+			zap.String("operation", "memory_clear_source"),
+			zap.Error(err),
+		)
+		return err
+	}
+	logger.InfoWithFields("Memories cleared by source",
+		zap.Int64("user_id", userID),
+		zap.String("source", source),
+		zap.String("operation", "memory_clear_source"),
 	)
 	return nil
 }

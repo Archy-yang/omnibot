@@ -66,7 +66,9 @@ func (m *mockMessageService) BuildContextMessages(ctx context.Context, userID in
 		return nil, m.buildContextErr
 	}
 	if m.buildContextResult != nil {
-		return m.buildContextResult, nil
+		// 末尾追加当前消息(贴近真实实现;任务汇报锚定测试用)
+		return append(append([]llm.ChatMessage{}, m.buildContextResult...),
+			llm.ChatMessage{Role: "user", Content: current}), nil
 	}
 	return []llm.ChatMessage{{Role: "user", Content: current}}, nil
 }
@@ -106,6 +108,8 @@ type mockAgentService struct {
 	err          error
 	calledCustom agentpkg.LLMClient
 	callCount    int
+	// capturedConversation 捕获最近一次 Run 的 conversation(任务汇报锚定测试用)
+	capturedConversation []map[string]interface{}
 }
 
 func (m *mockAgentService) Run(
@@ -114,6 +118,7 @@ func (m *mockAgentService) Run(
 	customLLM ...agentpkg.LLMClient,
 ) (*agentpkg.AgentResult, error) {
 	m.callCount++
+	m.capturedConversation = conversation
 	if len(customLLM) > 0 {
 		m.calledCustom = customLLM[0]
 	}

@@ -15,6 +15,7 @@ import (
 
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
+	memorydomain "omnibot/internal/domain/memory"
 	agentpkg "omnibot/internal/service/agent"
 	userservice "omnibot/internal/service/user"
 )
@@ -59,6 +60,15 @@ type SubAgentReportProvider interface {
 	GetPendingReportContext(userID int64) (instruction string, taskIDs []int64)
 	// MarkReported 标记任务已汇报(防重复)。
 	MarkReported(taskID int64) error
+}
+
+// MemoryCommandService 记忆管理命令接口(高级记忆系统PRD AC4.3):
+// 飞书用户可在对话中管理记忆,与微信 #记住 命令体系对齐。nil 时不启用。
+type MemoryCommandService interface {
+	Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error)
+	List(ctx context.Context, userID int64) ([]*memorydomain.Memory, error)
+	Clear(ctx context.Context, userID int64) error
+	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 }
 
 // Sender 飞书发消息接口。隔离 SDK,测试 mock。

@@ -10,8 +10,8 @@ import (
 
 	agentpkg "omnibot/internal/service/agent"
 
-	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 

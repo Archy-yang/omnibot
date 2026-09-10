@@ -72,6 +72,17 @@ func NewOpenAILLMClient(apiKey, baseURL, model string, timeout time.Duration) *O
 	}
 }
 
+// NewOpenAILLMClientWithTTFB 同 NewOpenAILLMClient,但可自定义首字节(TTFB)超时。
+// 适用非流式长输入场景(如记忆沉淀管线):响应头要等全文生成完才返回,
+// 对话路径的 30s 默认不够;流式对话请勿使用此构造器放宽。
+func NewOpenAILLMClientWithTTFB(apiKey, baseURL, model string, timeout, ttfb time.Duration) *OpenAILLMClient {
+	c := NewOpenAILLMClient(apiKey, baseURL, model, timeout)
+	tr := newLLMTransport()
+	tr.ResponseHeaderTimeout = ttfb
+	c.client = &http.Client{Transport: tr}
+	return c
+}
+
 // agentRequest OpenAI chat completions request (includes tools)
 type agentRequest struct {
 	Model    string                   `json:"model"`

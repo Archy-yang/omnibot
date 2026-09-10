@@ -30,11 +30,14 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
-  const clearMemories = async (): Promise<void> => {
+  const clearMemories = async (source?: 'manual' | 'auto'): Promise<void> => {
     isClearing.value = true;
     try {
-      await memoryService.clearMemories();
-      memories.value = [];
+      await memoryService.clearMemories(source);
+      // 本地同步移除对应来源(带 source 时不清另一类;老数据无 source 视为 manual)
+      memories.value = source
+        ? memories.value.filter((m) => (m.source ?? 'manual') !== source)
+        : [];
     } finally {
       isClearing.value = false;
     }

@@ -272,6 +272,7 @@ const validateEmbeddingConfig = (): string => {
 };
 
 const showEmbeddingApiKey = ref(false);
+
 </script>
 
 <template>
@@ -1080,4 +1081,5 @@ const showEmbeddingApiKey = ref(false);
 .drawer-footer-spacer {
   height: 32px;
 }
+
 </style>

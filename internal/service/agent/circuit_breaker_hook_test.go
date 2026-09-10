@@ -12,7 +12,7 @@ import (
 // mkTool 构造 OpenAI tools 格式的测试工具条目。
 func mkTool(name string) map[string]interface{} {
 	return map[string]interface{}{
-		"type": "function",
+		"type":     "function",
 		"function": map[string]interface{}{"name": name},
 	}
 }

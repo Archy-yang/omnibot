@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	memorydomain "omnibot/internal/domain/memory"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,4 +74,63 @@ func TestBuiltinTools_SearchMemories_NoMatch(t *testing.T) {
 	result, err := tool.Execute(context.Background(), map[string]interface{}{"query": "天气"})
 	require.NoError(t, err)
 	assert.Contains(t, result, "未找到")
+}
+
+// ===== M6.2 search_memories 两段式(事项优先) =====
+
+// matterFirstFake 同时实现 MemorySearcher + MatterSearcher。
+type matterFirstFake struct {
+	matters []memorydomain.MatterHit
+	hits    []memorydomain.MemoryHit
+}
+
+func (f *matterFirstFake) SearchMatters(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MatterHit, error) {
+	return f.matters, nil
+}
+
+func (f *matterFirstFake) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+	return f.hits, nil
+}
+
+func (f *matterFirstFake) GetRecentForContext(_ context.Context, _ int64, _ int) ([]string, error) {
+	return nil, nil
+}
+
+func TestSearchMemoriesTool_MatterFirstRendering(t *testing.T) {
+	mid := int64(7)
+	matter := &memorydomain.Matter{ID: mid, Title: "十一旅行", StateDesc: "机票别墅已订,交通未定"}
+	fact := &memorydomain.Memory{ID: 101, Content: "用户注重性价比", Kind: "fact", MatterID: &mid}
+	loop := &memorydomain.Memory{ID: 102, Content: "待核实实时票价", Kind: "loop", MatterID: &mid}
+	other := &memorydomain.Memory{ID: 103, Content: "用户是后端工程师", Source: memorydomain.MemorySourceAuto}
+
+	fake := &matterFirstFake{
+		matters: []memorydomain.MatterHit{{Matter: matter, Facts: []*memorydomain.Memory{fact, loop}, Score: 0.5}},
+		hits: []memorydomain.MemoryHit{
+			{Memory: loop, Score: 0.9},  // 已随事项全景展示过 → 应去重
+			{Memory: other, Score: 0.4}, // 未展示 → 出现在散点区
+		},
+	}
+	tool := CreateSearchMemoriesTool(fake)
+
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"query": "旅行怎么样了"})
+	require.NoError(t, err)
+	require.Contains(t, out, "【事项】十一旅行")
+	require.Contains(t, out, "当前状态:机票别墅已订,交通未定")
+	require.Contains(t, out, "用户注重性价比(fact)")
+	require.Contains(t, out, "待核实实时票价(loop)")
+	require.Contains(t, out, "用户是后端工程师(自动记忆)")
+	require.Equal(t, 1, strings.Count(out, "待核实实时票价"), "事项全景里已展示的记忆不应在散点区重复")
+}
+
+func TestSearchMemoriesTool_NoMatterHit_FallsBackToMemories(t *testing.T) {
+	other := &memorydomain.Memory{ID: 103, Content: "用户是后端工程师", Source: memorydomain.MemorySourceAuto}
+	fake := &matterFirstFake{
+		hits: []memorydomain.MemoryHit{{Memory: other, Score: 0.4}},
+	}
+	tool := CreateSearchMemoriesTool(fake)
+
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"query": "工程师"})
+	require.NoError(t, err)
+	require.NotContains(t, out, "【事项】")
+	require.Contains(t, out, "1. 用户是后端工程师(自动记忆)")
 }

@@ -135,12 +135,20 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 		activeStreamClient = customClient
 	}
 
-	// 构造汇报上下文:system(回执+汇报指令) + user(虚拟触发)
+	// 构造汇报上下文(汇报锚定,§3.4 修订):
+	// system(回执+汇报指令,含验收自查) + 最近对话历史(锚定"用户当初为什么派这个活") + 虚拟触发 user。
+	// 历史经 BuildContextMessages(含长期记忆注入),原始问题通常在窗口内,汇报口吻也能延续对话。
 	instruction := agentpkg.BuildReportInstruction([]*domainagent.AgentTask{task}, true)
-	// 注:局部变量命名为 reportConversation,避免遮蔽 conversation 包导入(下方累积 segments/steps 要用)。
 	reportConversation := []map[string]interface{}{
 		{"role": "system", "content": instruction},
-		{"role": "user", "content": "请汇报这个子任务的结果。"},
+	}
+	// 注:局部变量命名为 reportConversation,避免遮蔽 conversation 包导入(下方累积 segments/steps 要用)。
+	trigger := "请汇报这个子任务的结果。"
+	if ctxMsgs, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, trigger); err == nil {
+		reportConversation = append(reportConversation, toAgentMessages(ctxMsgs)...)
+	} else {
+		// 历史拉取失败降级为纯回执汇报(不阻断)
+		reportConversation = append(reportConversation, map[string]interface{}{"role": "user", "content": trigger})
 	}
 
 	// SSE 头

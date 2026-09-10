@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"omnibot/internal/db"
@@ -89,10 +88,10 @@ func TestMessageService_BuildContextMessages_DedupCurrentMessage(t *testing.T) {
 }
 
 type mockContextMemoryService struct {
-	contents []string
-	err      error
-	limit    int
-	userID   int64
+	manual    []string
+	autoCount int
+	err       error
+	userID    int64
 }
 
 func (m *mockContextMemoryService) Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error) {
@@ -107,16 +106,15 @@ func (m *mockContextMemoryService) Clear(ctx context.Context, userID int64) erro
 	return nil
 }
 
-func (m *mockContextMemoryService) GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error) {
+func (m *mockContextMemoryService) GetMemoryInjection(ctx context.Context, userID int64) ([]string, int, error) {
 	m.userID = userID
-	m.limit = limit
-	return m.contents, m.err
+	return m.manual, m.autoCount, m.err
 }
 
 func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	memorySvc := &mockContextMemoryService{contents: []string{"我偏好简洁回答", "我正在开发 OmniBot"}}
+	memorySvc := &mockContextMemoryService{manual: []string{"我偏好简洁回答", "我正在开发 OmniBot"}}
 	service := NewMessageService(msgRepo, memorySvc)
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
@@ -124,36 +122,33 @@ func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing
 	require.NoError(t, err)
 	require.Len(t, ctxMsgs, 2)
 	assert.Equal(t, conversation.RoleSystem, ctxMsgs[0].Role)
-	assert.Contains(t, ctxMsgs[0].Content, "以下是用户长期记忆")
+	assert.Contains(t, ctxMsgs[0].Content, "用户主动交代的长期信息")
 	assert.Contains(t, ctxMsgs[0].Content, "1. 我偏好简洁回答")
 	assert.Contains(t, ctxMsgs[0].Content, "2. 我正在开发 OmniBot")
 	assert.Equal(t, conversation.RoleUser, ctxMsgs[1].Role)
 	assert.Equal(t, "当前用户消息", ctxMsgs[1].Content)
 	assert.Equal(t, int64(123), memorySvc.userID)
-	assert.Equal(t, MaxContextMemories, memorySvc.limit)
 }
 
-func TestMessageService_BuildContextMessages_UsesRecentTenLongTermMemories(t *testing.T) {
+func TestMessageService_BuildContextMessages_AutoMemoriesHintedNotInjected(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	memorySvc := &mockContextMemoryService{contents: []string{"记忆 03", "记忆 04", "记忆 05", "记忆 06", "记忆 07", "记忆 08", "记忆 09", "记忆 10", "记忆 11", "记忆 12"}}
+	// 注入分层:手动 2 条 + 自动 7 条 → 手动全量,自动只出提示行
+	memorySvc := &mockContextMemoryService{manual: []string{"我偏好简洁回答"}, autoCount: 7}
 	service := NewMessageService(msgRepo, memorySvc)
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
 
 	require.NoError(t, err)
 	require.Len(t, ctxMsgs, 2)
-	assert.Equal(t, conversation.RoleSystem, ctxMsgs[0].Role)
-	assert.Contains(t, ctxMsgs[0].Content, "1. 记忆 03")
-	assert.Contains(t, ctxMsgs[0].Content, "10. 记忆 12")
-	assert.Equal(t, 10, strings.Count(ctxMsgs[0].Content, "记忆 "))
-	assert.Equal(t, MaxContextMemories, memorySvc.limit)
+	assert.Contains(t, ctxMsgs[0].Content, "另有 7 条从对话中自动沉淀的记忆")
+	assert.Contains(t, ctxMsgs[0].Content, "search_memories")
 }
 
 func TestMessageService_BuildContextMessages_SkipsMemoryMessageWhenNoLongTermMemories(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	memorySvc := &mockContextMemoryService{contents: []string{}}
+	memorySvc := &mockContextMemoryService{}
 	service := NewMessageService(msgRepo, memorySvc)
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")

@@ -15,7 +15,7 @@ import (
 //
 // 仅 BeforeRound 切点生效(其他放行)。子 Agent runner 装配(主 Agent 不需要)。
 type NoteInjectionHook struct {
-	taskID  int64
+	taskID   int64
 	taskRepo repoagent.AgentTaskRepository // 可 nil(测试用 setNotesForTest 替代)
 	// injectedCount 已注入的 notes 数(避免重复注入)。下次从 notes[injectedCount:] 开始。
 	injectedCount int

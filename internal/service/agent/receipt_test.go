@@ -85,3 +85,55 @@ func TestBuildTaskReceipt_SummaryTruncates(t *testing.T) {
 	assert.NotContains(t, full, "完整结果可查任务产物")
 	assert.Contains(t, full, strings.Repeat("详", 300))
 }
+
+// TestBuildTaskReceipt_IncludesContract 汇报锚定(§3.4 修订):回执带完整任务合同
+// (交付物/完成标准),让主 Agent 能对照完成标准自查达标性,而非只转述结果。
+func TestBuildTaskReceipt_IncludesContract(t *testing.T) {
+	spec := domainagent.NewTaskSpec("查询北京天气")
+	spec.Deliverables = []domainagent.Deliverable{
+		{Name: "天气报告", Description: "当前气温+一周预报+穿衣建议"},
+	}
+	spec.CompletionCriteria = []string{"检索控制在3-5步", "直接输出完整可读结论"}
+	spec.Background = map[string]any{"city": "北京"}
+	task := domainagent.NewAgentTask(42, spec, "web", "")
+	task.Status = domainagent.TaskStatusCompleted
+	artifact := "北京今天晴,25度"
+	task.Artifact = &artifact
+
+	receipt := BuildTaskReceipt(task)
+	for _, want := range []string{
+		"目标: 查询北京天气",
+		"交付物:",
+		"- 天气报告: 当前气温+一周预报+穿衣建议",
+		"完成标准:",
+		"1. 检索控制在3-5步",
+		"2. 直接输出完整可读结论",
+	} {
+		assert.Contains(t, receipt, want, "回执缺 %q:\n%s", want, receipt)
+	}
+}
+
+// TestBuildTaskReceipt_MinimalSpecOmitsContract 只有 goal 的老合同不出现空段落。
+func TestBuildTaskReceipt_MinimalSpecOmitsContract(t *testing.T) {
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("查天气"), "web", "")
+	task.Status = domainagent.TaskStatusCompleted
+	artifact := "结果"
+	task.Artifact = &artifact
+
+	receipt := BuildTaskReceipt(task)
+	assert.NotContains(t, receipt, "交付物:")
+	assert.NotContains(t, receipt, "完成标准:")
+}
+
+// TestBuildReportInstruction_SelfCheck 汇报指令要求对照完成标准自查,如实汇报不粉饰。
+func TestBuildReportInstruction_SelfCheck(t *testing.T) {
+	spec := domainagent.NewTaskSpec("查天气")
+	spec.CompletionCriteria = []string{"输出完整可读结论"}
+	task := domainagent.NewAgentTask(42, spec, "web", "")
+	task.Status = domainagent.TaskStatusCompleted
+
+	instruction := BuildReportInstruction([]*domainagent.AgentTask{task}, true)
+	for _, want := range []string{"完成标准", "如实", "未达标"} {
+		assert.Contains(t, instruction, want, "汇报指令缺 %q:\n%s", want, instruction)
+	}
+}

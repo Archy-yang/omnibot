@@ -10,6 +10,9 @@ app:
   name: "omnibot"
   env: "development"
   port: 8080
+  # 对外可访问基址(MCP OAuth 回调构建 redirect_uri 用);空回落 http://localhost:8080
+  # OAuth 回调固定为 <external_url>/api/v1/mcp/oauth/callback,须与服务商登记一致
+  external_url: ""
 
 # 数据库配置
 # 开发可用 sqlite 内存库快速起步;生产推荐 Postgres。
@@ -39,6 +42,12 @@ feishu:
   app_id: "cli_xxx"
   app_secret: "your_feishu_app_secret"
   enabled: false
+  # lark-cli 桥接(M5):技能"feishu"以用户身份执行 lark-cli 操作飞书。
+  # 前置:npm i -g @larksuite/cli && lark-cli config init --app-id <id> --app-secret-stdin
+  #       && lark-cli auth login --domain docs,base,im,drive,wiki
+  cli:
+    bin_path: "lark-cli"     # 可执行文件路径(PATH 查找)
+    timeout_seconds: 60      # 单次执行超时
 
 # 大模型配置(v1.4+ 用户可在 Web 设置面板自定义,覆盖此处 system default)
 # 推荐 DeepSeek / 豆包 / 千问等 OpenAI 兼容服务商,本地仅占位即可。
@@ -58,7 +67,7 @@ llm:
 memory:
   extraction:
     enabled: true
-    batch_size: 10
+    batch_size: 20
 
   # 向量化服务(12-记忆系统技术方案 §5.3)
   # provider 留空 = 关闭语义检索,记忆检索降级为子串匹配(记忆照常存取)
@@ -109,3 +118,13 @@ agent:
 auth:
   jwt_secret: "change-me-in-production-to-a-32-plus-char-random-string"
   token_ttl: "720h"
+
+# MCP 外部能力服务接入(13-插件系统 M2,系统级配置)
+# 发现的远端工具出现在设置-技能清单中,默认停用,须在界面逐个开启。
+# 密钥仅存于本文件(不入 git),不会入库。
+# mcp:
+#   servers:
+#     - name: "github"
+#       base_url: "https://mcp.example.com/mcp"
+#       api_key: "sk-xxx"
+#       enabled: true

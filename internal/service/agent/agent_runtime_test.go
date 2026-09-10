@@ -9,15 +9,15 @@ import (
 // stubHook 可记录调用、控制返回值的测试 hook。
 type stubHook struct {
 	beforeTools []map[string]interface{} // BeforeRound 返回(链式:替换输入)
-	toolResult string                     // OnToolExecute 返回(若 executed=true)
-	toolExec   bool                       // OnToolExecute 是否拦截
-	summary    string                     // OnMaxExhausted 返回
-	proceed    bool                       // OnLLMResult 返回
+	toolResult  string                   // OnToolExecute 返回(若 executed=true)
+	toolExec    bool                     // OnToolExecute 是否拦截
+	summary     string                   // OnMaxExhausted 返回
+	proceed     bool                     // OnLLMResult 返回
 
-	beforeCalled   int
-	onLLMCalled    int
-	onToolCalled   int
-	onMaxCalled    int
+	beforeCalled int
+	onLLMCalled  int
+	onToolCalled int
+	onMaxCalled  int
 }
 
 func (s *stubHook) BeforeRound(rt *Runtime) []map[string]interface{} {
@@ -101,7 +101,7 @@ func TestHookChain_OnToolExecute_NoIntercept(t *testing.T) {
 
 // TestHookChain_OnMaxExhausted_FirstNonEmpty OnMaxExhausted 取第一个非空返回。
 func TestHookChain_OnMaxExhausted_FirstNonEmpty(t *testing.T) {
-	hook1 := &stubHook{summary: ""}       // 空,跳过
+	hook1 := &stubHook{summary: ""}     // 空,跳过
 	hook2 := &stubHook{summary: "汇总报告"} // 非空,取它
 	hook3 := &stubHook{summary: "不应被取"}
 	c := newHookChain([]RoundHook{hook1, hook2, hook3})

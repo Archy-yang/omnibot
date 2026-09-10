@@ -13,28 +13,30 @@ import (
 )
 
 type mockMemoryRepository struct {
-	created      *memorydomain.Memory
-	memories     []*memorydomain.Memory
-	createErr    error
-	listErr      error
-	deleteErr    error
-	recentErr    error
-	deletedUser  int64
-	recentLimit  int
-	recentUserID int64
-	getByIDID    int64
-	getByIDUser  int64
-	getByIDMem   *memorydomain.Memory
-	getByIDErr   error
-	deletedID    int64
-	deletedIDUser int64
+	created          *memorydomain.Memory
+	memories         []*memorydomain.Memory
+	createErr        error
+	listErr          error
+	deleteErr        error
+	recentErr        error
+	deletedUser      int64
+	recentLimit      int
+	recentUserID     int64
+	getByIDID        int64
+	getByIDUser      int64
+	getByIDMem       *memorydomain.Memory
+	getByIDErr       error
+	deletedID        int64
+	deletedIDUser    int64
 	deleteByIDResult bool
-	deleteByIDErr error
-	updatedID int64
-	updatedUserID int64
-	updatedContent string
-	updateResult *memorydomain.Memory
-	updateErr error
+	deleteByIDErr    error
+	updatedID        int64
+	deletedUserID    int64
+	deletedSource    string
+	updatedUserID    int64
+	updatedContent   string
+	updateResult     *memorydomain.Memory
+	updateErr        error
 }
 
 func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
@@ -44,6 +46,14 @@ func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
 	}
 	memory.ID = 99
 	return nil
+}
+
+func (m *mockMemoryRepository) CreateLinks([]memorydomain.MemoryMessageLink) error { return nil }
+
+func (m *mockMemoryRepository) ReplaceLinksForMemory(int64, []int64) error { return nil }
+
+func (m *mockMemoryRepository) ListByUserIDAndMatter(int64, int64) ([]*memorydomain.Memory, error) {
+	return nil, nil
 }
 
 func (m *mockMemoryRepository) ListByUserID(userID int64) ([]*memorydomain.Memory, error) {
@@ -82,7 +92,7 @@ func (m *mockMemoryRepository) UpdateContentByID(id int64, userID int64, content
 
 func TestMemoryService_RememberTrimsAndSavesContent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Remember(context.Background(), 123, "   我偏好简洁回答   ")
 
@@ -95,7 +105,7 @@ func TestMemoryService_RememberTrimsAndSavesContent(t *testing.T) {
 
 func TestMemoryService_RememberRejectsEmptyContent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Remember(context.Background(), 123, "   ")
 
@@ -106,7 +116,7 @@ func TestMemoryService_RememberRejectsEmptyContent(t *testing.T) {
 
 func TestMemoryService_RememberRejectsTooLongContent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 	content := strings.Repeat("你", MaxMemoryContentLength+1)
 
 	memory, err := service.Remember(context.Background(), 123, content)
@@ -120,7 +130,7 @@ func TestMemoryService_ListReturnsRepositoryMemories(t *testing.T) {
 	repo := &mockMemoryRepository{memories: []*memorydomain.Memory{
 		memorydomain.NewMemory(123, "第一条"),
 	}}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memories, err := service.List(context.Background(), 123)
 
@@ -131,7 +141,7 @@ func TestMemoryService_ListReturnsRepositoryMemories(t *testing.T) {
 
 func TestMemoryService_ClearIsIdempotent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	err := service.Clear(context.Background(), 123)
 
@@ -144,7 +154,7 @@ func TestMemoryService_GetRecentForContextReturnsContents(t *testing.T) {
 		memorydomain.NewMemory(123, "第一条"),
 		memorydomain.NewMemory(123, "第二条"),
 	}}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	contents, err := service.GetRecentForContext(context.Background(), 123, 10)
 
@@ -157,7 +167,7 @@ func TestMemoryService_GetRecentForContextReturnsContents(t *testing.T) {
 func TestMemoryService_PropagatesRepositoryErrors(t *testing.T) {
 	expectedErr := errors.New("database down")
 	repo := &mockMemoryRepository{recentErr: expectedErr}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	contents, err := service.GetRecentForContext(context.Background(), 123, 10)
 
@@ -167,7 +177,7 @@ func TestMemoryService_PropagatesRepositoryErrors(t *testing.T) {
 
 func TestMemoryService_DeleteByID_Success(t *testing.T) {
 	repo := &mockMemoryRepository{deleteByIDResult: true}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	deleted, err := service.Delete(context.Background(), 123, 1)
 
@@ -179,7 +189,7 @@ func TestMemoryService_DeleteByID_Success(t *testing.T) {
 
 func TestMemoryService_DeleteByID_NotFound(t *testing.T) {
 	repo := &mockMemoryRepository{deleteByIDResult: false}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	deleted, err := service.Delete(context.Background(), 123, 999)
 
@@ -190,7 +200,7 @@ func TestMemoryService_DeleteByID_NotFound(t *testing.T) {
 func TestMemoryService_DeleteByID_Error(t *testing.T) {
 	expectedErr := errors.New("database error")
 	repo := &mockMemoryRepository{deleteByIDErr: expectedErr}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	deleted, err := service.Delete(context.Background(), 123, 1)
 
@@ -202,7 +212,7 @@ func TestMemoryService_Update_TrimsAndUpdatesContent(t *testing.T) {
 	expectedMemory := memorydomain.NewMemory(123, "新内容")
 	expectedMemory.ID = 1
 	repo := &mockMemoryRepository{updateResult: expectedMemory}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Update(context.Background(), 123, 1, "  新内容  ")
 
@@ -216,7 +226,7 @@ func TestMemoryService_Update_TrimsAndUpdatesContent(t *testing.T) {
 
 func TestMemoryService_Update_RejectsEmptyContent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Update(context.Background(), 123, 1, "   ")
 
@@ -227,7 +237,7 @@ func TestMemoryService_Update_RejectsEmptyContent(t *testing.T) {
 
 func TestMemoryService_Update_RejectsTooLongContent(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Update(context.Background(), 123, 1, strings.Repeat("你", MaxMemoryContentLength+1))
 
@@ -238,7 +248,7 @@ func TestMemoryService_Update_RejectsTooLongContent(t *testing.T) {
 
 func TestMemoryService_Update_ReturnsNilWhenNotFound(t *testing.T) {
 	repo := &mockMemoryRepository{}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Update(context.Background(), 123, 999, "新内容")
 
@@ -249,10 +259,35 @@ func TestMemoryService_Update_ReturnsNilWhenNotFound(t *testing.T) {
 func TestMemoryService_Update_Error(t *testing.T) {
 	expectedErr := errors.New("database error")
 	repo := &mockMemoryRepository{updateErr: expectedErr}
-	service := NewMemoryService(repo, nil)
+	service := NewMemoryService(repo, nil, nil)
 
 	memory, err := service.Update(context.Background(), 123, 1, "新内容")
 
 	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, memory)
+}
+
+// UpdateContentEmbeddingByID 沉淀管线冲突更新桩(service 层测试不涉及,记录调用)。
+func (m *mockMemoryRepository) UpdateContentEmbeddingByID(id int64, userID int64, content string, embedding []float32, embeddingModel string) error {
+	m.updatedID = id
+	m.updatedUserID = userID
+	m.updatedContent = content
+	return nil
+}
+
+// ListManualByUserID 注入分层桩:返回手动记忆(测试未用,返回空)。
+func (m *mockMemoryRepository) ListManualByUserID(userID int64) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+
+// CountByUserIDAndSource 注入分层桩:返回 0。
+func (m *mockMemoryRepository) CountByUserIDAndSource(userID int64, source string) (int64, error) {
+	return 0, nil
+}
+
+// DeleteByUserIDAndSource 按 source 清空桩:记录调用供断言。
+func (m *mockMemoryRepository) DeleteByUserIDAndSource(userID int64, source string) error {
+	m.deletedUserID = userID
+	m.deletedSource = source
+	return nil
 }

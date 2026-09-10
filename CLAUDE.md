@@ -110,14 +110,29 @@
 - Zap 日志
 - DDD 分层架构
 
-### 常用命令
+### 服务启动/重启（铁律）
+
+**启动和重启服务必须使用 `make` 命令，禁止手动 `kill`、`nohup`、`go run` 拉起或停止服务。**
+
 ```bash
-go build -o bin/wechat-bot cmd/main/main.go
-go run cmd/main/main.go -config configs/config.yaml
+make            # 完整构建(前端编译+后端编译)并启动(后台守护)
+make restart    # 仅重启,不重新构建
+make stop       # 停止服务
+make status     # 查看运行状态与最近日志
+make logs       # 跟踪日志(tail -f logs/omnibot.log)
+```
+
+- 服务以后台守护方式运行，PID 记录在 `bin/omnibot.pid`，日志输出到 `logs/omnibot.log`
+- `make` / `make restart` 幂等：启动前自动停掉旧进程
+- 改了 Go/前端代码后用 `make`（会重新构建）；只重启进程用 `make restart`
+
+### 开发调试命令
+```bash
 go test ./...
+go build ./...   # 编译检查
 ```
 
 ---
 
-**文档版本**：v2.0
-**最后更新**：2026-05-16
+**文档版本**：v2.1
+**最后更新**：2026-09-08

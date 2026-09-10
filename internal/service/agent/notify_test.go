@@ -13,9 +13,9 @@ import (
 
 // mockTaskNotifier 记录是否被调用 + 参数。
 type mockTaskNotifier struct {
-	called   bool
-	target   string
-	taskID   int64
+	called bool
+	target string
+	taskID int64
 }
 
 func (m *mockTaskNotifier) NotifyTaskCompleted(ctx context.Context, target string, task *domainagent.AgentTask) error {
@@ -28,7 +28,7 @@ func (m *mockTaskNotifier) NotifyTaskCompleted(ctx context.Context, target strin
 // TestNotifyCompleted_Feishu 飞书任务完成时调 notifier 推送 + 标记 reported。
 func TestNotifyCompleted_Feishu(t *testing.T) {
 	notifier := &mockTaskNotifier{}
-	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20*time.Millisecond}, true)
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}, true)
 	svc.SetNotifier(notifier)
 
 	// 手动造一个飞书来源的 running 任务
@@ -50,7 +50,7 @@ func TestNotifyCompleted_Feishu(t *testing.T) {
 // TestNotifyCompleted_Web web 任务不推送(靠轮询)。
 func TestNotifyCompleted_Web(t *testing.T) {
 	notifier := &mockTaskNotifier{}
-	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "r", delay: 20*time.Millisecond}, true)
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "r", delay: 20 * time.Millisecond}, true)
 	svc.SetNotifier(notifier)
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")

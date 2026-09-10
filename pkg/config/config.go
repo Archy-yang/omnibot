@@ -14,11 +14,27 @@ type Config struct {
 	Feishu   FeishuConfig   `mapstructure:"feishu"`
 	LLM      LLMConfig      `mapstructure:"llm"`
 	Memory   MemoryConfig   `mapstructure:"memory"`
+	MCP      MCPConfig      `mapstructure:"mcp"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Agent    AgentConfig    `mapstructure:"agent"`
+}
+
+// MCPConfig MCP 接入配置(13-插件系统 M2)。
+// server 配置以 config.yaml 为单一事实源(系统级,与 llm/feishu 凭据同域);
+// 发现的远端工具落 skills 表(source=mcp,默认停用),密钥不入库。
+type MCPConfig struct {
+	Servers []MCPServerConfig `mapstructure:"servers"`
+}
+
+// MCPServerConfig 单个 MCP server 配置。
+type MCPServerConfig struct {
+	Name    string `mapstructure:"name"`
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+	Enabled bool   `mapstructure:"enabled"`
 }
 
 // AgentConfig 后台 Agent 框架配置(08-后台Agent任务框架)。
@@ -48,10 +64,16 @@ type AuthConfig struct {
 }
 
 // AppConfig 应用基本配置
+//
+// ExternalURL 是对外可访问的基址(M4 OAuth 回调构建 redirect_uri 用,如
+// "https://bot.example.com");空时回落 http://localhost:<port>。
+// OAuth 回调固定为 <ExternalURL>/api/v1/mcp/oauth/callback——该 URI 需在
+// OAuth 服务商侧登记一致。
 type AppConfig struct {
-	Name string `mapstructure:"name"`
-	Env  string `mapstructure:"env"`
-	Port int    `mapstructure:"port"`
+	Name        string `mapstructure:"name"`
+	Env         string `mapstructure:"env"`
+	Port        int    `mapstructure:"port"`
+	ExternalURL string `mapstructure:"external_url"` // 对外基址(OAuth 回调 redirect_uri 用),空回落 localhost
 }
 
 // WechatConfig 微信公众号配置
@@ -68,9 +90,17 @@ type WechatConfig struct {
 // 不入库不日志(安全红线)。enabled=false 时跳过飞书 channel 初始化,
 // 不影响 Web/微信正常启动(开发态友好)。
 type FeishuConfig struct {
-	AppID     string `mapstructure:"app_id"`
-	AppSecret string `mapstructure:"app_secret"`
-	Enabled   bool   `mapstructure:"enabled"`
+	AppID     string    `mapstructure:"app_id"`
+	AppSecret string    `mapstructure:"app_secret"`
+	Enabled   bool      `mapstructure:"enabled"`
+	CLI       FeishuCLI `mapstructure:"cli"` // lark-cli 桥接(M5,技能"feishu"的执行体)
+}
+
+// FeishuCLI lark-cli 桥接配置(13-技术方案 §7,M5)。
+// 身份/token 由 CLI 自管(device flow 授权 + 钥匙串);此处仅控制执行参数。
+type FeishuCLI struct {
+	BinPath        string `mapstructure:"bin_path"`        // 默认 "lark-cli"(PATH 查找)
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单次执行超时,默认 60
 }
 
 // LLMConfig 大模型配置

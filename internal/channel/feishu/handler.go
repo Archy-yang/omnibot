@@ -3,7 +3,9 @@ package feishu
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"omnibot/internal/client/llm"
 	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
+	memorydomain "omnibot/internal/domain/memory"
 	agentpkg "omnibot/internal/service/agent"
 	chatsvc "omnibot/internal/service/chat"
 	usersvc "omnibot/internal/service/user"
@@ -29,13 +32,15 @@ type InboundMessage struct {
 
 // MessageHandler 飞书消息处理器。所有依赖走接口,无 SDK 依赖,完全可单测。
 type MessageHandler struct {
-	bindingService  BindingService
+	bindingService   BindingService
 	messageService   MessageService
 	agentService     AgentService
 	llmConfigService LLMConfigService
 	sender           Sender
 	// 后台 Agent 框架前置汇报(08 §4.5)。nil 时不启用(向后兼容)。
 	subAgentReporter SubAgentReportProvider
+	// 记忆管理命令(高级记忆系统PRD AC4.3)。nil 时不启用。
+	memoryService MemoryCommandService
 }
 
 // NewMessageHandler 创建飞书消息处理器。
@@ -47,7 +52,7 @@ func NewMessageHandler(
 	sender Sender,
 ) *MessageHandler {
 	return &MessageHandler{
-		bindingService:  binding,
+		bindingService:   binding,
 		messageService:   msg,
 		agentService:     agent,
 		llmConfigService: cfg,
@@ -61,9 +66,85 @@ func (h *MessageHandler) SetSubAgentReporter(reporter SubAgentReportProvider) {
 	h.subAgentReporter = reporter
 }
 
+// SetMemoryService 注入记忆管理命令依赖(PRD AC4.3)。未调用时无记忆命令。
+func (h *MessageHandler) SetMemoryService(svc MemoryCommandService) {
+	h.memoryService = svc
+}
+
 // fallbackReply 是 agent 执行失败时给用户的兜底文案——和 web 端「服务暂时不可用」对齐,
 // 避免无反馈;不透传内部错误细节(安全红线)。
 const fallbackReply = "服务暂时不可用,请稍后再试"
+
+// handleMemoryCommand 飞书记忆管理命令(与微信命令体系对齐,PRD AC4.3)。
+// 返回 handled=true 表示已按命令处理,调用方直接回复不再进对话。
+func (h *MessageHandler) handleMemoryCommand(ctx context.Context, userID int64, text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	switch {
+	case strings.HasPrefix(trimmed, "#记住"):
+		content := strings.TrimSpace(strings.TrimPrefix(trimmed, "#记住"))
+		if content == "" {
+			return "请这样告诉我：#记住 你想让我长期记住的内容", true
+		}
+		memory, err := h.memoryService.Remember(ctx, userID, content)
+		if err != nil {
+			logger.ErrorWithFields("feishu: memory remember failed",
+				zap.Int64("user_id", userID), zap.Error(err))
+			return fallbackReply, true
+		}
+		return fmt.Sprintf("已记住：%s\n\n提醒：请不要保存密码、API Key、身份证号等敏感信息。", memory.Content), true
+	case trimmed == "#我的记忆":
+		memories, err := h.memoryService.List(ctx, userID)
+		if err != nil {
+			logger.ErrorWithFields("feishu: memory list failed",
+				zap.Int64("user_id", userID), zap.Error(err))
+			return fallbackReply, true
+		}
+		if len(memories) == 0 {
+			return "我还没有长期记住任何信息。\n\n你可以这样告诉我：\n#记住 我偏好简洁直接的回答", true
+		}
+		var b strings.Builder
+		b.WriteString("我目前记住了这些信息：\n\n")
+		for i, m := range memories {
+			tag := ""
+			if m.Source == memorydomain.MemorySourceAuto {
+				tag = "（自动记忆）"
+			}
+			fmt.Fprintf(&b, "%d. %s%s（记录于 %s）", i+1, m.Content, tag, m.CreatedAt.Format("2006-01-02"))
+			if i < len(memories)-1 {
+				b.WriteString("\n")
+			}
+		}
+		return b.String(), true
+	case trimmed == "#清空记忆":
+		if err := h.memoryService.Clear(ctx, userID); err != nil {
+			logger.ErrorWithFields("feishu: memory clear failed",
+				zap.Int64("user_id", userID), zap.Error(err))
+			return fallbackReply, true
+		}
+		return "已清空你的全部长期记忆。", true
+	case strings.HasPrefix(trimmed, "#删除记忆"):
+		indexText := strings.TrimSpace(strings.TrimPrefix(trimmed, "#删除记忆"))
+		index, err := strconv.Atoi(indexText)
+		if err != nil || index <= 0 {
+			return "", false // 格式不完整不拦截,留给人机对话
+		}
+		memories, err := h.memoryService.List(ctx, userID)
+		if err != nil {
+			return fallbackReply, true
+		}
+		if index > len(memories) {
+			return "记忆序号不存在，请发送 #我的记忆 查看当前列表。", true
+		}
+		selected := memories[index-1]
+		if _, err := h.memoryService.Delete(ctx, userID, selected.ID); err != nil {
+			logger.ErrorWithFields("feishu: memory delete failed",
+				zap.Int64("user_id", userID), zap.Error(err))
+			return fallbackReply, true
+		}
+		return fmt.Sprintf("已删除第 %d 条记忆：%s", index, selected.Content), true
+	}
+	return "", false
+}
 
 // HandleInbound 飞书消息 pipeline。流程严格镜像 web/HandleSendMessageAgent:
 //
@@ -100,6 +181,17 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		// 未绑定:不建号、不进对话,回绑定引导(PRD 5.4)
 		_ = h.sender.SendText(ctx, in.OpenID, unboundGuide)
 		return nil
+	}
+
+	// 记忆管理命令(高级记忆系统PRD AC4.3):先于对话处理,nil 时不启用
+	if h.memoryService != nil {
+		if reply, handled := h.handleMemoryCommand(ctx, userID, text); handled {
+			if err := h.sender.SendText(ctx, in.OpenID, reply); err != nil {
+				logger.ErrorWithFields("feishu: send memory command reply failed",
+					zap.String("open_id", in.OpenID), zap.Error(err))
+			}
+			return nil
+		}
 	}
 
 	// 保存用户消息(飞书 message_id 做幂等)
@@ -220,7 +312,6 @@ func recordsToAgentSteps(records []agentpkg.StepRecord, userID int64, model stri
 	return agentpkg.StepRecordsToAgentSteps(records, userID, model)
 }
 
-
 // 绑定码格式:「绑定」+ 空格 + 6 位数字(PRD 4.3)。TrimSpace 后匹配。
 var bindCodeRe = regexp.MustCompile(`^绑定 (\d{6})$`)
 
@@ -263,9 +354,9 @@ func (h *MessageHandler) handleBindCode(ctx context.Context, openID, code string
 
 // 绑定相关回复文案(PRD 5.2 / 5.4)
 const (
-	bindSuccessReply       = "绑定成功!现在可以在飞书跟我聊了"
-	bindCodeInvalidReply   = "绑定码无效或已过期,请在 web 端重新获取"
-	feishuAlreadyBoundReply = "该飞书号已绑定其他账号"
+	bindSuccessReply         = "绑定成功!现在可以在飞书跟我聊了"
+	bindCodeInvalidReply     = "绑定码无效或已过期,请在 web 端重新获取"
+	feishuAlreadyBoundReply  = "该飞书号已绑定其他账号"
 	accountAlreadyBoundReply = "你的账号已绑定飞书,如需更换请稍后(暂不支持)"
-	unboundGuide           = `你还没有绑定 OmniBot 账号。请先在 web 端登录,在设置里获取绑定码,然后在这里发送「绑定 + 空格 + 绑定码」(例如 绑定 123456)完成绑定。`
+	unboundGuide             = `你还没有绑定 OmniBot 账号。请先在 web 端登录,在设置里获取绑定码,然后在这里发送「绑定 + 空格 + 绑定码」(例如 绑定 123456)完成绑定。`
 )

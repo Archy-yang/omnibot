@@ -9,6 +9,7 @@ import (
 	memoryrepo "omnibot/internal/repository/memory"
 
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -53,7 +54,7 @@ func retrievalSetup(t *testing.T) (MemoryService, *gorm.DB) {
 	}
 	repo := memoryrepo.NewMemoryRepository(db)
 	digestRepo := memoryrepo.NewDigestRepository(db)
-	return NewMemoryService(repo, digestRepo), db
+	return NewMemoryService(repo, digestRepo, nil), db
 }
 
 func setEmbedding(t *testing.T, svc MemoryService, p EmbeddingProvider) {
@@ -305,4 +306,106 @@ func setResolver(svc MemoryService, r EmbeddingResolver) {
 	if aware, ok := svc.(ResolverAware); ok {
 		aware.SetEmbeddingResolver(r)
 	}
+}
+
+// ===== 注入分层(PRD 修订:手动记忆常驻,自动记忆走工具,§6.5 修订) =====
+
+// TestGetMemoryInjection_ManualOnly 注入只取手动记忆,自动记忆只出条数。
+func TestGetMemoryInjection_ManualOnly(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	manual := memorydomain.NewMemory(42, "用户偏好简洁回复")
+	auto := memorydomain.NewAutoMemory(42, "用户是后端工程师", nil)
+	if err := db.Create(manual).Error; err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+	if err := db.Create(auto).Error; err != nil {
+		t.Fatalf("seed auto: %v", err)
+	}
+
+	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("GetMemoryInjection: %v", err)
+	}
+	if len(manuals) != 1 || manuals[0] != "用户偏好简洁回复" {
+		t.Errorf("manual = %v, want 仅手动记忆", manuals)
+	}
+	if autoCount != 1 {
+		t.Errorf("autoCount = %d, want 1", autoCount)
+	}
+}
+
+// TestGetMemoryInjection_Empty 空库返回零值不报错。
+func TestGetMemoryInjection_Empty(t *testing.T) {
+	svc, _ := retrievalSetup(t)
+	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
+	if err != nil || len(manuals) != 0 || autoCount != 0 {
+		t.Errorf("空库应返回零值, got %v/%d/%v", manuals, autoCount, err)
+	}
+}
+
+// ===== M6.2 事项优先检索 =====
+
+func retrievalSetupWithMatters(t *testing.T) (*gorm.DB, MemoryService) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&memorydomain.Memory{}, &memorydomain.Matter{}))
+	svc := NewMemoryService(
+		memoryrepo.NewMemoryRepository(db),
+		memoryrepo.NewDigestRepository(db),
+		memoryrepo.NewMatterRepository(db),
+	)
+	return db, svc
+}
+
+// TestSearchMatters_TitleSubstringHit 标题子串命中(强信号)→ 返回事项+挂靠记忆全景;
+// 状态子串单独命中(弱信号)不达阈值 → 不算命中。
+func TestSearchMatters_TitleSubstringHit(t *testing.T) {
+	db, svc := retrievalSetupWithMatters(t)
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "十一西双版纳旅行", StateDesc: "机票别墅已订,交通未定",
+		Status: memorydomain.MatterStatusActive,
+	}))
+	m, _ := matterRepo.GetByTitle(42, "十一西双版纳旅行")
+	// 挂靠两条记忆
+	require.NoError(t, db.Create(&memorydomain.Memory{
+		UserID: 42, Content: "用户注重性价比", Source: memorydomain.MemorySourceAuto,
+		Kind: memorydomain.MemoryKindFact, MatterID: &m.ID,
+	}).Error)
+	require.NoError(t, db.Create(&memorydomain.Memory{
+		UserID: 42, Content: "待核实实时票价", Source: memorydomain.MemorySourceAuto,
+		Kind: memorydomain.MemoryKindLoop, MatterID: &m.ID,
+	}).Error)
+	// 另一个事项,状态里才提到"旅行"(弱信号,不应命中)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "装修", StateDesc: "聊到旅行时顺便提了一句", Status: memorydomain.MatterStatusActive,
+	}))
+
+	hits, err := svc.SearchMatters(context.Background(), 42, "旅行", 5)
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "只有标题命中的事项才算命中")
+	require.Equal(t, "十一西双版纳旅行", hits[0].Matter.Title)
+	require.Len(t, hits[0].Facts, 2, "应带出挂靠记忆全景")
+}
+
+// TestSearchMatters_Semantic 事项向量与查询同模型 → 余弦命中。
+func TestSearchMatters_Semantic(t *testing.T) {
+	db, svc := retrievalSetupWithMatters(t)
+	emb := &fakeEmbedding{vectors: map[string][]float32{"旅行计划怎么样了": {1, 0, 0}}, name: "fake/m1"}
+	if aware, ok := svc.(EmbeddingAware); ok {
+		aware.SetEmbeddingProvider(emb)
+	}
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "十一旅行", StateDesc: "推进中",
+		Embedding: []float32{1, 0, 0}, EmbeddingModel: "fake/m1",
+	}))
+
+	hits, err := svc.SearchMatters(context.Background(), 42, "旅行计划怎么样了", 5)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	require.InDelta(t, 1.0, hits[0].Score, 0.001)
 }

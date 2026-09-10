@@ -51,15 +51,17 @@ type mockMessageService struct {
 	savedAssistantContent string
 	savedSegments         []conversation.MessageSegment
 	savedSteps            []*conversation.AgentStep
-	listMessages          []*conversation.Message
-	listErr               error
-	listCalledLimit       int
-	listCalledBefore      int64
-	reportSaved           bool
-	savedReportTaskID     int64
-	savedReportContent    string
-	savedReportSegments   []conversation.MessageSegment
-	savedReportSteps      []*conversation.AgentStep
+	// ctxMessages 非空时 BuildContextMessages 返回它(模拟真实历史,报告锚定测试用)
+	ctxMessages         []llm.ChatMessage
+	listMessages        []*conversation.Message
+	listErr             error
+	listCalledLimit     int
+	listCalledBefore    int64
+	reportSaved         bool
+	savedReportTaskID   int64
+	savedReportContent  string
+	savedReportSegments []conversation.MessageSegment
+	savedReportSteps    []*conversation.AgentStep
 }
 
 func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
@@ -96,6 +98,11 @@ func (m *mockMessageService) SaveReportMessage(ctx context.Context, userID, task
 }
 
 func (m *mockMessageService) BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error) {
+	// ctxMessages 非空时作为历史,末尾追加当前消息(贴近真实实现;报告锚定等测试用)
+	if m.ctxMessages != nil {
+		return append(append([]llm.ChatMessage{}, m.ctxMessages...),
+			llm.ChatMessage{Role: "user", Content: currentContent}), nil
+	}
 	return []llm.ChatMessage{
 		{Role: "user", Content: currentContent},
 	}, nil

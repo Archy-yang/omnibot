@@ -30,6 +30,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SettingsDrawer: typeof import('./src/components/functional/SettingsDrawer.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
+    SkillDrawer: typeof import('./src/components/functional/SkillDrawer.vue')['default']
     Toast: typeof import('./src/components/functional/Toast.vue')['default']
   }
 }

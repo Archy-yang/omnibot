@@ -86,11 +86,23 @@ func (n *FeishuTaskNotifier) NotifyTaskCompleted(ctx context.Context, openID str
 // runAgentReport 调主 Agent Run 把任务回执转述成自然语言。
 // ok=false 表示转述失败(Run 报错或空回复)。
 func (n *FeishuTaskNotifier) runAgentReport(ctx context.Context, task *domainagent.AgentTask) (finalResponse string, records []agentpkg.StepRecord, ok bool) {
-	// 构造汇报上下文:system(回执+汇报指令,fullArtifact=true 给完整产物) + user(虚拟触发)
+	// 构造汇报上下文(汇报锚定,§3.4 修订):
+	// system(回执+汇报指令) + 最近对话历史(锚定原始问题) + 虚拟触发 user。
 	instruction := agentpkg.BuildReportInstruction([]*domainagent.AgentTask{task}, true)
 	conv := []map[string]interface{}{
 		{"role": "system", "content": instruction},
-		{"role": "user", "content": "请汇报这个子任务的结果。"},
+	}
+	trigger := "请汇报这个子任务的结果。"
+	if n.msgSvc != nil {
+		if ctxMsgs, err := n.msgSvc.BuildContextMessages(ctx, task.UserID, trigger); err == nil {
+			conv = append(conv, toAgentMessages(ctxMsgs)...)
+		} else {
+			logger.WarnWithFields("feishu: notifier 拉取对话历史失败,降级纯回执汇报",
+				zap.Int64("task_id", task.ID), zap.Error(err))
+			conv = append(conv, map[string]interface{}{"role": "user", "content": trigger})
+		}
+	} else {
+		conv = append(conv, map[string]interface{}{"role": "user", "content": trigger})
 	}
 
 	// 选 LLM:用户自定义优先(与主对话一致)

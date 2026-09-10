@@ -44,9 +44,40 @@ func BuildTaskReceipt(task *domainagent.AgentTask) string {
 	fmt.Fprintf(&b, "任务ID: %d\n", task.ID)
 	fmt.Fprintf(&b, "任务类型: %s\n", name)
 	fmt.Fprintf(&b, "目标: %s\n", task.Goal)
+	writeTaskContract(&b, task)
 	b.WriteString("结果:\n")
 	b.WriteString(result)
 	return b.String()
+}
+
+// writeTaskContract 输出任务合同的详细信息(背景/交付物/完成标准)。
+// 汇报锚定(§3.4 修订):主 Agent 只有看到"当初承诺交付什么、什么算完成",
+// 才能在汇报时对照完成标准自查达标性(如实说"部分完成"),而非盲目转述子 Agent 结果。
+// 无详细信息(只有 goal 的老合同)时输出空段落,不产生噪音。
+func writeTaskContract(b *strings.Builder, task *domainagent.AgentTask) {
+	spec := task.TaskSpec
+	if len(spec.Background) > 0 {
+		b.WriteString("背景:\n")
+		for k, v := range spec.Background {
+			fmt.Fprintf(b, "- %s: %v\n", k, v)
+		}
+	}
+	if len(spec.Deliverables) > 0 {
+		b.WriteString("交付物:\n")
+		for _, d := range spec.Deliverables {
+			if d.Description != "" {
+				fmt.Fprintf(b, "- %s: %s\n", d.Name, d.Description)
+			} else {
+				fmt.Fprintf(b, "- %s\n", d.Name)
+			}
+		}
+	}
+	if len(spec.CompletionCriteria) > 0 {
+		b.WriteString("完成标准:\n")
+		for i, c := range spec.CompletionCriteria {
+			fmt.Fprintf(b, "%d. %s\n", i+1, c)
+		}
+	}
 }
 
 // receiptSummaryMax 回执结果摘要最大字符数(控制面小消息,大内容走数据面)。
@@ -83,6 +114,8 @@ func BuildReportInstruction(tasks []*domainagent.AgentTask, fullArtifact bool) s
 	var b strings.Builder
 	b.WriteString("以下是你之前安排的后台任务的完成回执,请向用户汇报这些任务的结果,")
 	b.WriteString("用管家口吻转述(不要原样照搬回执格式,要自然语言汇报)。")
+	b.WriteString("汇报前先对照每个任务的完成标准自查结果是否达标;")
+	b.WriteString("未达标或部分完成的要如实说明(缺了什么、卡在哪),不要粉饰。")
 	b.WriteString("汇报完即可,不需要用户再追问。\n\n")
 	for _, task := range tasks {
 		b.WriteString(buildTaskReceiptForReport(task, fullArtifact))
@@ -116,6 +149,7 @@ func buildTaskReceiptForReport(task *domainagent.AgentTask, fullArtifact bool) s
 	fmt.Fprintf(&b, "任务ID: %d\n", task.ID)
 	fmt.Fprintf(&b, "任务类型: %s\n", name)
 	fmt.Fprintf(&b, "目标: %s\n", task.Goal)
+	writeTaskContract(&b, task)
 	b.WriteString("结果:\n")
 	b.WriteString(result)
 	return b.String()

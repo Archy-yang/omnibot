@@ -86,6 +86,36 @@ func TestOpenAICompatEmbedding_DimMismatch(t *testing.T) {
 	}
 }
 
+// TestOpenAICompatEmbedding_RequestsDimensions 请求体带 dimensions=声明维度
+// (M5.1 修复:MRL 模型如 qwen3-embedding-4b 原生 2560 维,须显式要 1024,否则
+// 上游按原生维度返回、与声明校验冲突)。
+func TestOpenAICompatEmbedding_RequestsDimensions(t *testing.T) {
+	var gotDimensions interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotDimensions = req["dimensions"]
+		// 模拟 MRL 生效:上游按请求的 dimensions 返回对应维度
+		vec := make([]float32, 1024)
+		vec[0] = 0.1
+		payload, _ := json.Marshal(map[string]interface{}{
+			"data": []map[string]interface{}{{"index": 0, "embedding": vec}},
+		})
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	p, _ := NewEmbeddingProvider(EmbeddingProviderConfig{
+		Provider: "openai_compatible", BaseURL: srv.URL, Model: "qwen3-embedding-4b", Dims: 1024,
+	})
+	if _, err := p.Embed(context.Background(), []string{"x"}); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if gotDimensions != float64(1024) {
+		t.Errorf("请求体 dimensions = %v, want 1024", gotDimensions)
+	}
+}
+
 // TestOpenAICompatEmbedding_HTTPError 上游非 2xx → error(降级链由调用方处理)。
 func TestOpenAICompatEmbedding_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
