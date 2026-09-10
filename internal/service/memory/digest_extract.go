@@ -44,8 +44,9 @@ func (p *DigestPipeline) applyMemories(
 		return
 	}
 	var currentModel string
-	if p.embedding != nil {
-		currentModel = p.embedding.Name()
+	emb := p.embeddingFor(userID)
+	if emb != nil {
+		currentModel = emb.Name()
 	}
 
 	for _, c := range candidates {
@@ -62,8 +63,8 @@ func (p *DigestPipeline) applyMemories(
 
 		// 嵌入候选(失败 → 无向量,仍可落库,读路径降级子串)
 		var vec []float32
-		if p.embedding != nil {
-			if vecs, err := p.embedding.Embed(ctx, []string{content}); err == nil && len(vecs) == 1 {
+		if emb != nil {
+			if vecs, err := emb.Embed(ctx, []string{content}); err == nil && len(vecs) == 1 {
 				vec = vecs[0]
 			} else {
 				logger.WarnWithFields("memory: 候选记忆向量化失败,落库为无向量",

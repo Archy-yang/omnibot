@@ -143,6 +143,9 @@ func (p *openAICompatEmbedding) Embed(ctx context.Context, texts []string) ([][]
 	data, err := p.post(ctx, "/embeddings", map[string]interface{}{
 		"model": p.model,
 		"input": texts,
+		// MRL 模型(如 qwen3-embedding-4b 原生 2560 维)按声明维度截断输出,
+		// 保证上游返回与 Dim() 校验一致(OpenAI 兼容标准参数)。
+		"dimensions": p.dims,
 	})
 	if err != nil {
 		return nil, err

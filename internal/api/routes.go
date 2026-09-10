@@ -93,20 +93,22 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	if aware, ok := memorySvc.(memoryService.EmbeddingAware); ok {
 		aware.SetEmbeddingProvider(memoryEmbedding)
 	}
-	// 用户级向量配置解析(用户级覆盖系统默认,§5.3)
+	// 用户级向量配置解析(用户级覆盖系统默认,§5.3;M5.1 起沉淀管线共用同一缓存)
+	embeddingResolver := &userEmbeddingResolver{svc: llmConfigSvc, cache: make(map[int64]struct {
+		fingerprint string
+		provider    memoryService.EmbeddingProvider
+	})}
 	if aware, ok := memorySvc.(memoryService.ResolverAware); ok {
-		aware.SetEmbeddingResolver(&userEmbeddingResolver{svc: llmConfigSvc, cache: make(map[int64]struct {
-			fingerprint string
-			provider    memoryService.EmbeddingProvider
-		})})
+		aware.SetEmbeddingResolver(embeddingResolver)
 	}
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
-	// 沉淀管线(M2,§7):轮次结束异步生成纪要+提取记忆,LLM/embedding 均系统默认(系统能力)。
-	// extraction.enabled=false 或 LLM 未装配时管线整体不注入(对话零开销)。
+	// 沉淀管线(M2,§7;M5.1 修订):轮次结束异步生成纪要+提取记忆。
+	// LLM/embedding 均按用户解析:用户 Web 端配置优先,系统默认兜底,皆无则静默跳过。
+	// extraction.enabled=false 时管线整体不注入(对话零开销)。
 	agentLLMClient := newAgentLLMClient(cfg)
 	var digestPipeline *memoryService.DigestPipeline
-	if cfg.Memory.Extraction.Enabled && agentLLMClient != nil {
+	if cfg.Memory.Extraction.Enabled {
 		digestThreshold := cfg.Memory.Extraction.BatchSize
 		if digestThreshold <= 0 {
 			digestThreshold = 20 // 攒批越大摊销越低,更贴近"按对话段落"(§7 修订)
@@ -116,10 +118,14 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			digestRepository,
 			memoryRepository,
 			msgRepo, // chat 仓储实现 ConversationSource
-			pipelineLLMAdapter{inner: agentLLMClient},
+			&userPipelineLLM{svc: llmConfigSvc, system: agentLLMClient, cache: make(map[int64]struct {
+				fingerprint string
+				client      agentpkg.LLMClient
+			})},
 			memoryEmbedding,
 			digestThreshold,
 		)
+		digestPipeline.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
 		logger.Info("memory: 沉淀管线已启用",
 			zap.Int("threshold", digestThreshold),
 			zap.Bool("embedding", memoryEmbedding != nil))
@@ -528,17 +534,61 @@ func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
 	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
 }
 
-// pipelineLLMAdapter 适配 agentpkg.LLMClient → memory.PipelineLLM(§7.2 沉淀管线用系统默认模型)。
-type pipelineLLMAdapter struct {
-	inner agentpkg.LLMClient
+// userPipelineLLM 沉淀管线 LLM 按用户解析(M5.1 修订 §7.2):
+// 用户在 Web 端配置了自定义 LLM → 用该配置构造客户端(指纹缓存,改配置免重启);
+// 未配置 → 回落系统默认;两者皆无 → ErrPipelineNoLLM(管线静默跳过,水位不推进)。
+type userPipelineLLM struct {
+	svc    userService.LLMConfigService
+	system agentpkg.LLMClient // 系统默认兜底,可 nil
+	mu     sync.Mutex
+	cache  map[int64]struct {
+		fingerprint string
+		client      agentpkg.LLMClient
+	}
 }
 
-func (a pipelineLLMAdapter) Complete(ctx context.Context, system, user string) (string, error) {
+func (a *userPipelineLLM) clientFor(userID int64) (agentpkg.LLMClient, error) {
+	apiKey, baseURL, model, hasCustom, err := a.svc.GetConfigForUser(userID)
+	if err != nil {
+		logger.Warn("memory: 读用户 LLM 配置失败,沉淀回落系统默认",
+			zap.Int64("user_id", userID), zap.Error(err))
+	}
+	if hasCustom {
+		// 指纹 = 关键字段拼接 + key 哈希(不含明文);指纹变了自动重建
+		sum := sha1.Sum([]byte(baseURL + "|" + model + "|" + apiKey))
+		fingerprint := hex.EncodeToString(sum[:])
+		a.mu.Lock()
+		cached, hit := a.cache[userID]
+		a.mu.Unlock()
+		if hit && cached.fingerprint == fingerprint && cached.client != nil {
+			return cached.client, nil
+		}
+		// 非流式长输入:TTFB 放宽到 120s(全文生成完才回响应头,对话的 30s 默认不够)
+		client := agentpkg.NewOpenAILLMClientWithTTFB(apiKey, baseURL, model, 120*time.Second, 120*time.Second)
+		a.mu.Lock()
+		a.cache[userID] = struct {
+			fingerprint string
+			client      agentpkg.LLMClient
+		}{fingerprint, client}
+		a.mu.Unlock()
+		return client, nil
+	}
+	if a.system != nil {
+		return a.system, nil
+	}
+	return nil, memoryService.ErrPipelineNoLLM
+}
+
+func (a *userPipelineLLM) Complete(ctx context.Context, userID int64, system, user string) (string, error) {
+	client, err := a.clientFor(userID)
+	if err != nil {
+		return "", err
+	}
 	messages := []map[string]interface{}{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	}
-	content, _, err := a.inner.ChatCompletion(ctx, messages, nil)
+	content, _, err := client.ChatCompletion(ctx, messages, nil)
 	return content, err
 }
 

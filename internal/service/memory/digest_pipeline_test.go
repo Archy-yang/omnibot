@@ -22,18 +22,20 @@ import (
 // §7 修订:纪要与提取合并为单次 LLM 调用({summary, memories[]});
 // 调用失败或 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
 
-// fakePipelineLLM 假 LLM:单次调用返回固定结果。
+// fakePipelineLLM 假 LLM:单次调用返回固定结果(M5.1:签名带 userID,管线按用户解析)。
 type fakePipelineLLM struct {
-	mu      sync.Mutex
-	resp    string
-	respErr error
-	calls   int
+	mu         sync.Mutex
+	resp       string
+	respErr    error
+	calls      int
+	lastUserID int64
 }
 
-func (f *fakePipelineLLM) Complete(_ context.Context, _, _ string) (string, error) {
+func (f *fakePipelineLLM) Complete(_ context.Context, userID int64, _, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.lastUserID = userID
 	if f.respErr != nil {
 		return "", f.respErr
 	}
@@ -136,6 +138,9 @@ func TestDigestPipeline_SingleCall(t *testing.T) {
 	if llm.calls != 1 {
 		t.Fatalf("应只调 1 次 LLM(纪要+提取合并), got %d", llm.calls)
 	}
+	if llm.lastUserID != 42 {
+		t.Errorf("LLM 调用应携带 userID=42(按用户解析配置), got %d", llm.lastUserID)
+	}
 	var digests []*memorydomain.ConversationDigest
 	db.Find(&digests)
 	if len(digests) != 1 {
@@ -167,6 +172,71 @@ func TestDigestPipeline_SingleCall(t *testing.T) {
 	}
 	if llm.calls != 1 {
 		t.Error("无新消息不应再触发沉淀")
+	}
+}
+
+// TestDigestPipeline_NoLLMForUser_SkipsQuietly 用户无可用 LLM 配置(ErrPipelineNoLLM)
+// → 静默跳过本轮(RunOnce 返回 nil,不告警刷屏);水位不动,配置后自动从当前区间开始。
+func TestDigestPipeline_NoLLMForUser_SkipsQuietly(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.respErr = ErrPipelineNoLLM
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("无配置应是静默跳过(nil), got %v", err)
+	}
+	// 水位未推进(配置 LLM 后从同一区间开始沉淀)
+	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
+	if wm != nil && wm.LastDigestMsgID != 0 {
+		t.Errorf("水位不应推进, got %d", wm.LastDigestMsgID)
+	}
+}
+
+// TestDigestPipeline_ChunkedBacklog 积压超过单块上限 → 每轮只沉淀一块,水位分块推进
+// (M5.1 硬化:首次沉淀/长期停用后的全量积压不再一个巨包打给 LLM)。
+func TestDigestPipeline_ChunkedBacklog(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 10)
+	source.latest = 10
+	p.maxBatchMessages = 4
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce#1: %v", err)
+	}
+	if llm.calls != 1 {
+		t.Fatalf("第一轮应只调 1 次 LLM, got %d", llm.calls)
+	}
+	wmRepo := memoryrepo.NewWatermarkRepository(db)
+	wm, _ := wmRepo.GetByUserID(42)
+	if wm.LastDigestMsgID != 4 {
+		t.Fatalf("水位应推进到第 4 条, got %d", wm.LastDigestMsgID)
+	}
+	var digests []*memorydomain.ConversationDigest
+	db.Find(&digests)
+	if len(digests) != 1 || digests[0].MsgCount != 4 {
+		t.Fatalf("第一块应只有 4 条消息, got %+v", digests)
+	}
+
+	// 第二轮:下一块
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce#2: %v", err)
+	}
+	wm, _ = wmRepo.GetByUserID(42)
+	if wm.LastDigestMsgID != 8 {
+		t.Fatalf("第二轮水位应到 8, got %d", wm.LastDigestMsgID)
+	}
+
+	// 第三轮:剩余 2 条 < 阈值 3 → 攒着,并入下一批(不单独为尾巴起一轮)
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce#3: %v", err)
+	}
+	wm, _ = wmRepo.GetByUserID(42)
+	if wm.LastDigestMsgID != 8 {
+		t.Fatalf("尾巴不足阈值应攒到下批, 水位应仍为 8, got %d", wm.LastDigestMsgID)
+	}
+	if llm.calls != 2 {
+		t.Errorf("共应调 2 次 LLM, got %d", llm.calls)
 	}
 }
 
@@ -279,6 +349,53 @@ func (b *blockingSource) GetRangeByUserID(userID int64, afterID, toID int64) ([]
 }
 
 // ===== 记忆提取落库(§7.3 / TDD#8/#9) =====
+
+// TestPipeline_EmbeddingResolverUsed 用户级 embedding 解析器生效(M5.1):
+// 管线向量化按 userID 解析,产出的纪要/记忆带该用户配置的向量。
+func TestPipeline_EmbeddingResolverUsed(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	emb := &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/user-m1"}
+	var gotUserID int64
+	p.SetEmbeddingResolver(func(userID int64) EmbeddingProvider {
+		gotUserID = userID
+		return emb
+	})
+	p.embedding = nil // 用户解析器是唯一向量来源
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if gotUserID != 42 {
+		t.Errorf("resolver 应按 userID 调用, got %d", gotUserID)
+	}
+	var mems []*memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&mems)
+	if len(mems) != 1 || mems[0].EmbeddingModel != "fake/user-m1" || len(mems[0].Embedding) != 3 {
+		t.Fatalf("记忆应带用户级向量, got %+v", mems)
+	}
+}
+
+// TestPipeline_EmbeddingResolverFallsBack 解析器返回 nil → 回落系统默认 embedding。
+func TestPipeline_EmbeddingResolverFallsBack(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	p.SetEmbeddingResolver(func(int64) EmbeddingProvider { return nil }) // 用户未配置
+	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/system-m1"}
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	var mems []*memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&mems)
+	if len(mems) != 1 || mems[0].EmbeddingModel != "fake/system-m1" {
+		t.Fatalf("应回落系统默认向量, got %+v", mems)
+	}
+}
 
 // TestExtractMemories_ValidSchema 有效候选 → auto 记忆落库,带溯源与向量。
 func TestExtractMemories_ValidSchema(t *testing.T) {
