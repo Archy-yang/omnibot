@@ -6,9 +6,9 @@ import "time"
 // 一条提炼往往源自多轮交叉信息(单值 source_message_id 会失真),一条消息也可能贡献多条记忆。
 // manual 记忆无映射;auto 记忆建链时校验消息必须落在本次沉淀区间内。
 type MemoryMessageLink struct {
-	ID        int64 `gorm:"primaryKey;autoIncrement"`
-	MemoryID  int64 `gorm:"not null;uniqueIndex:idx_memory_message;index"`
-	MessageID int64 `gorm:"not null;uniqueIndex:idx_memory_message"`
+	ID        int64     `gorm:"primaryKey;autoIncrement"`
+	MemoryID  int64     `gorm:"not null;uniqueIndex:idx_memory_message;index"`
+	MessageID int64     `gorm:"not null;uniqueIndex:idx_memory_message"`
 	CreatedAt time.Time `gorm:"not null"`
 }
 

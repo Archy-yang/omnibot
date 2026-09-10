@@ -73,17 +73,18 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}); err != nil {
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	// 默认返回:纪要 + 无记忆候选
-	llm := &fakePipelineLLM{resp: `{"summary":"纪要内容","memories":[]}`}
+	llm := &fakePipelineLLM{resp: `{"matter_updates":[],"facts":[]}`}
 	sourceMsgs = nil
 	source := &fakeConversationSource{latest: 0}
 	p := NewDigestPipeline(
 		memoryrepo.NewWatermarkRepository(db),
 		memoryrepo.NewDigestRepository(db),
 		memoryrepo.NewMemoryRepository(db),
+		memoryrepo.NewMatterRepository(db),
 		source,
 		llm,
 		nil, // embedding: 无向量也能落纪要
@@ -127,7 +128,7 @@ func TestDigestPipeline_BelowThreshold(t *testing.T) {
 	}
 }
 
-// TestDigestPipeline_SingleCall 阈值到 → 单次 LLM 调用产出纪要落库 + 水位推进(TDD#7)。
+// TestDigestPipeline_SingleCall 阈值到 → 单次 LLM 对账 + 水位推进(M6:digests 退役不再写入)。
 func TestDigestPipeline_SingleCall(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
@@ -137,28 +138,16 @@ func TestDigestPipeline_SingleCall(t *testing.T) {
 		t.Fatalf("RunOnce: %v", err)
 	}
 	if llm.calls != 1 {
-		t.Fatalf("应只调 1 次 LLM(纪要+提取合并), got %d", llm.calls)
+		t.Fatalf("应只调 1 次 LLM(对账), got %d", llm.calls)
 	}
 	if llm.lastUserID != 42 {
 		t.Errorf("LLM 调用应携带 userID=42(按用户解析配置), got %d", llm.lastUserID)
 	}
-	var digests []*memorydomain.ConversationDigest
-	db.Find(&digests)
-	if len(digests) != 1 {
-		t.Fatalf("digest count = %d, want 1", len(digests))
-	}
-	d := digests[0]
-	if d.Status != memorydomain.DigestStatusActive {
-		t.Errorf("status = %q, want active", d.Status)
-	}
-	if d.FromMessageID != 1 || d.ToMessageID != 3 {
-		t.Errorf("区间 = [%d,%d], want [1,3]", d.FromMessageID, d.ToMessageID)
-	}
-	if d.MsgCount != 3 {
-		t.Errorf("MsgCount = %d, want 3", d.MsgCount)
-	}
-	if d.Summary != "纪要内容" {
-		t.Errorf("Summary = %q", d.Summary)
+	// M6:digests 退役,不再写入
+	var digestCount int64
+	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
+	if digestCount != 0 {
+		t.Errorf("digests 已退役,不应写入, got %d", digestCount)
 	}
 
 	// 水位推进到 3
@@ -213,11 +202,6 @@ func TestDigestPipeline_ChunkedBacklog(t *testing.T) {
 	if wm.LastDigestMsgID != 4 {
 		t.Fatalf("水位应推进到第 4 条, got %d", wm.LastDigestMsgID)
 	}
-	var digests []*memorydomain.ConversationDigest
-	db.Find(&digests)
-	if len(digests) != 1 || digests[0].MsgCount != 4 {
-		t.Fatalf("第一块应只有 4 条消息, got %+v", digests)
-	}
 
 	// 第二轮:下一块
 	if err := p.RunOnce(context.Background(), 42); err != nil {
@@ -248,7 +232,7 @@ func TestExtractMemories_MultiSourceLinks(t *testing.T) {
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
 	// 依据 = 消息 1+2 交叉得出;99 越界应被丢弃
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[1,2,99]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户偏好简洁回复","kind":"fact","source_message_ids":[1,2,99]}]}`
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -285,7 +269,7 @@ func TestExtractMemories_ConflictUpdate_ReplacesLinks(t *testing.T) {
 	require.NoError(t, db.Create(&memorydomain.MemoryMessageLink{MemoryID: oldMem.ID, MessageID: 1}).Error)
 
 	// 候选"用户现在住在北京"(依据消息 3、4) → 原位更新 + 链路替换
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_ids":[3,4]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户现在住在北京","kind":"fact","source_message_ids":[3,4]}]}`
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -354,7 +338,7 @@ func TestDigestPipeline_AuditSuccess(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要内容","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户偏好简洁回复","kind":"fact","source_message_ids":[2]}]}`
 	audit := &fakeDigestAudit{}
 	p.SetAudit(audit)
 
@@ -377,7 +361,8 @@ func TestDigestPipeline_AuditSuccess(t *testing.T) {
 	if audit.steps[1].tool != "digest.persist" || audit.steps[1].status != "success" {
 		t.Errorf("step1 应为 digest.persist/success, got %+v", audit.steps[1])
 	}
-	if len(audit.ends) != 1 || audit.ends[0].status != "completed" || audit.ends[0].artifact != "纪要内容" {
+	if len(audit.ends) != 1 || audit.ends[0].status != "completed" ||
+		audit.ends[0].artifact != "事项更新 0,新增记忆 1,更新记忆 0" {
 		t.Errorf("EndTask 应为 completed+纪要, got %+v", audit.ends)
 	}
 }
@@ -430,11 +415,6 @@ func TestDigestPipeline_AuditBeginFails_Degrades(t *testing.T) {
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("留痕失败不应阻断沉淀, got %v", err)
 	}
-	var digestCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
-	if digestCount != 1 {
-		t.Errorf("纪要应照常落库, got %d", digestCount)
-	}
 	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm == nil || wm.LastDigestMsgID != 3 {
 		t.Errorf("水位应照常推进, got %+v", wm)
@@ -458,21 +438,20 @@ func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 		t.Errorf("LLM 失败不应落纪要, got %d", digestCount)
 	}
 	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
-	if wm.LastDigestMsgID != 0 {
+	if wm != nil && wm.LastDigestMsgID != 0 {
 		t.Errorf("LLM 失败水位不应推进, got %d", wm.LastDigestMsgID)
 	}
 
-	// 恢复后重试:同一区间 [1,3]
+	// 恢复后重试:同一区间 [1,3](水位推进即证明)
 	llm.mu.Lock()
 	llm.respErr = nil
 	llm.mu.Unlock()
 	if err := p.RunOnce(context.Background(), 42); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	var d memorydomain.ConversationDigest
-	db.First(&d)
-	if d.FromMessageID != 1 || d.ToMessageID != 3 {
-		t.Errorf("重试区间 = [%d,%d], want [1,3]", d.FromMessageID, d.ToMessageID)
+	wm, _ = memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
+	if wm == nil || wm.LastDigestMsgID != 3 {
+		t.Errorf("重试后水位应到 3, got %+v", wm)
 	}
 }
 
@@ -557,7 +536,7 @@ func TestPipeline_EmbeddingResolverUsed(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户偏好简洁回复","kind":"fact","source_message_ids":[2]}]}`
 	emb := &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/user-m1"}
 	var gotUserID int64
 	p.SetEmbeddingResolver(func(userID int64) EmbeddingProvider {
@@ -584,7 +563,7 @@ func TestPipeline_EmbeddingResolverFallsBack(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户偏好简洁回复","kind":"fact","source_message_ids":[2]}]}`
 	p.SetEmbeddingResolver(func(int64) EmbeddingProvider { return nil }) // 用户未配置
 	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/system-m1"}
 
@@ -603,7 +582,7 @@ func TestExtractMemories_ValidSchema(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户偏好简洁回复","kind":"fact","source_message_ids":[2]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}},
 		name:    "fake/m1",
@@ -635,7 +614,7 @@ func TestExtractMemories_DedupeSkip(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户喜欢简洁的回复","source_message_ids":[1]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户喜欢简洁的回复","kind":"fact","source_message_ids":[1]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户喜欢简洁的回复": {1, 0, 0},
@@ -665,7 +644,7 @@ func TestExtractMemories_ConflictUpdate(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_ids":[1]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户现在住在北京","kind":"fact","source_message_ids":[1]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户现在住在北京": {1, 0, 0},
@@ -697,7 +676,7 @@ func TestExtractMemories_EmbedFailDegrades(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户是后端工程师","source_message_ids":[1]}]}`
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户是后端工程师","kind":"fact","source_message_ids":[1]}]}`
 	p.embedding = &fakeEmbedding{fail: true, name: "fake/m1"}
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
@@ -720,7 +699,7 @@ func TestExtractMemories_Filters(t *testing.T) {
 	source.latest = 3
 	long := strings.Repeat("长", 201)
 	llm.resp = fmt.Sprintf(
-		`{"summary":"纪要","memories":[{"content":"","source_message_ids":[1]},{"content":"%s","source_message_ids":[1]},{"content":"有效记忆","source_message_ids":[99]}]}`,
+		`{"matter_updates":[],"facts":[{"content":"","kind":"fact","source_message_ids":[1]},{"content":"%s","kind":"fact","source_message_ids":[1]},{"content":"有效记忆","kind":"fact","source_message_ids":[99]}]}`,
 		long)
 	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"有效记忆": {1, 0, 0}}, name: "fake/m1"}
 
@@ -735,4 +714,92 @@ func TestExtractMemories_Filters(t *testing.T) {
 	if mems[0].SourceMessageID != nil {
 		t.Errorf("越界溯源应置 NULL, got %v", *mems[0].SourceMessageID)
 	}
+}
+
+// ===== M6 对账式沉淀 =====
+
+// TestReconcile_MatterUpdateAndNew 事项覆写更新 + 新建,facts 挂靠 matter 与分层 kind。
+func TestReconcile_MatterUpdateAndNew(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 4)
+	source.latest = 4
+	// 既有事项("十一旅行");本轮:既有事项有进展 + 新事项"电动车" + 三种 kind 的 facts
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "十一旅行", StateDesc: "机票已订", Status: memorydomain.MatterStatusActive,
+	}))
+	llm.resp = `{"matter_updates":[
+		{"title":"十一旅行","state_desc":"机票别墅已订,交通倾向打车","status":"active","source_message_ids":[1,2]},
+		{"title":"电动车充电台账","state_desc":"78 度电池,台账在飞书《充电记录》","status":"active","source_message_ids":[3]}
+	],"facts":[
+		{"content":"用户注重性价比","kind":"fact","matter_title":"十一旅行","source_message_ids":[2]},
+		{"content":"9/4 在奥北森林公园充电","kind":"episode","matter_title":"电动车充电台账","source_message_ids":[3]},
+		{"content":"待核实实时票价","kind":"loop","matter_title":"","source_message_ids":[4]}
+	]}`
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// 事项:2 条,既有事项 StateDesc 被覆写
+	var matters []memorydomain.Matter
+	db.Where("user_id = ?", 42).Order("title").Find(&matters)
+	require.Len(t, matters, 2)
+	mattersByID := map[string]memorydomain.Matter{}
+	for _, m := range matters {
+		mattersByID[m.Title] = m
+	}
+	require.Equal(t, "机票别墅已订,交通倾向打车", mattersByID["十一旅行"].StateDesc)
+	require.Equal(t, "78 度电池,台账在飞书《充电记录》", mattersByID["电动车充电台账"].StateDesc)
+
+	// 记忆:3 条,kind 分类正确,挂靠指向对应 matter
+	var mems []memorydomain.Memory
+	db.Where("user_id = ?", 42).Order("content").Find(&mems)
+	require.Len(t, mems, 3)
+	byContent := map[string]memorydomain.Memory{}
+	for _, m := range mems {
+		byContent[m.Content] = m
+	}
+	require.Equal(t, "fact", byContent["用户注重性价比"].Kind)
+	require.NotNil(t, byContent["用户注重性价比"].MatterID)
+	require.Equal(t, mattersByID["十一旅行"].ID, *byContent["用户注重性价比"].MatterID)
+	require.Equal(t, "episode", byContent["9/4 在奥北森林公园充电"].Kind)
+	require.Equal(t, "loop", byContent["待核实实时票价"].Kind)
+	require.Nil(t, byContent["待核实实时票价"].MatterID, "matter_title 为空不应挂靠")
+}
+
+// TestReconcile_CasualChatNoMatter 闲聊块:只有 facts/独立信息,不硬造事项。
+func TestReconcile_CasualChatNoMatter(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.resp = `{"matter_updates":[],"facts":[{"content":"用户今天心情不错","kind":"episode","matter_title":"","source_message_ids":[1]}]}`
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	var matters int64
+	db.Model(&memorydomain.Matter{}).Count(&matters)
+	require.Zero(t, matters, "闲聊不应硬造事项")
+	var mems []memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&mems)
+	require.Len(t, mems, 1)
+	require.Nil(t, mems[0].MatterID)
+}
+
+// TestWorldViewSnapshot 快照:含活跃事项标题与状态,不含 done/archived。
+func TestWorldViewSnapshot(t *testing.T) {
+	p, db, _, _ := pipelineSetup(t)
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "十一旅行", StateDesc: "机票已订", Status: memorydomain.MatterStatusActive,
+	}))
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "旧租房", StateDesc: "已退租", Status: memorydomain.MatterStatusDone,
+	}))
+
+	snap := p.buildWorldViewSnapshot(42)
+	require.Contains(t, snap, "十一旅行")
+	require.Contains(t, snap, "机票已订")
+	require.NotContains(t, snap, "旧租房", "非活跃事项不进快照")
 }

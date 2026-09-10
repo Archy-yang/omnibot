@@ -119,6 +119,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			memoryRepo.NewWatermarkRepository(dbConn.GetGormDB()),
 			digestRepository,
 			memoryRepository,
+			memoryRepo.NewMatterRepository(dbConn.GetGormDB()), // M6:事项层
 			msgRepo, // chat 仓储实现 ConversationSource
 			&userPipelineLLM{svc: llmConfigSvc, system: agentLLMClient, cache: make(map[int64]struct {
 				fingerprint string

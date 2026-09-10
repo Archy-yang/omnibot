@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"omnibot/internal/domain/conversation"
-	memorydomain "omnibot/internal/domain/memory"
 	memoryrepo "omnibot/internal/repository/memory"
 	"omnibot/pkg/logger"
 
@@ -47,8 +46,9 @@ type PipelineLLM interface {
 // DigestPipeline 沉淀管线。
 type DigestPipeline struct {
 	watermarkRepo memoryrepo.WatermarkRepository
-	digestRepo    memoryrepo.DigestRepository
+	digestRepo    memoryrepo.DigestRepository // M6 起停止写入(digests 退役只读);保留注入供旧数据读取路径
 	memoryRepo    memoryrepo.MemoryRepository
+	matterRepo    memoryrepo.MatterRepository // M6:事项层(对账式沉淀的核心)
 	source        ConversationSource
 	llm           PipelineLLM       // nil = 管线禁用(LLM 未装配)
 	embedding     EmbeddingProvider // 系统默认,可 nil(降级无向量)
@@ -87,6 +87,7 @@ func NewDigestPipeline(
 	watermarkRepo memoryrepo.WatermarkRepository,
 	digestRepo memoryrepo.DigestRepository,
 	memoryRepo memoryrepo.MemoryRepository,
+	matterRepo memoryrepo.MatterRepository,
 	source ConversationSource,
 	llm PipelineLLM,
 	embedding EmbeddingProvider,
@@ -100,6 +101,7 @@ func NewDigestPipeline(
 		watermarkRepo:    watermarkRepo,
 		digestRepo:       digestRepo,
 		memoryRepo:       memoryRepo,
+		matterRepo:       matterRepo,
 		source:           source,
 		llm:              llm,
 		embedding:        embedding,
@@ -169,12 +171,14 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		toID = messages[len(messages)-1].ID
 	}
 	transcript := buildTranscript(messages)
+	// 对账式输入(M6):世界观快照 + 新增对话——LLM 必须看到已有事项才能增量更新
+	userPayload := p.buildWorldViewSnapshot(userID) + "\n\n" + transcript
 
-	// 单次 LLM 调用同时产出纪要与记忆候选(§7 修订:合并调用)。
+	// 单次 LLM 调用完成对账(事项覆写 + 分层事实提取)。
 	// 调用失败或结果 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
 	// 用户无可用配置(ErrPipelineNoLLM)→ 静默跳过(配置后从当前区间自动开始)。
 	llmStart := time.Now()
-	resp, err := p.llm.Complete(ctx, userID, pipelineSystemPrompt, transcript)
+	resp, err := p.llm.Complete(ctx, userID, pipelineSystemPrompt, userPayload)
 	if err != nil {
 		if errors.Is(err, ErrPipelineNoLLM) {
 			logger.InfoWithFields("memory: 用户无可用 LLM 配置,本轮沉淀跳过",
@@ -199,7 +203,7 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 			stepStatus = "error"
 		}
 		if stepErr := p.audit.RecordStep(taskID, userID, 0, "llm_call", "memory.digest",
-			transcript, resp, stepStatus, time.Since(llmStart).Milliseconds()); stepErr != nil {
+			userPayload, resp, stepStatus, time.Since(llmStart).Milliseconds()); stepErr != nil {
 			logger.WarnWithFields("memory: 沉淀留痕记步骤失败",
 				zap.Int64("user_id", userID), zap.Error(stepErr))
 		}
@@ -208,30 +212,19 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		p.endAuditTask(taskID, "failed", "", fmt.Sprintf("沉淀调用失败: %v", err))
 		return fmt.Errorf("沉淀调用失败: %w", err)
 	}
-	var parsed struct {
-		Summary  string            `json:"summary"`
-		Memories []memoryCandidate `json:"memories"`
-	}
+	var parsed reconcileResult
 	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
-		p.endAuditTask(taskID, "failed", "", fmt.Sprintf("沉淀结果 schema 非法: %v", err))
-		return fmt.Errorf("沉淀结果 schema 非法,整批作废: %w", err)
+		p.endAuditTask(taskID, "failed", "", fmt.Sprintf("对账结果 schema 非法: %v", err))
+		return fmt.Errorf("对账结果 schema 非法,整批作废: %w", err)
 	}
 
-	// 中期:纪要落库
-	summary := strings.TrimSpace(parsed.Summary)
-	if summary != "" {
-		digest := memorydomain.NewConversationDigest(userID, summary, fromID+1, toID, len(messages))
-		p.stampEmbedding(userID, digest, summary)
-		if err := p.digestRepo.Create(digest); err != nil {
-			p.endAuditTask(taskID, "failed", "", fmt.Sprintf("落纪要: %v", err))
-			return fmt.Errorf("落纪要: %w", err)
-		}
-	}
-
-	// 长期:记忆提取落库(逐条容错,单条失败不影响其余)
-	created, updated := p.applyMemories(ctx, userID, parsed.Memories, fromID, toID)
+	// 对账执行(M6):事项 upsert(覆写状态)+ 原子记忆分层落库。
+	// digests 表退役(只读保留),不再写入切片纪要。
+	mattersUpserted, created, updated := p.reconcile(userID, parsed, fromID, toID)
 	if p.audit != nil && taskID != 0 {
-		respJSON, _ := json.Marshal(map[string]int{"created": created, "updated": updated})
+		respJSON, _ := json.Marshal(map[string]int{
+			"matters": mattersUpserted, "created": created, "updated": updated,
+		})
 		if stepErr := p.audit.RecordStep(taskID, userID, 1, "tool_call", "digest.persist",
 			fmt.Sprintf("区间 (%d,%d] 消息 %d 条", fromID, toID, len(messages)),
 			string(respJSON), "success", 0); stepErr != nil {
@@ -242,10 +235,12 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 
 	// 推进水位
 	if err := p.watermarkRepo.Upsert(userID, toID); err != nil {
-		p.endAuditTask(taskID, "failed", summary, fmt.Sprintf("推进水位: %v", err))
+		p.endAuditTask(taskID, "failed", fmt.Sprintf("事项 %d,新增 %d,更新 %d", mattersUpserted, created, updated),
+			fmt.Sprintf("推进水位: %v", err))
 		return fmt.Errorf("推进水位: %w", err)
 	}
-	p.endAuditTask(taskID, "completed", summary, "")
+	artifact := fmt.Sprintf("事项更新 %d,新增记忆 %d,更新记忆 %d", mattersUpserted, created, updated)
+	p.endAuditTask(taskID, "completed", artifact, "")
 	return nil
 }
 
@@ -258,23 +253,6 @@ func (p *DigestPipeline) endAuditTask(taskID int64, status, artifact, errMsg str
 		logger.WarnWithFields("memory: 沉淀留痕收尾失败",
 			zap.Int64("task_id", taskID), zap.Error(err))
 	}
-}
-
-// stampEmbedding 为纪要嵌入向量(用户级解析优先,回落系统默认);
-// embedding 未配置或失败 → 无向量落库(读路径降级子串)。
-func (p *DigestPipeline) stampEmbedding(userID int64, digest *memorydomain.ConversationDigest, text string) {
-	emb := p.embeddingFor(userID)
-	if emb == nil {
-		return
-	}
-	vecs, err := emb.Embed(context.Background(), []string{text})
-	if err != nil || len(vecs) != 1 {
-		logger.WarnWithFields("memory: 纪要向量化失败,落库为无向量",
-			zap.Int64("user_id", digest.UserID), zap.Error(err))
-		return
-	}
-	digest.Embedding = vecs[0]
-	digest.EmbeddingModel = emb.Name()
 }
 
 // buildTranscript 把区间消息拼成 LLM 可读的对话原文。

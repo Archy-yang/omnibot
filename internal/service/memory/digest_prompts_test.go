@@ -5,21 +5,21 @@ import (
 	"testing"
 )
 
-// prompt 守护测试(M5.4):summary 必须是"状态快照"式,关键约束丢失即报错
-// (防后续调优把禁过程叙事的约束改丢,流水账复述回归)。
-func TestPipelinePrompt_SnapshotConstraints(t *testing.T) {
+// prompt 守护测试(M6 对账式):关键约束丢失即报错。
+// M5.4 是"状态快照"止血;M6 起是对账式(世界观快照+四路输出),守护约束随之升级。
+func TestPipelinePrompt_ReconcileConstraints(t *testing.T) {
 	for _, want := range []string{
-		"状态快照", "禁止复述对话过程", "【关键决定与事实】", "【用户偏好】", "【未决事项】",
-		"source_message_ids", "宁可漏记", "只输出 JSON",
+		"世界观快照", "增量对账", "matter_updates", "facts",
+		`"fact"`, `"episode"`, `"loop"`, "覆写", "宁可漏记", "只输出 JSON", "source_message_ids",
 	} {
 		if !strings.Contains(pipelineSystemPrompt, want) {
 			t.Errorf("沉淀 prompt 缺少关键约束 %q", want)
 		}
 	}
-	// 旧版流水账措辞不应回归
-	for _, banned := range []string{"概括聊了什么主题", "把这段对话压缩成一段纪要"} {
+	// 旧版措辞不应回归(切片流水账/摘要式)
+	for _, banned := range []string{"概括聊了什么主题", "把这段对话压缩成一段纪要", "把这段对话沉淀成"} {
 		if strings.Contains(pipelineSystemPrompt, banned) {
-			t.Errorf("沉淀 prompt 回归了旧版流水账措辞 %q", banned)
+			t.Errorf("沉淀 prompt 回归了旧版措辞 %q", banned)
 		}
 	}
 }
