@@ -14,6 +14,7 @@ import (
 	memoryrepo "omnibot/internal/repository/memory"
 
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -72,7 +73,7 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}); err != nil {
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	// 默认返回:纪要 + 无记忆候选
@@ -240,6 +241,66 @@ func TestDigestPipeline_ChunkedBacklog(t *testing.T) {
 	}
 }
 
+// TestExtractMemories_MultiSourceLinks 多溯源(M5.2):候选带多条依据消息
+// → memory_message_links 只留区间内合法 ID;Memory.SourceMessageID 取首个作主指针。
+func TestExtractMemories_MultiSourceLinks(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	// 依据 = 消息 1+2 交叉得出;99 越界应被丢弃
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[1,2,99]}]}`
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	var mems []*memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&mems)
+	require.Len(t, mems, 1)
+	require.NotNil(t, mems[0].SourceMessageID)
+	require.Equal(t, int64(1), *mems[0].SourceMessageID) // 首个合法来源作主指针
+
+	var linkMsgIDs []int64
+	db.Model(&memorydomain.MemoryMessageLink{}).Where("memory_id = ?", mems[0].ID).
+		Order("message_id").Pluck("message_id", &linkMsgIDs)
+	require.Equal(t, []int64{1, 2}, linkMsgIDs) // 越界 99 被过滤
+}
+
+// TestExtractMemories_ConflictUpdate_ReplacesLinks 疑似冲突原位更新(M5.2):
+// 新事实依据的消息变了 → 溯源映射整体替换。
+func TestExtractMemories_ConflictUpdate_ReplacesLinks(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 4)
+	source.latest = 4
+	// 既有记忆("用户住在上海",依据消息 1):旧向量 (0.85,0.5268,0) 与候选 (1,0,0) 余弦 ≈0.85 ∈ [0.80,0.92)
+	emb := &fakeEmbedding{vectors: map[string][]float32{
+		"用户现在住在北京": {1, 0, 0},
+	}, name: "fake/m1"}
+	p.embedding = emb
+	oldMem := &memorydomain.Memory{
+		UserID: 42, Content: "用户住在上海", Source: memorydomain.MemorySourceAuto,
+		Embedding:      []float32{0.85, 0.5268, 0},
+		EmbeddingModel: "fake/m1",
+	}
+	require.NoError(t, db.Create(oldMem).Error)
+	require.NoError(t, db.Create(&memorydomain.MemoryMessageLink{MemoryID: oldMem.ID, MessageID: 1}).Error)
+
+	// 候选"用户现在住在北京"(依据消息 3、4) → 原位更新 + 链路替换
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_ids":[3,4]}]}`
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	var mems []*memorydomain.Memory
+	db.Where("user_id = ?", 42).Find(&mems)
+	require.Len(t, mems, 1, "冲突应原位更新而非新增")
+	require.Equal(t, "用户现在住在北京", mems[0].Content)
+
+	var linkMsgIDs []int64
+	db.Model(&memorydomain.MemoryMessageLink{}).Where("memory_id = ?", mems[0].ID).
+		Order("message_id").Pluck("message_id", &linkMsgIDs)
+	require.Equal(t, []int64{3, 4}, linkMsgIDs, "溯源映射应整体替换为新依据")
+}
+
 // TestDigestPipeline_LLMFailureRetriesSameRange LLM 失败 → 整批作废、水位不动,下轮重试同一区间(TDD#6)。
 func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
@@ -356,7 +417,7 @@ func TestPipeline_EmbeddingResolverUsed(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
 	emb := &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/user-m1"}
 	var gotUserID int64
 	p.SetEmbeddingResolver(func(userID int64) EmbeddingProvider {
@@ -383,7 +444,7 @@ func TestPipeline_EmbeddingResolverFallsBack(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
 	p.SetEmbeddingResolver(func(int64) EmbeddingProvider { return nil }) // 用户未配置
 	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}}, name: "fake/system-m1"}
 
@@ -402,7 +463,7 @@ func TestExtractMemories_ValidSchema(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_id":2}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{"用户偏好简洁回复": {1, 0, 0}},
 		name:    "fake/m1",
@@ -434,7 +495,7 @@ func TestExtractMemories_DedupeSkip(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户喜欢简洁的回复","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户喜欢简洁的回复","source_message_ids":[1]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户喜欢简洁的回复": {1, 0, 0},
@@ -464,7 +525,7 @@ func TestExtractMemories_ConflictUpdate(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户现在住在北京","source_message_ids":[1]}]}`
 	emb := &fakeEmbedding{
 		vectors: map[string][]float32{
 			"用户现在住在北京": {1, 0, 0},
@@ -496,7 +557,7 @@ func TestExtractMemories_EmbedFailDegrades(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)
 	seedPipelineMessages(t, db, 42, 3)
 	source.latest = 3
-	llm.resp = `{"summary":"纪要","memories":[{"content":"用户是后端工程师","source_message_id":1}]}`
+	llm.resp = `{"summary":"纪要","memories":[{"content":"用户是后端工程师","source_message_ids":[1]}]}`
 	p.embedding = &fakeEmbedding{fail: true, name: "fake/m1"}
 
 	if err := p.RunOnce(context.Background(), 42); err != nil {
@@ -519,7 +580,7 @@ func TestExtractMemories_Filters(t *testing.T) {
 	source.latest = 3
 	long := strings.Repeat("长", 201)
 	llm.resp = fmt.Sprintf(
-		`{"summary":"纪要","memories":[{"content":"","source_message_id":1},{"content":"%s","source_message_id":1},{"content":"有效记忆","source_message_id":99}]}`,
+		`{"summary":"纪要","memories":[{"content":"","source_message_ids":[1]},{"content":"%s","source_message_ids":[1]},{"content":"有效记忆","source_message_ids":[99]}]}`,
 		long)
 	p.embedding = &fakeEmbedding{vectors: map[string][]float32{"有效记忆": {1, 0, 0}}, name: "fake/m1"}
 

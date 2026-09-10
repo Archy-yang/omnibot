@@ -6,6 +6,7 @@ import (
 	memorydomain "omnibot/internal/domain/memory"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type MemoryRepository interface {
@@ -24,6 +25,10 @@ type MemoryRepository interface {
 	UpdateContentByID(id int64, userID int64, content string) (*memorydomain.Memory, error)
 	// UpdateContentEmbeddingByID 沉淀管线疑似冲突时原位更新(内容+向量+模型标记,§7.3)。
 	UpdateContentEmbeddingByID(id int64, userID int64, content string, embedding []float32, embeddingModel string) error
+	// CreateLinks 批量写入记忆↔消息溯源映射(M5.2;重复对幂等跳过)。
+	CreateLinks(links []memorydomain.MemoryMessageLink) error
+	// ReplaceLinksForMemory 原位更新记忆时整体替换其溯源映射(空切片=清空)。
+	ReplaceLinksForMemory(memoryID int64, messageIDs []int64) error
 }
 
 type memoryRepository struct {
@@ -137,4 +142,26 @@ func (r *memoryRepository) UpdateContentEmbeddingByID(id int64, userID int64, co
 	mem.EmbeddingModel = embeddingModel
 	mem.UpdatedAt = time.Now()
 	return r.db.Save(&mem).Error
+}
+
+// CreateLinks 批量写入记忆↔消息溯源映射(M5.2):唯一索引去重,重复对幂等跳过。
+func (r *memoryRepository) CreateLinks(links []memorydomain.MemoryMessageLink) error {
+	if len(links) == 0 {
+		return nil
+	}
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error
+}
+
+// ReplaceLinksForMemory 原位更新记忆时整体替换其溯源映射(事务:删旧+写新;空切片=清空)。
+func (r *memoryRepository) ReplaceLinksForMemory(memoryID int64, messageIDs []int64) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("memory_id = ?", memoryID).Delete(&memorydomain.MemoryMessageLink{}).Error; err != nil {
+			return err
+		}
+		links := memorydomain.NewMemoryMessageLinks(memoryID, messageIDs)
+		if len(links) == 0 {
+			return nil // GORM 拒绝 Create 空切片
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error
+	})
 }

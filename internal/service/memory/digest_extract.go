@@ -18,9 +18,24 @@ const (
 )
 
 // memoryCandidate LLM 提取的单条记忆候选(schema 与 pipelineSystemPrompt 对齐)。
+// M5.2:溯源从单值升级为多值数组(信息常由多轮交叉得出),落 memory_message_links。
 type memoryCandidate struct {
-	Content         string `json:"content"`
-	SourceMessageID int64  `json:"source_message_id"`
+	Content          string  `json:"content"`
+	SourceMessageIDs []int64 `json:"source_message_ids"`
+}
+
+// validSourceIDs 溯源校验:只保留落在本次沉淀区间 (fromID,toID] 的消息 ID
+// (越界丢弃——不可信的指针不如没有)。返回按序去重后的合法 ID。
+func validSourceIDs(candidates memoryCandidate, fromID, toID int64) []int64 {
+	seen := make(map[int64]bool, len(candidates.SourceMessageIDs))
+	out := make([]int64, 0, len(candidates.SourceMessageIDs))
+	for _, id := range candidates.SourceMessageIDs {
+		if id > fromID && id <= toID && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // applyMemories 长期记忆提取落库(接收管线单次 LLM 调用解析出的候选)。
@@ -54,10 +69,11 @@ func (p *DigestPipeline) applyMemories(
 		if content == "" || utf8.RuneCountInString(content) > MaxMemoryContentLength {
 			continue
 		}
-		// 溯源校验:必须落在本次处理区间内,否则置 NULL(不可信的指针不如没有指针)
+		// 溯源校验:必须落在本次处理区间内(多值,越界丢弃;不可信的指针不如没有指针)
+		validIDs := validSourceIDs(c, fromID, toID)
 		var sourceMsgID *int64
-		if c.SourceMessageID > fromID && c.SourceMessageID <= toID {
-			id := c.SourceMessageID
+		if len(validIDs) > 0 {
+			id := validIDs[0] // 首个合法来源作主指针(展示兼容),完整映射见 memory_message_links
 			sourceMsgID = &id
 		}
 
@@ -80,19 +96,24 @@ func (p *DigestPipeline) applyMemories(
 			if err := p.memoryRepo.UpdateContentEmbeddingByID(dupID, userID, content, vec, currentModel); err != nil {
 				logger.WarnWithFields("memory: 疑似冲突更新失败,按新增处理",
 					zap.Int64("user_id", userID), zap.Int64("memory_id", dupID), zap.Error(err))
-				p.createAutoMemory(userID, content, sourceMsgID, vec, currentModel, &existing)
+				p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, &existing)
 			} else {
+				// 新事实依据的消息变了 → 整体替换溯源映射
+				if err := p.memoryRepo.ReplaceLinksForMemory(dupID, validIDs); err != nil {
+					logger.WarnWithFields("memory: 溯源映射替换失败",
+						zap.Int64("user_id", userID), zap.Int64("memory_id", dupID), zap.Error(err))
+				}
 				// 同步内存副本,影响后续候选的比对
 				updateExistingInPlace(existing, dupID, content, vec, currentModel)
 			}
 		default:
-			p.createAutoMemory(userID, content, sourceMsgID, vec, currentModel, &existing)
+			p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, &existing)
 		}
 	}
 }
 
 func (p *DigestPipeline) createAutoMemory(
-	userID int64, content string, sourceMsgID *int64, vec []float32, model string, existing *[]*memorydomain.Memory,
+	userID int64, content string, sourceMsgID *int64, validIDs []int64, vec []float32, model string, existing *[]*memorydomain.Memory,
 ) {
 	m := memorydomain.NewAutoMemory(userID, content, sourceMsgID)
 	if vec != nil {
@@ -103,6 +124,10 @@ func (p *DigestPipeline) createAutoMemory(
 		logger.WarnWithFields("memory: 自动记忆落库失败",
 			zap.Int64("user_id", userID), zap.Error(err))
 		return
+	}
+	if err := p.memoryRepo.CreateLinks(memorydomain.NewMemoryMessageLinks(m.ID, validIDs)); err != nil {
+		logger.WarnWithFields("memory: 记忆溯源映射写入失败",
+			zap.Int64("user_id", userID), zap.Int64("memory_id", m.ID), zap.Error(err))
 	}
 	*existing = append(*existing, m)
 }

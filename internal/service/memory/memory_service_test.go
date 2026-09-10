@@ -48,6 +48,10 @@ func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
 	return nil
 }
 
+func (m *mockMemoryRepository) CreateLinks([]memorydomain.MemoryMessageLink) error { return nil }
+
+func (m *mockMemoryRepository) ReplaceLinksForMemory(int64, []int64) error { return nil }
+
 func (m *mockMemoryRepository) ListByUserID(userID int64) ([]*memorydomain.Memory, error) {
 	return m.memories, m.listErr
 }

@@ -151,6 +151,7 @@ func autoMigrate(db *gorm.DB) error {
 		&conversation.Message{},
 		&conversation.AgentStep{},
 		&memory.Memory{},
+		&memory.MemoryMessageLink{},  // M5.2:记忆↔消息多对多溯源映射(§7.3)
 		&memory.ConversationDigest{}, // 12-记忆系统技术方案 §4.2:中期纪要
 		&memory.DigestWatermark{},    // §4.3:摘要管线水位(单用户单行)
 		&agent.AgentTask{},
