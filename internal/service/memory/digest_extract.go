@@ -42,21 +42,22 @@ func validSourceIDs(candidates memoryCandidate, fromID, toID int64) []int64 {
 //
 // 逐条过滤(空/超长/溯源越界) → 嵌入 → 与既有同模型记忆余弦比对
 // (跳过/原位更新/新增)。单条失败仅记日志,不影响其余。宁漏勿错(PRD 红线)。
+// 返回 (新增数, 原位更新数) 供留痕。
 func (p *DigestPipeline) applyMemories(
 	ctx context.Context,
 	userID int64,
 	candidates []memoryCandidate,
 	fromID, toID int64,
-) {
+) (created, updated int) {
 	if len(candidates) == 0 {
-		return
+		return 0, 0
 	}
 
 	existing, err := p.memoryRepo.ListByUserID(userID)
 	if err != nil {
 		logger.WarnWithFields("memory: 读既有记忆失败,放弃本批提取",
 			zap.Int64("user_id", userID), zap.Error(err))
-		return
+		return 0, 0
 	}
 	var currentModel string
 	emb := p.embeddingFor(userID)
@@ -97,6 +98,7 @@ func (p *DigestPipeline) applyMemories(
 				logger.WarnWithFields("memory: 疑似冲突更新失败,按新增处理",
 					zap.Int64("user_id", userID), zap.Int64("memory_id", dupID), zap.Error(err))
 				p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, &existing)
+				created++
 			} else {
 				// 新事实依据的消息变了 → 整体替换溯源映射
 				if err := p.memoryRepo.ReplaceLinksForMemory(dupID, validIDs); err != nil {
@@ -105,11 +107,14 @@ func (p *DigestPipeline) applyMemories(
 				}
 				// 同步内存副本,影响后续候选的比对
 				updateExistingInPlace(existing, dupID, content, vec, currentModel)
+				updated++
 			}
 		default:
 			p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, &existing)
+			created++
 		}
 	}
+	return created, updated
 }
 
 func (p *DigestPipeline) createAutoMemory(

@@ -301,6 +301,146 @@ func TestExtractMemories_ConflictUpdate_ReplacesLinks(t *testing.T) {
 	require.Equal(t, []int64{3, 4}, linkMsgIDs, "溯源映射应整体替换为新依据")
 }
 
+// ===== 留痕(M5.3):task+step 可观测 =====
+
+// fakeDigestAudit 捕获全部留痕调用。
+type fakeDigestAudit struct {
+	beginUserID, beginFrom, beginTo int64
+	beginCount                      int
+	beginErr                        error
+	taskIDSeq                       int64
+
+	steps []struct {
+		taskID, userID, seq int64
+		kind, tool, status  string
+		request, response   string
+	}
+	ends []struct {
+		taskID           int64
+		status, artifact string
+		errMsg           string
+	}
+}
+
+func (f *fakeDigestAudit) BeginTask(userID, fromID, toID int64, msgCount int) (int64, error) {
+	if f.beginErr != nil {
+		return 0, f.beginErr
+	}
+	f.beginUserID, f.beginFrom, f.beginTo, f.beginCount = userID, fromID, toID, msgCount
+	f.taskIDSeq++
+	return f.taskIDSeq, nil
+}
+
+func (f *fakeDigestAudit) RecordStep(taskID, userID int64, seq int, kind, tool, request, response, status string, _ int64) error {
+	f.steps = append(f.steps, struct {
+		taskID, userID, seq int64
+		kind, tool, status  string
+		request, response   string
+	}{taskID, userID, int64(seq), kind, tool, status, request, response})
+	return nil
+}
+
+func (f *fakeDigestAudit) EndTask(taskID int64, status, artifact, errMsg string) error {
+	f.ends = append(f.ends, struct {
+		taskID           int64
+		status, artifact string
+		errMsg           string
+	}{taskID, status, artifact, errMsg})
+	return nil
+}
+
+// TestDigestPipeline_AuditSuccess 成功轮 → 建 task + 2 步(llm_call/persist) + completed。
+func TestDigestPipeline_AuditSuccess(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.resp = `{"summary":"纪要内容","memories":[{"content":"用户偏好简洁回复","source_message_ids":[2]}]}`
+	audit := &fakeDigestAudit{}
+	p.SetAudit(audit)
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if audit.beginUserID != 42 || audit.beginFrom != 1 || audit.beginTo != 3 || audit.beginCount != 3 {
+		t.Errorf("BeginTask 参数不符: user=%d from=%d to=%d count=%d",
+			audit.beginUserID, audit.beginFrom, audit.beginTo, audit.beginCount)
+	}
+	if len(audit.steps) != 2 {
+		t.Fatalf("应记录 2 步, got %d", len(audit.steps))
+	}
+	if audit.steps[0].kind != "llm_call" || audit.steps[0].status != "success" {
+		t.Errorf("step0 应为 llm_call/success, got %+v", audit.steps[0])
+	}
+	if !strings.Contains(audit.steps[0].request, "消息1") {
+		t.Errorf("llm_call request 应存对话原文, got %q", audit.steps[0].request)
+	}
+	if audit.steps[1].tool != "digest.persist" || audit.steps[1].status != "success" {
+		t.Errorf("step1 应为 digest.persist/success, got %+v", audit.steps[1])
+	}
+	if len(audit.ends) != 1 || audit.ends[0].status != "completed" || audit.ends[0].artifact != "纪要内容" {
+		t.Errorf("EndTask 应为 completed+纪要, got %+v", audit.ends)
+	}
+}
+
+// TestDigestPipeline_AuditLLMFailure LLM 失败 → llm_call error 步 + failed 收尾。
+func TestDigestPipeline_AuditLLMFailure(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.respErr = fmt.Errorf("llm down")
+	audit := &fakeDigestAudit{}
+	p.SetAudit(audit)
+
+	if err := p.RunOnce(context.Background(), 42); err == nil {
+		t.Fatal("LLM 失败应返回 error")
+	}
+	if len(audit.steps) != 1 || audit.steps[0].status != "error" {
+		t.Fatalf("应记录 1 步 llm_call/error, got %+v", audit.steps)
+	}
+	if len(audit.ends) != 1 || audit.ends[0].status != "failed" || !strings.Contains(audit.ends[0].errMsg, "llm down") {
+		t.Errorf("EndTask 应为 failed 含错误, got %+v", audit.ends)
+	}
+}
+
+// TestDigestPipeline_AuditNoLLM_NoTask 用户无 LLM → 完全不留痕(避免每轮刷 cancelled 任务)。
+func TestDigestPipeline_AuditNoLLM_NoTask(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	llm.respErr = ErrPipelineNoLLM
+	audit := &fakeDigestAudit{}
+	p.SetAudit(audit)
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("无配置应静默跳过, got %v", err)
+	}
+	if audit.taskIDSeq != 0 || len(audit.ends) != 0 {
+		t.Errorf("无 LLM 不应建任务, got tasks=%d ends=%d", audit.taskIDSeq, len(audit.ends))
+	}
+}
+
+// TestDigestPipeline_AuditBeginFails_Degrades 留痕建任务失败 → 降级仅日志,沉淀照常完成。
+func TestDigestPipeline_AuditBeginFails_Degrades(t *testing.T) {
+	p, db, _, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	audit := &fakeDigestAudit{beginErr: fmt.Errorf("audit db down")}
+	p.SetAudit(audit)
+
+	if err := p.RunOnce(context.Background(), 42); err != nil {
+		t.Fatalf("留痕失败不应阻断沉淀, got %v", err)
+	}
+	var digestCount int64
+	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
+	if digestCount != 1 {
+		t.Errorf("纪要应照常落库, got %d", digestCount)
+	}
+	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
+	if wm == nil || wm.LastDigestMsgID != 3 {
+		t.Errorf("水位应照常推进, got %+v", wm)
+	}
+}
+
 // TestDigestPipeline_LLMFailureRetriesSameRange LLM 失败 → 整批作废、水位不动,下轮重试同一区间(TDD#6)。
 func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	p, db, llm, source := pipelineSetup(t)

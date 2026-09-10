@@ -24,6 +24,8 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	domainagent "omnibot/internal/domain/agent"
+	"omnibot/internal/domain/conversation"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
 	agentRepo "omnibot/internal/repository/agent"
@@ -126,6 +128,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			digestThreshold,
 		)
 		digestPipeline.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
+		// 留痕(M5.3):task+step 可观测,静默不进回执;留痕失败管线自动降级为仅日志
+		digestPipeline.SetAudit(&digestAuditAdapter{
+			taskRepo: agentRepo.NewAgentTaskRepository(dbConn.GetGormDB()),
+			stepRepo: stepRepo,
+		})
 		logger.Info("memory: 沉淀管线已启用",
 			zap.Int("threshold", digestThreshold),
 			zap.Bool("embedding", memoryEmbedding != nil))
@@ -532,6 +539,51 @@ func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
 		agentTimeout = 30 * time.Second
 	}
 	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+}
+
+// digestAuditAdapter 适配 agent_tasks/agent_steps → memory.DigestAudit(M5.3):
+// 每轮沉淀 = 一条 task(SubAgentType=digest,Reported=true 静默——不进主 Agent 回执轮询),
+// 步骤锚 task_id 记执行链。留痕失败由管线侧降级为仅日志,这里只透传错误。
+type digestAuditAdapter struct {
+	taskRepo agentRepo.AgentTaskRepository
+	stepRepo chatRepo.AgentStepRepository
+}
+
+func (a *digestAuditAdapter) BeginTask(userID, fromID, toID int64, msgCount int) (int64, error) {
+	spec := domainagent.TaskSpec{
+		Goal: fmt.Sprintf("记忆沉淀:消息 #%d-#%d(%d 条)", fromID, toID, msgCount),
+		Type: "digest",
+	}
+	t := domainagent.NewAgentTask(userID, spec, "web", "")
+	t.Reported = true // 静默:digest 是系统能力,完成/失败都不打扰主 Agent
+	if err := a.taskRepo.Create(t); err != nil {
+		return 0, err
+	}
+	if err := a.taskRepo.UpdateStatus(t.ID, domainagent.TaskStatusRunning, nil, nil); err != nil {
+		return 0, err
+	}
+	return t.ID, nil
+}
+
+func (a *digestAuditAdapter) RecordStep(taskID, userID int64, seq int, kind, tool, request, response, status string, durationMs int64) error {
+	step := &conversation.AgentStep{
+		UserID: userID, TaskID: &taskID, Seq: seq,
+		Kind: kind, Status: status, DurationMs: durationMs,
+		Tool: tool, Request: request, Response: response,
+		CreatedAt: time.Now(),
+	}
+	return a.stepRepo.CreateBatch([]*conversation.AgentStep{step})
+}
+
+func (a *digestAuditAdapter) EndTask(taskID int64, status, artifact, errMsg string) error {
+	var artifactPtr, errMsgPtr *string
+	if artifact != "" {
+		artifactPtr = &artifact
+	}
+	if errMsg != "" {
+		errMsgPtr = &errMsg
+	}
+	return a.taskRepo.UpdateStatus(taskID, status, artifactPtr, errMsgPtr)
 }
 
 // userPipelineLLM 沉淀管线 LLM 按用户解析(M5.1 修订 §7.2):

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
@@ -54,9 +55,15 @@ type DigestPipeline struct {
 	// embeddingResolver 用户级向量解析(M5.1,§5.3 同源):非 nil 且返回非 nil 时优先;
 	// nil/解析为 nil → 回落系统默认 embedding。
 	embeddingResolver func(userID int64) EmbeddingProvider
-	threshold         int      // pending 消息数阈值
-	maxBatchMessages  int      // 单轮最多沉淀的消息数(积压分块,防巨包请求)
-	inflight          sync.Map // userID → struct{} (per-user 单飞标记)
+	threshold         int         // pending 消息数阈值
+	maxBatchMessages  int         // 单轮最多沉淀的消息数(积压分块,防巨包请求)
+	audit             DigestAudit // 留痕(M5.3):task+step 可观测,nil=仅日志
+	inflight          sync.Map    // userID → struct{} (per-user 单飞标记)
+}
+
+// SetAudit 注入留痕适配器(装配点调用;不影响既有测试)。
+func (p *DigestPipeline) SetAudit(a DigestAudit) {
+	p.audit = a
 }
 
 const digestMaxBatchMessages = 40 // 单轮块上限:两倍默认阈值,兼顾摊销与请求体积
@@ -166,13 +173,39 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 	// 单次 LLM 调用同时产出纪要与记忆候选(§7 修订:合并调用)。
 	// 调用失败或结果 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
 	// 用户无可用配置(ErrPipelineNoLLM)→ 静默跳过(配置后从当前区间自动开始)。
+	llmStart := time.Now()
 	resp, err := p.llm.Complete(ctx, userID, pipelineSystemPrompt, transcript)
 	if err != nil {
 		if errors.Is(err, ErrPipelineNoLLM) {
 			logger.InfoWithFields("memory: 用户无可用 LLM 配置,本轮沉淀跳过",
 				zap.Int64("user_id", userID))
-			return nil
+			return nil // 不留痕:没有发生任何真实工作,避免每轮刷 cancelled 任务
 		}
+	}
+
+	// 留痕(M5.3):LLM 返回后(真实工作已发生/已失败)建 task,失败降级为仅日志(审计是旁路)
+	var taskID int64
+	if p.audit != nil {
+		if id, err := p.audit.BeginTask(userID, fromID+1, toID, len(messages)); err != nil {
+			logger.WarnWithFields("memory: 沉淀留痕建任务失败,本轮降级为仅日志",
+				zap.Int64("user_id", userID), zap.Error(err))
+		} else {
+			taskID = id
+		}
+	}
+	if p.audit != nil && taskID != 0 {
+		stepStatus := "success"
+		if err != nil {
+			stepStatus = "error"
+		}
+		if stepErr := p.audit.RecordStep(taskID, userID, 0, "llm_call", "memory.digest",
+			transcript, resp, stepStatus, time.Since(llmStart).Milliseconds()); stepErr != nil {
+			logger.WarnWithFields("memory: 沉淀留痕记步骤失败",
+				zap.Int64("user_id", userID), zap.Error(stepErr))
+		}
+	}
+	if err != nil {
+		p.endAuditTask(taskID, "failed", "", fmt.Sprintf("沉淀调用失败: %v", err))
 		return fmt.Errorf("沉淀调用失败: %w", err)
 	}
 	var parsed struct {
@@ -180,6 +213,7 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		Memories []memoryCandidate `json:"memories"`
 	}
 	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
+		p.endAuditTask(taskID, "failed", "", fmt.Sprintf("沉淀结果 schema 非法: %v", err))
 		return fmt.Errorf("沉淀结果 schema 非法,整批作废: %w", err)
 	}
 
@@ -189,15 +223,41 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		digest := memorydomain.NewConversationDigest(userID, summary, fromID+1, toID, len(messages))
 		p.stampEmbedding(userID, digest, summary)
 		if err := p.digestRepo.Create(digest); err != nil {
+			p.endAuditTask(taskID, "failed", "", fmt.Sprintf("落纪要: %v", err))
 			return fmt.Errorf("落纪要: %w", err)
 		}
 	}
 
 	// 长期:记忆提取落库(逐条容错,单条失败不影响其余)
-	p.applyMemories(ctx, userID, parsed.Memories, fromID, toID)
+	created, updated := p.applyMemories(ctx, userID, parsed.Memories, fromID, toID)
+	if p.audit != nil && taskID != 0 {
+		respJSON, _ := json.Marshal(map[string]int{"created": created, "updated": updated})
+		if stepErr := p.audit.RecordStep(taskID, userID, 1, "tool_call", "digest.persist",
+			fmt.Sprintf("区间 (%d,%d] 消息 %d 条", fromID, toID, len(messages)),
+			string(respJSON), "success", 0); stepErr != nil {
+			logger.WarnWithFields("memory: 沉淀留痕记步骤失败",
+				zap.Int64("user_id", userID), zap.Error(stepErr))
+		}
+	}
 
 	// 推进水位
-	return p.watermarkRepo.Upsert(userID, toID)
+	if err := p.watermarkRepo.Upsert(userID, toID); err != nil {
+		p.endAuditTask(taskID, "failed", summary, fmt.Sprintf("推进水位: %v", err))
+		return fmt.Errorf("推进水位: %w", err)
+	}
+	p.endAuditTask(taskID, "completed", summary, "")
+	return nil
+}
+
+// endAuditTask 收尾留痕(best-effort;taskID=0 或留痕失败仅记日志)。
+func (p *DigestPipeline) endAuditTask(taskID int64, status, artifact, errMsg string) {
+	if p.audit == nil || taskID == 0 {
+		return
+	}
+	if err := p.audit.EndTask(taskID, status, artifact, errMsg); err != nil {
+		logger.WarnWithFields("memory: 沉淀留痕收尾失败",
+			zap.Int64("task_id", taskID), zap.Error(err))
+	}
 }
 
 // stampEmbedding 为纪要嵌入向量(用户级解析优先,回落系统默认);
