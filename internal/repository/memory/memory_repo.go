@@ -29,6 +29,8 @@ type MemoryRepository interface {
 	CreateLinks(links []memorydomain.MemoryMessageLink) error
 	// ReplaceLinksForMemory 原位更新记忆时整体替换其溯源映射(空切片=清空)。
 	ReplaceLinksForMemory(memoryID int64, messageIDs []int64) error
+	// ListByUserIDAndMatter 某事项挂靠的记忆(M6.2 事项全景检索用;创建时间升序)。
+	ListByUserIDAndMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
 }
 
 type memoryRepository struct {
@@ -164,4 +166,13 @@ func (r *memoryRepository) ReplaceLinksForMemory(memoryID int64, messageIDs []in
 		}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error
 	})
+}
+
+// ListByUserIDAndMatter 某事项挂靠的记忆(M6.2 事项全景检索用)。
+func (r *memoryRepository) ListByUserIDAndMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error) {
+	var memories []*memorydomain.Memory
+	err := r.db.Where("user_id = ? AND matter_id = ?", userID, matterID).
+		Order("id ASC").
+		Find(&memories).Error
+	return memories, err
 }

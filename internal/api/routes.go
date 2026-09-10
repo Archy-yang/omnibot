@@ -91,7 +91,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 12-记忆系统技术方案 §5.3:向量化 provider 按配置装配,未配置=子串降级(记忆照常存取)。
 	memoryEmbedding := buildEmbeddingProvider(cfg)
 	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
-	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository)
+	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository, memoryRepo.NewMatterRepository(dbConn.GetGormDB()))
 	if aware, ok := memorySvc.(memoryService.EmbeddingAware); ok {
 		aware.SetEmbeddingProvider(memoryEmbedding)
 	}

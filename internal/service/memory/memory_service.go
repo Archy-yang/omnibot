@@ -31,6 +31,8 @@ type MemoryService interface {
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 	// 语义检索(12-记忆系统技术方案 §8):embedding 未配置时自动降级子串
 	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
+	// SearchMatters 事项优先检索(M6.2 两段式第一段):命中事项返回其状态+挂靠记忆全景。
+	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
 	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订):
 	// 手动记忆全量(用户意志,按时间正序) + 自动记忆条数(只出存在性提示,内容走工具检索)。
@@ -40,12 +42,13 @@ type MemoryService interface {
 type memoryService struct {
 	repo       memoryrepo.MemoryRepository
 	digestRepo memoryrepo.DigestRepository
-	embedding  EmbeddingProvider // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
-	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
+	matterRepo memoryrepo.MatterRepository // M6.2:事项优先检索;nil=无事项层(永不命中)
+	embedding  EmbeddingProvider           // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
+	resolver   EmbeddingResolver           // 用户级覆盖;SetEmbeddingResolver 注入,可选
 }
 
-func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository) MemoryService {
-	return &memoryService{repo: repo, digestRepo: digestRepo}
+func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository, matterRepo memoryrepo.MatterRepository) MemoryService {
+	return &memoryService{repo: repo, digestRepo: digestRepo, matterRepo: matterRepo}
 }
 
 // EmbeddingAware 支持注入向量化 provider 的实现增强接口(可选能力,不影响记忆存取)。

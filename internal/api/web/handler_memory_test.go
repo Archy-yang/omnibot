@@ -392,6 +392,10 @@ func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string,
 	return nil, nil
 }
 
+func (m *mockMemoryService) SearchMatters(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MatterHit, error) {
+	return nil, nil
+}
+
 func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.DigestHit, error) {
 	return nil, nil
 }

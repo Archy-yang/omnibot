@@ -20,6 +20,11 @@ import (
 const (
 	// substringBonus 子串命中的加成分(语义满分为 1,加成必须明显小于语义差值)
 	substringBonus = 0.1
+	// 事项检索(M6.2 两段式):标题子串命中是强信号(用户提起事项名),独立加成;
+	// 达到 matterHitThreshold 才算命中——避免每个查询都勉强凑出一个事项。
+	matterTitleBonus   = 0.3
+	matterDescBonus    = 0.1
+	matterHitThreshold = 0.25
 )
 
 // CosineSimilarity 余弦相似度;零向量/长度不符返回 0(不可比,不报错)。
@@ -97,6 +102,59 @@ func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query 
 		if score > 0 {
 			hits = append(hits, memorydomain.MemoryHit{Memory: m, Score: score})
 		}
+	}
+
+	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	if topK > 0 && len(hits) > topK {
+		hits = hits[:topK]
+	}
+	return hits, nil
+}
+
+// SearchMatters 事项优先检索(M6.2 两段式第一段):
+// 向量(事项 Title+StateDesc)+ 标题/状态子串融合打分,达阈值的按分降序取 topK;
+// 每个命中事项挂出其关联原子记忆全景("这件事到哪了"直接得到完整答案)。
+func (s *memoryService) SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error) {
+	if s.matterRepo == nil {
+		return nil, nil
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	matters, err := s.matterRepo.ListActiveByUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	provider := s.resolveProvider(userID)
+	qvec := s.embedQuery(ctx, provider, query)
+	var currentModel string
+	if provider != nil {
+		currentModel = provider.Name()
+	}
+
+	lowered := strings.ToLower(query)
+	hits := make([]memorydomain.MatterHit, 0, len(matters))
+	for _, m := range matters {
+		score := 0.0
+		if qvec != nil && len(m.Embedding) > 0 && m.EmbeddingModel == currentModel {
+			score = CosineSimilarity(qvec, m.Embedding)
+		}
+		if strings.Contains(strings.ToLower(m.Title), lowered) {
+			score += matterTitleBonus
+		}
+		if strings.Contains(strings.ToLower(m.StateDesc), lowered) {
+			score += matterDescBonus
+		}
+		if score < matterHitThreshold {
+			continue
+		}
+		facts, err := s.repo.ListByUserIDAndMatter(userID, m.ID)
+		if err != nil {
+			return nil, err
+		}
+		hits = append(hits, memorydomain.MatterHit{Matter: m, Facts: facts, Score: score})
 	}
 
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
