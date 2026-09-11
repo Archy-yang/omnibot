@@ -129,7 +129,7 @@ type MatterSearcher interface {
 	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 }
 
-// searchMemoriesSemantic 语义检索路径:返回记忆内容 + 来源标识。
+// searchMemoriesSemantic 语义检索路径:返回记忆内容 + 来源标识 + 记忆发生时间。
 func searchMemoriesSemantic(ctx context.Context, searcher MemorySearcher, userID int64, query string) (string, error) {
 	hits, err := searcher.SearchMemories(ctx, userID, query, 10)
 	if err != nil {
@@ -141,13 +141,25 @@ func searchMemoriesSemantic(ctx context.Context, searcher MemorySearcher, userID
 	var b strings.Builder
 	fmt.Fprintf(&b, "找到 %d 条相关记忆:\n", len(hits))
 	for i, h := range hits {
-		source := ""
-		if h.Memory.Source == memorydomain.MemorySourceAuto {
-			source = "(自动记忆)"
-		}
-		fmt.Fprintf(&b, "%d. %s%s\n", i+1, h.Memory.Content, source)
+		fmt.Fprintf(&b, "%d. %s%s\n", i+1, h.Memory.Content, memoryAnnotation(h.Memory))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// memoryAnnotation 记忆条目的括号标注:来源(自动/手动)+ 发生日期(记录时间),
+// 让 LLM 回答时能带上"什么时候"而不只"是什么"。
+func memoryAnnotation(m *memorydomain.Memory) string {
+	parts := make([]string, 0, 2)
+	if m.Source == memorydomain.MemorySourceAuto {
+		parts = append(parts, "自动记忆")
+	}
+	if !m.CreatedAt.IsZero() {
+		parts = append(parts, m.CreatedAt.Format("2006-01-02"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, " · ") + ")"
 }
 
 // searchMemoriesMatterFirst 两段式检索:第一段事项(最多 2 个,命中即给全景),
@@ -161,10 +173,12 @@ func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearche
 	seen := make(map[int64]bool)
 	var b strings.Builder
 	for _, mh := range matterHits {
-		fmt.Fprintf(&b, "【事项】%s\n当前状态:%s\n", mh.Matter.Title, mh.Matter.StateDesc)
+		// 事项带最近更新时间:LLM 能判断状态的新旧
+		fmt.Fprintf(&b, "【事项】%s(更新于 %s)\n当前状态:%s\n",
+			mh.Matter.Title, mh.Matter.UpdatedAt.Format("2006-01-02"), mh.Matter.StateDesc)
 		for _, f := range mh.Facts {
 			seen[f.ID] = true
-			fmt.Fprintf(&b, "- %s(%s)\n", f.Content, f.Kind)
+			fmt.Fprintf(&b, "- %s(%s · %s)\n", f.Content, f.Kind, f.CreatedAt.Format("2006-01-02"))
 		}
 		b.WriteString("\n")
 	}
@@ -178,12 +192,8 @@ func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearche
 		if seen[h.Memory.ID] {
 			continue
 		}
-		source := ""
-		if h.Memory.Source == memorydomain.MemorySourceAuto {
-			source = "(自动记忆)"
-		}
 		shown++
-		fmt.Fprintf(&b, "%d. %s%s\n", shown, h.Memory.Content, source)
+		fmt.Fprintf(&b, "%d. %s%s\n", shown, h.Memory.Content, memoryAnnotation(h.Memory))
 	}
 
 	if len(matterHits) == 0 && shown == 0 {
@@ -234,7 +244,10 @@ func CreateSearchHistoryTool(digestSearcher DigestSearcher) Tool {
 			var b strings.Builder
 			fmt.Fprintf(&b, "找到 %d 段相关对话纪要:\n", len(hits))
 			for i, h := range hits {
-				fmt.Fprintf(&b, "%d. %s（对话 #%d~#%d）\n", i+1, h.Digest.Summary, h.Digest.FromMessageID, h.Digest.ToMessageID)
+				// 纪要带生成日期:LLM 知道这段对话发生在什么时候
+				fmt.Fprintf(&b, "%d. %s（对话 #%d~#%d · %s）\n",
+					i+1, h.Digest.Summary, h.Digest.FromMessageID, h.Digest.ToMessageID,
+					h.Digest.CreatedAt.Format("2006-01-02"))
 			}
 			return strings.TrimRight(b.String(), "\n"), nil
 		},

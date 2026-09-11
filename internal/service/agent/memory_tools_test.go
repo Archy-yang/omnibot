@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 )
@@ -24,13 +25,14 @@ func (fakeSearchableMemory) GetRecentForContext(_ context.Context, _ int64, limi
 }
 
 func (fakeSearchableMemory) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+	at := time.Date(2026, 9, 10, 8, 0, 0, 0, time.Local)
 	return []memorydomain.MemoryHit{
-		{Memory: &memorydomain.Memory{ID: 1, Content: "用户偏好简洁回复", Source: memorydomain.MemorySourceAuto}, Score: 0.95},
-		{Memory: &memorydomain.Memory{ID: 2, Content: "用户在上海工作", Source: memorydomain.MemorySourceManual}, Score: 0.42},
+		{Memory: &memorydomain.Memory{ID: 1, Content: "用户偏好简洁回复", Source: memorydomain.MemorySourceAuto, CreatedAt: at}, Score: 0.95},
+		{Memory: &memorydomain.Memory{ID: 2, Content: "用户在上海工作", Source: memorydomain.MemorySourceManual, CreatedAt: at}, Score: 0.42},
 	}, nil
 }
 
-// TestSearchMemoriesTool_Semantic 语义路径:返回来源标识,自动/手动区分(PRD AC1.3)。
+// TestSearchMemoriesTool_Semantic 语义路径:返回来源标识(自动/手动)+ 记忆发生时间(PRD AC1.3 + 时间可观测)。
 func TestSearchMemoriesTool_Semantic(t *testing.T) {
 	tool := CreateSearchMemoriesTool(fakeSearchableMemory{})
 
@@ -38,7 +40,7 @@ func TestSearchMemoriesTool_Semantic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	for _, want := range []string{"用户偏好简洁回复", "用户在上海工作", "自动"} {
+	for _, want := range []string{"用户偏好简洁回复", "用户在上海工作", "自动", "2026-09-10"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出缺 %q:\n%s", want, out)
 		}
@@ -73,11 +75,11 @@ type fakeDigestSearcher struct{}
 
 func (fakeDigestSearcher) SearchDigests(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.DigestHit, error) {
 	return []memorydomain.DigestHit{
-		{Digest: &memorydomain.ConversationDigest{ID: 7, Summary: "聊了租房方案,倾向两居室", FromMessageID: 100, ToMessageID: 150}, Score: 0.9},
+		{Digest: &memorydomain.ConversationDigest{ID: 7, Summary: "聊了租房方案,倾向两居室", FromMessageID: 100, ToMessageID: 150, CreatedAt: time.Date(2026, 9, 8, 21, 0, 0, 0, time.Local)}, Score: 0.9},
 	}, nil
 }
 
-// TestSearchHistoryTool 落地实现:返回纪要 + 溯源区间,不再是"待实现"占位(TDD#11)。
+// TestSearchHistoryTool 落地实现:返回纪要 + 溯源区间 + 纪要发生时间,不再是"待实现"占位(TDD#11)。
 func TestSearchHistoryTool(t *testing.T) {
 	tool := CreateSearchHistoryTool(fakeDigestSearcher{})
 
@@ -85,7 +87,7 @@ func TestSearchHistoryTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	for _, want := range []string{"聊了租房方案", "100", "150"} {
+	for _, want := range []string{"聊了租房方案", "100", "150", "2026-09-08"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出缺 %q:\n%s", want, out)
 		}

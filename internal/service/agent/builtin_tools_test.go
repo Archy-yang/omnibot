@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 
@@ -98,10 +99,11 @@ func (f *matterFirstFake) GetRecentForContext(_ context.Context, _ int64, _ int)
 
 func TestSearchMemoriesTool_MatterFirstRendering(t *testing.T) {
 	mid := int64(7)
-	matter := &memorydomain.Matter{ID: mid, Title: "十一旅行", StateDesc: "机票别墅已订,交通未定"}
-	fact := &memorydomain.Memory{ID: 101, Content: "用户注重性价比", Kind: "fact", MatterID: &mid}
-	loop := &memorydomain.Memory{ID: 102, Content: "待核实实时票价", Kind: "loop", MatterID: &mid}
-	other := &memorydomain.Memory{ID: 103, Content: "用户是后端工程师", Source: memorydomain.MemorySourceAuto}
+	at := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+	matter := &memorydomain.Matter{ID: mid, Title: "十一旅行", StateDesc: "机票别墅已订,交通未定", UpdatedAt: at}
+	fact := &memorydomain.Memory{ID: 101, Content: "用户注重性价比", Kind: "fact", MatterID: &mid, CreatedAt: at}
+	loop := &memorydomain.Memory{ID: 102, Content: "待核实实时票价", Kind: "loop", MatterID: &mid, CreatedAt: at}
+	other := &memorydomain.Memory{ID: 103, Content: "用户是后端工程师", Source: memorydomain.MemorySourceAuto, CreatedAt: at}
 
 	fake := &matterFirstFake{
 		matters: []memorydomain.MatterHit{{Matter: matter, Facts: []*memorydomain.Memory{fact, loop}, Score: 0.5}},
@@ -116,9 +118,10 @@ func TestSearchMemoriesTool_MatterFirstRendering(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, "【事项】十一旅行")
 	require.Contains(t, out, "当前状态:机票别墅已订,交通未定")
-	require.Contains(t, out, "用户注重性价比(fact)")
-	require.Contains(t, out, "待核实实时票价(loop)")
-	require.Contains(t, out, "用户是后端工程师(自动记忆)")
+	require.Contains(t, out, "更新于 2026-09-09")
+	require.Contains(t, out, "用户注重性价比(fact · 2026-09-09)")
+	require.Contains(t, out, "待核实实时票价(loop · 2026-09-09)")
+	require.Contains(t, out, "用户是后端工程师(自动记忆 · 2026-09-09)")
 	require.Equal(t, 1, strings.Count(out, "待核实实时票价"), "事项全景里已展示的记忆不应在散点区重复")
 }
 

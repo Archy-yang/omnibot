@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -144,6 +145,46 @@ func TestUpdateTaskTool_NoGoalNoNote(t *testing.T) {
 	// 这里直接传空 goal/note 测参数校验
 	_, err := tool.Execute(ctx, map[string]interface{}{"task_id": float64(task.ID)})
 	require.Error(t, err)
+}
+
+// TestQueryTaskTool_Single_TimeFields query_task 返回带时间:创建时间必有,
+// 已结束任务带完成/取消时间(任务工具可观测性:LLM 能回答"任务什么时候派/什么时候跑完")。
+func TestQueryTaskTool_Single_TimeFields(t *testing.T) {
+	svc, repo, _ := setupTaskToolsTest(t)
+	tool := CreateQueryTaskTool(svc)
+
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("带时间的任务"), "web", "")
+	require.NoError(t, repo.Create(task))
+	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, nil, nil))
+
+	ctx := withUserID(context.Background(), 42)
+	result, err := tool.Execute(ctx, map[string]interface{}{"task_id": float64(task.ID)})
+	require.NoError(t, err)
+	assert.Contains(t, result, "创建于")
+	assert.Contains(t, result, "完成于")
+}
+
+// TestFormatTaskSummary_Times formatTaskSummary 按状态渲染时间行:
+// pending 只给创建时间;completed 给创建+完成;cancelled 给创建+取消。
+func TestFormatTaskSummary_Times(t *testing.T) {
+	created := time.Date(2026, 9, 11, 13, 5, 0, 0, time.Local)
+	finished := created.Add(2 * time.Minute)
+
+	pending := &TaskSummary{ID: 1, Status: "pending", Goal: "g", CreatedAt: created}
+	out := formatTaskSummary(pending)
+	assert.Contains(t, out, "创建于 2026-09-11 13:05")
+	assert.NotContains(t, out, "完成于")
+	assert.NotContains(t, out, "取消于")
+
+	completed := &TaskSummary{ID: 2, Status: "completed", Goal: "g", CreatedAt: created, FinishedAt: &finished}
+	out = formatTaskSummary(completed)
+	assert.Contains(t, out, "创建于 2026-09-11 13:05")
+	assert.Contains(t, out, "完成于 2026-09-11 13:07")
+
+	cancelled := &TaskSummary{ID: 3, Status: "cancelled", Goal: "g", CreatedAt: created, FinishedAt: &finished}
+	out = formatTaskSummary(cancelled)
+	assert.Contains(t, out, "取消于 2026-09-11 13:07")
+	assert.NotContains(t, out, "完成于")
 }
 
 // TestParseTaskID 各类型 task_id 解析。

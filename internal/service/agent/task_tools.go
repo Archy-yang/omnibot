@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	domainagent "omnibot/internal/domain/agent"
 )
 
 // CreateQueryTaskTool 创建 query_task 工具:主 Agent 主动查任务状态/列表。
@@ -172,7 +174,8 @@ func parseTaskID(raw interface{}) (int64, error) {
 	return 0, fmt.Errorf("task_id 缺失或类型无效")
 }
 
-// formatTaskSummary 格式化任务概要为给 LLM 读的文本。
+// formatTaskSummary 格式化任务概要为给 LLM 读的文本(含关键时间点:
+// 创建必有,结束任务带完成/取消时间,让 LLM 能回答"任务什么时候派/什么时候跑完")。
 func formatTaskSummary(s *TaskSummary) string {
 	artifactHint := ""
 	if s.Artifact != nil && *s.Artifact != "" {
@@ -183,8 +186,18 @@ func formatTaskSummary(s *TaskSummary) string {
 		}
 		artifactHint = fmt.Sprintf("\n  产出摘要: %s", a)
 	}
-	return fmt.Sprintf("任务 #%d [%s] %s\n  已执行 %d 步%s",
-		s.ID, s.Status, truncateGoal(s.Goal, 50), s.StepCount, artifactHint)
+	timeHint := fmt.Sprintf("创建于 %s", s.CreatedAt.Format("2006-01-02 15:04"))
+	if s.FinishedAt != nil {
+		verb := "完成于"
+		if s.Status == domainagent.TaskStatusCancelled {
+			verb = "取消于"
+		}
+		timeHint += fmt.Sprintf(",%s %s", verb, s.FinishedAt.Format("2006-01-02 15:04"))
+	} else if s.StartedAt != nil {
+		timeHint += fmt.Sprintf(",开始于 %s", s.StartedAt.Format("2006-01-02 15:04"))
+	}
+	return fmt.Sprintf("任务 #%d [%s] %s\n  %s · 已执行 %d 步%s",
+		s.ID, s.Status, truncateGoal(s.Goal, 50), timeHint, s.StepCount, artifactHint)
 }
 
 // CreateRequestInputTool 创建 request_input 工具:子 Agent 主动向用户/主 Agent 要输入(#19)。

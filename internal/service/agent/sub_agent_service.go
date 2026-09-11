@@ -239,16 +239,21 @@ func (s *SubAgentService) GetTaskArtifact(taskID int64) (*domainagent.Artifact, 
 	return art, nil
 }
 
-// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:只给状态/goal 摘要/步骤数。
+// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:
+// 只给状态/goal 摘要/步骤数 + 关键时间点(创建/开始/结束,LLM 能回答"任务何时派/何时跑完")。
 type TaskSummary struct {
-	ID        int64   `json:"id"`
-	UserID    int64   `json:"-"`
-	SubAgent  string  `json:"sub_agent"`
-	Goal      string  `json:"goal"`
-	Status    string  `json:"status"`
-	StepCount int     `json:"step_count"`
-	Reported  bool    `json:"reported"`
-	Artifact  *string `json:"artifact,omitempty"` // completed 时给摘要
+	ID        int64      `json:"id"`
+	UserID    int64      `json:"-"`
+	SubAgent  string     `json:"sub_agent"`
+	Goal      string     `json:"goal"`
+	Status    string     `json:"status"`
+	StepCount int        `json:"step_count"`
+	Reported  bool       `json:"reported"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	// FinishedAt 结束时间:completed 取 CompletedAt,cancelled 取 CancelledAt,其余 nil
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Artifact   *string    `json:"artifact,omitempty"` // completed 时给摘要
 }
 
 // QueryTask 查单个任务概要。属主校验:只能查自己的任务。
@@ -280,11 +285,17 @@ func (s *SubAgentService) ListUserTasks(userID int64, limit int) ([]*TaskSummary
 	return out, nil
 }
 
-// toSummary 把 AgentTask 转概要,含步骤数(从 stepRepo 查)。
+// toSummary 把 AgentTask 转概要,含步骤数(从 stepRepo 查)与关键时间点。
 func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, error) {
 	sm := &TaskSummary{
 		ID: task.ID, UserID: task.UserID, SubAgent: task.SubAgentType,
 		Goal: task.Goal, Status: task.Status, Reported: task.Reported, Artifact: task.Artifact,
+		CreatedAt: task.CreatedAt, StartedAt: task.StartedAt,
+	}
+	if task.Status == domainagent.TaskStatusCancelled && task.CancelledAt != nil {
+		sm.FinishedAt = task.CancelledAt
+	} else {
+		sm.FinishedAt = task.CompletedAt
 	}
 	if s.stepRepo != nil {
 		steps, err := s.stepRepo.ListByTaskID(task.ID)
