@@ -44,7 +44,8 @@ build-frontend:  ## Build Vue frontend
 	@cd $(FRONTEND_DIR) && $(NPM_CMD) install && $(NPM_CMD) run build
 	@echo "✅ Frontend built: $(FRONTEND_DIR)/dist"
 
-build-all: build-backend build-frontend  ## Build both backend and frontend
+# 前端必须先于后端:go:embed dist/* 在编译期打包,顺序反了会嵌入上一轮旧前端
+build-all: build-frontend build-backend  ## Build both backend and frontend
 
 ##@ Service (daemon)
 
