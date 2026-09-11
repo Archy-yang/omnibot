@@ -75,26 +75,32 @@ const thoughtStepCount = computed(
 // 思考块折叠状态:流式中(streaming=true)强制展开实时看过程,结束自动收起。
 // 用户可手动 toggle(历史消息默认收起,点击展开)。
 const thoughtCollapsed = ref(true);
-// 深度思考(reasoning)折叠:同上联动流式——流式中展开全文,结束收起为前几行。
-const reasoningExpanded = ref(true);
 watch(
   () => props.message.streaming,
   (streaming) => {
     // true -> 展开;false -> 收起。仅在 streaming 变化时驱动,不覆盖用户手动操作后的状态。
     thoughtCollapsed.value = !streaming;
-    reasoningExpanded.value = streaming === true;
   },
   { immediate: true },
 );
 
-// 思考块里是否有深度思考段(决定「展开/收起深度思考」按钮是否出现)
-const hasReasoning = computed(() =>
-  thoughtSegments.value.some((s) => s.type === 'reasoning'),
-);
-// 第一段深度思考的下标:收起态只预览它(带截断),其余段隐藏,保证收起态紧凑
-const firstReasoningIdx = computed(() =>
-  thoughtSegments.value.findIndex((s) => s.type === 'reasoning'),
-);
+// 深度思考段逐段折叠(嵌套在已思考块内,与 tool 段同级交互):
+// 用户手动 toggle 记录在 reasoningToggles;未动过的段默认态 = 流式中最后一段
+// (正在流式的)展开,其余收起。
+const reasoningToggles = ref<Record<number, boolean>>({});
+const lastReasoningIdx = computed(() => {
+  for (let i = thoughtSegments.value.length - 1; i >= 0; i--) {
+    if (thoughtSegments.value[i].type === 'reasoning') return i;
+  }
+  return -1;
+});
+function reasoningOpen(idx: number): boolean {
+  if (idx in reasoningToggles.value) return reasoningToggles.value[idx];
+  return props.message.streaming === true && idx === lastReasoningIdx.value;
+}
+function toggleReasoning(idx: number) {
+  reasoningToggles.value[idx] = !reasoningOpen(idx);
+}
 
 // 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
 // 以及无 segments 时的 content 回退渲染共用。
@@ -241,14 +247,26 @@ defineEmits<{
             <!-- 思考过程段:展开时按序渲染(reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
             <div v-show="!thoughtCollapsed" class="thought-content">
               <template v-for="(seg, idx) in thoughtSegments" :key="idx">
-                <!-- 深度思考段:收起态只预览第一段(截 2 行+渐隐),其余段隐藏;展开显示全部 -->
-                <div
-                  v-if="seg.type === 'reasoning' && (reasoningExpanded || idx === firstReasoningIdx)"
-                  class="reasoning-text"
-                  :class="{ 'is-collapsed': !reasoningExpanded }"
-                >
-                  <span class="reasoning-badge">深度思考</span>
-                  <span class="reasoning-body">{{ seg.content }}<span v-if="message.streaming && idx === thoughtSegments.length - 1" class="reasoning-cursor">▍</span></span>
+                <!-- 深度思考段:独立下拉折叠(与 tool 段同级)——标题行=徽标+单行预览,展开看全文 -->
+                <div v-if="seg.type === 'reasoning'" class="reasoning-item">
+                  <button
+                    type="button"
+                    class="reasoning-header"
+                    :aria-expanded="reasoningOpen(idx) ? 'true' : 'false'"
+                    @click="toggleReasoning(idx)"
+                  >
+                    <span class="reasoning-badge">深度思考</span>
+                    <span class="reasoning-preview">{{ seg.content }}</span>
+                    <svg
+                      class="reasoning-chevron"
+                      :class="{ 'is-open': reasoningOpen(idx) }"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="m6 9 6 6 6-6"/>
+                    </svg>
+                  </button>
+                  <div v-show="reasoningOpen(idx)" class="reasoning-body">{{ seg.content }}<span v-if="message.streaming && idx === lastReasoningIdx" class="reasoning-cursor">▍</span></div>
                 </div>
                 <div
                   v-else-if="seg.type === 'text'"
@@ -282,6 +300,8 @@ defineEmits<{
                     </svg>
                     <span class="tool-segment-label">
                       {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
+                      <!-- 实际工具名:友好标签之外让用户知道底层调了什么 -->
+                      <span v-if="seg.tool" class="tool-segment-name">· {{ seg.tool }}</span>
                     </span>
                     <svg
                       v-if="seg.result !== undefined"
@@ -297,24 +317,6 @@ defineEmits<{
                   <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
                 </div>
               </template>
-              <!-- 深度思考折叠开关:默认(非流式)收起为前几行,点击展开全文 -->
-              <button
-                v-if="hasReasoning"
-                type="button"
-                class="reasoning-toggle"
-                :aria-expanded="reasoningExpanded ? 'true' : 'false'"
-                @click="reasoningExpanded = !reasoningExpanded"
-              >
-                {{ reasoningExpanded ? '收起深度思考' : '展开深度思考' }}
-                <svg
-                  class="reasoning-toggle-chevron"
-                  :class="{ 'is-open': reasoningExpanded }"
-                  width="12" height="12" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                >
-                  <path d="m6 9 6 6 6-6"/>
-                </svg>
-              </button>
             </div>
           </div>
 
@@ -596,24 +598,70 @@ defineEmits<{
   margin: 6px 0;
 }
 
-/* 深度思考段(M5/C):模型 reasoning_content,斜体浅灰+徽标,与普通思考区分 */
-.reasoning-text {
-  font-size: 13px;
-  line-height: 1.6;
-  color: #8b8fa3;
-  font-style: italic;
+/* 深度思考段(M5/C):模型 reasoning_content,独立下拉折叠——
+   标题行=徽标+单行摘要预览+箭头,展开显示斜体浅灰全文 */
+.reasoning-item {
   margin: 6px 0;
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.reasoning-header:hover .reasoning-preview {
+  color: #6b7089;
 }
 
 .reasoning-badge {
   display: inline-block;
+  flex-shrink: 0;
   font-style: normal;
   font-size: 11px;
   color: #7c6ee0;
   background: rgba(124, 110, 224, 0.1);
   border-radius: 4px;
   padding: 1px 6px;
-  margin-right: 6px;
+}
+
+/* 收起态的单行摘要预览:超出省略,给用户判断要不要展开 */
+.reasoning-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #8b8fa3;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reasoning-chevron {
+  flex-shrink: 0;
+  color: #8b8fa3;
+  transition: transform 0.15s ease;
+}
+
+.reasoning-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* 展开态全文:斜体浅灰,保留换行 */
+.reasoning-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #8b8fa3;
+  font-style: italic;
+  margin: 4px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .reasoning-cursor {
@@ -626,54 +674,6 @@ defineEmits<{
   50% {
     opacity: 0;
   }
-}
-
-/* 深度思考收起态:预览截为前 2 行,底部渐隐提示还有更多 */
-.reasoning-text.is-collapsed {
-  position: relative;
-}
-
-.reasoning-text.is-collapsed .reasoning-body {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.reasoning-text.is-collapsed::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1.2em;
-  background: linear-gradient(transparent, #f9fafb);
-}
-
-/* 深度思考折叠开关:小号文字按钮,贴思考块底部 */
-.reasoning-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border: none;
-  background: none;
-  padding: 2px 0;
-  margin-top: 2px;
-  font-size: 12px;
-  color: #7c6ee0;
-  cursor: pointer;
-}
-
-.reasoning-toggle:hover {
-  text-decoration: underline;
-}
-
-.reasoning-toggle-chevron {
-  transition: transform 0.15s ease;
-}
-
-.reasoning-toggle-chevron.is-open {
-  transform: rotate(180deg);
 }
 
 /* 思考块内的 tool 段去掉外层 margin,贴合思考块内边距 */
@@ -728,6 +728,14 @@ defineEmits<{
 
 .tool-segment-label {
   flex: 1;
+}
+
+/* 工具实际名称:跟在友好标签后的浅灰小字(如 查询了任务 · query_task) */
+.tool-segment-name {
+  margin-left: 4px;
+  font-size: 12px;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .tool-segment-chevron {
