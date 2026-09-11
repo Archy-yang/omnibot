@@ -23,9 +23,9 @@ const (
 // omitempty 让另一类字段不进 JSON，序列化更紧凑。这是「JSON 骨架 + 实体表」混合架构
 // 的碎片层：纯展示片段内联在此，未来 artifact / 异步任务等一等实体改用独立表 + 引用 id。
 type MessageSegment struct {
-	Type    string `json:"type"`              // "text" | "tool"
-	Content string `json:"content,omitempty"` // text 段：文本内容
-	Role    string `json:"role,omitempty"`    // text 段语义(C5):"thought"|"final";tool 段不用
+	Type    string `json:"type"`              // "text" | "tool" | "reasoning"
+	Content string `json:"content,omitempty"` // text 段：文本内容;reasoning 段：深度思考文本
+	Role    string `json:"role,omitempty"`    // text 段语义(C5):"thought"|"final";tool/reasoning 段不用
 	Tool    string `json:"tool,omitempty"`    // tool 段：工具名
 	Label   string `json:"label,omitempty"`   // tool 段：面向用户的友好文案
 	Result  string `json:"result,omitempty"`  // tool 段：脱敏后的工具结果

@@ -115,6 +115,17 @@ export const useChatStore = defineStore(
               }
             }
           },
+          onReasoning: (chunk: string) => {
+            // 深度思考增量(M5/C):累积到 reasoning 段(独立 type,渲染在已思考块内)。
+            // 后续 token 到达时 onChunk 的封口逻辑自然新建 text 段,reasoning 段留在思考块。
+            const segs = assistantMessage.segments!;
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'reasoning') {
+              last.content += chunk;
+            } else {
+              segs.push({ type: 'reasoning', content: chunk });
+            }
+          },
           onDone: () => {
             // 流式结束。若未收到 onFinal(异常兜底),把最后一个 text 段标 final +
             // content 取它,保证总有最终回复展示。

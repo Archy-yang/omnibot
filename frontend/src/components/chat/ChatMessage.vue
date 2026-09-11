@@ -226,11 +226,18 @@ defineEmits<{
               </svg>
             </button>
 
-            <!-- 思考过程段:展开时按序渲染(text 思考文本小字灰 + tool 调用条) -->
+            <!-- 思考过程段:展开时按序渲染(reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
             <div v-show="!thoughtCollapsed" class="thought-content">
               <template v-for="(seg, idx) in thoughtSegments" :key="idx">
                 <div
-                  v-if="seg.type === 'text'"
+                  v-if="seg.type === 'reasoning'"
+                  class="reasoning-text"
+                >
+                  <span class="reasoning-badge">深度思考</span>
+                  <span class="reasoning-body">{{ seg.content }}<span v-if="message.streaming && idx === thoughtSegments.length - 1" class="reasoning-cursor">▍</span></span>
+                </div>
+                <div
+                  v-else-if="seg.type === 'text'"
                   class="thought-text markdown-body"
                   v-html="renderMarkdown(seg.content)"
                 ></div>
@@ -555,6 +562,38 @@ defineEmits<{
   line-height: 1.6;
   color: #6b7280;
   margin: 6px 0;
+}
+
+/* 深度思考段(M5/C):模型 reasoning_content,斜体浅灰+徽标,与普通思考区分 */
+.reasoning-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #8b8fa3;
+  font-style: italic;
+  margin: 6px 0;
+}
+
+.reasoning-badge {
+  display: inline-block;
+  font-style: normal;
+  font-size: 11px;
+  color: #7c6ee0;
+  background: rgba(124, 110, 224, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-right: 6px;
+}
+
+.reasoning-cursor {
+  display: inline-block;
+  color: #7c6ee0;
+  animation: reasoning-blink 1s step-end infinite;
+}
+
+@keyframes reasoning-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* 思考块内的 tool 段去掉外层 margin,贴合思考块内边距 */

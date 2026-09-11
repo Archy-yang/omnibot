@@ -533,6 +533,9 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			userConfig.Model,
 			timeout,
 		)
+		if userConfig.DisableThinking {
+			customAgentClient.SetDisableThinking(true) // 快模式(M5/C)
+		}
 		activeStreamClient = customAgentClient
 	}
 
@@ -651,6 +654,17 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 			llmStep.Seq = seq
 			seq++
 			steps = append(steps, llmStep)
+		case agentpkg.AgentEventReasoning:
+			// 深度思考增量(M5/C):累积成独立 reasoning 段(落库+前端"已思考"块内展示),
+			// 与 text 段分离——正文 token 到达后前端把它折叠进"已思考"。
+			if n := len(segments); n > 0 && segments[n-1].Type == "reasoning" {
+				segments[n-1].Content += ev.Content
+			} else {
+				segments = append(segments, conversation.MessageSegment{Type: "reasoning", Content: ev.Content})
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: reasoning\ndata: %s\n\n", data)
+			flusher.Flush()
 		case agentpkg.AgentEventThought:
 			// 方案5:思考轮标记。把最后一个 text 段(思考轮 token 累积的)改标 role=thought,
 			// 供前端把它从主气泡迁移到思考块。Content 是该轮思考文本。
@@ -1145,6 +1159,8 @@ type UpdateLLMConfigRequest struct {
 	Model       string  `json:"model" binding:"required"`
 	Temperature float64 `json:"temperature"`
 	MaxTokens   int     `json:"max_tokens"`
+	// DisableThinking 快模式(M5/C):跳过模型思考阶段换低延迟
+	DisableThinking bool `json:"disable_thinking"`
 	// 用户级向量配置(12-记忆系统技术方案 §5.3):全空=不设置,部分填写=服务端校验拒绝
 	EmbeddingProvider string `json:"embedding_provider"`
 	EmbeddingBaseURL  string `json:"embedding_base_url"`
@@ -1170,12 +1186,13 @@ func (h *Handler) HandleUpdateLLMConfig(c *gin.Context) {
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	updateReq := userLLM.UpdateConfigRequest{
-		Provider:    req.Provider,
-		APIKey:      req.APIKey,
-		BaseURL:     req.BaseURL,
-		Model:       req.Model,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
+		Provider:        req.Provider,
+		APIKey:          req.APIKey,
+		BaseURL:         req.BaseURL,
+		Model:           req.Model,
+		Temperature:     req.Temperature,
+		MaxTokens:       req.MaxTokens,
+		DisableThinking: req.DisableThinking,
 		// 用户级向量配置(§5.3)
 		EmbeddingProvider: req.EmbeddingProvider,
 		EmbeddingBaseURL:  req.EmbeddingBaseURL,

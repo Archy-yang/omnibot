@@ -54,6 +54,9 @@ type OpenAILLMClient struct {
 	model    string
 	client   *http.Client  // 传输层配 connect/TTFB,无整体总超时
 	deadline time.Duration // 语义:同步=整体读超时;流式=读空闲超时(每次读到一行重置)
+	// disableThinking 快模式(M5/C):true 时请求带 {"thinking":{"type":"disabled"}},
+	// 跳过思考阶段换低延迟。nil 视为 false(不传参数,模型默认)。
+	disableThinking bool
 }
 
 // NewOpenAILLMClient 创建 Agent 专用 LLM 客户端。
@@ -83,12 +86,27 @@ func NewOpenAILLMClientWithTTFB(apiKey, baseURL, model string, timeout, ttfb tim
 	return c
 }
 
+// SetDisableThinking 快模式(M5/C):true 时请求带 {"thinking":{"type":"disabled"}},
+// 跳过思考阶段换低延迟。仅对遵循 DeepSeek thinking 方言的端点生效(千帆 v2 等),
+// 不识别该参数的端点一般忽略之(OpenAI 兼容宽容语义)。
+func (c *OpenAILLMClient) SetDisableThinking(disable bool) {
+	c.disableThinking = disable
+}
+
 // agentRequest OpenAI chat completions request (includes tools)
 type agentRequest struct {
 	Model    string                   `json:"model"`
 	Messages []map[string]interface{} `json:"messages"`
 	Tools    []map[string]interface{} `json:"tools,omitempty"`
 	Stream   bool                     `json:"stream"`
+	// Thinking 思考模式开关(M5/C 快模式):DeepSeek 官方格式 {"thinking":{"type":"disabled"}},
+	// 千帆 v2 等遵循该方言的端点透传生效;nil = 不传(模型默认,deepseek-v4 系默认开启)。
+	Thinking *thinkingConfig `json:"thinking,omitempty"`
+}
+
+// thinkingConfig 思考模式参数。
+type thinkingConfig struct {
+	Type string `json:"type"` // "enabled" | "disabled"
 }
 
 // agentResponse OpenAI chat completions response
@@ -143,11 +161,18 @@ func rateLimitSleep(ctx context.Context, attempt int) bool {
 	}
 }
 
+// buildAgentRequest 构造请求体(统一注入快模式 thinking 开关)。
+func (c *OpenAILLMClient) buildAgentRequest(messages []map[string]interface{}, tools []map[string]interface{}, stream bool) agentRequest {
+	req := agentRequest{Model: c.model, Messages: messages, Tools: tools, Stream: stream}
+	if c.disableThinking {
+		req.Thinking = &thinkingConfig{Type: "disabled"}
+	}
+	return req
+}
+
 // ChatCompletion 实现 LLMClient 接口。限流(429/TPM)时指数退避重试,避免单次限流让整个任务失败。
 func (c *OpenAILLMClient) ChatCompletion(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}) (string, []map[string]interface{}, error) {
-	jsonBody, err := json.Marshal(agentRequest{
-		Model: c.model, Messages: messages, Tools: tools, Stream: false,
-	})
+	jsonBody, err := json.Marshal(c.buildAgentRequest(messages, tools, false))
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -260,12 +285,7 @@ func (c *OpenAILLMClient) ChatCompletionStream(
 	messages []map[string]interface{},
 	tools []map[string]interface{},
 ) (<-chan LLMStreamChunk, error) {
-	reqBody := agentRequest{
-		Model:    c.model,
-		Messages: messages,
-		Tools:    tools,
-		Stream:   true,
-	}
+	reqBody := c.buildAgentRequest(messages, tools, true)
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)

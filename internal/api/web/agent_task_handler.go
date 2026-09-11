@@ -187,6 +187,16 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 			data, _ := json.Marshal(map[string]string{"content": ev.Content})
 			fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
 			flusher.Flush()
+		case agentpkg.AgentEventReasoning:
+			// 深度思考增量(M5/C):与主聊天流同款累积(汇报流通常单轮,但兼容思考模型)
+			if n := len(segments); n > 0 && segments[n-1].Type == "reasoning" {
+				segments[n-1].Content += ev.Content
+			} else {
+				segments = append(segments, conversation.MessageSegment{Type: "reasoning", Content: ev.Content})
+			}
+			data, _ := json.Marshal(map[string]string{"content": ev.Content})
+			fmt.Fprintf(c.Writer, "event: reasoning\ndata: %s\n\n", data)
+			flusher.Flush()
 		case agentpkg.AgentEventThought:
 			for i := len(segments) - 1; i >= 0; i-- {
 				if segments[i].Type == "text" {

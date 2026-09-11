@@ -86,6 +86,8 @@ export interface LLMConfig {
   baseUrl?: string;
   temperature?: number;
   maxTokens?: number;
+  /** 快模式(M5/C):跳过模型思考阶段换低延迟 */
+  disableThinking?: boolean;
   /** 用户级向量配置(12-记忆系统技术方案 §5.3):全空=用系统默认 */
   embeddingProvider?: string;
   embeddingBaseUrl?: string;
@@ -121,6 +123,8 @@ export interface UserLLMConfigResponse {
   status_text: string;
   temperature: number;
   max_tokens: number;
+  /** 快模式(M5/C)回显 */
+  disable_thinking?: boolean;
   /** 用户级向量配置回显(未配置为空;Key 已脱敏,不回填输入框) */
   embedding_provider?: string;
   embedding_base_url?: string;
@@ -140,6 +144,8 @@ export interface UpdateUserLLMConfigRequest {
   model: string;
   temperature?: number;
   max_tokens?: number;
+  /** 快模式(M5/C):跳过模型思考阶段 */
+  disable_thinking?: boolean;
   /** 用户级向量配置(可选):全空=不设置;部分填写=服务端校验拒绝 */
   embedding_provider?: string;
   embedding_base_url?: string;

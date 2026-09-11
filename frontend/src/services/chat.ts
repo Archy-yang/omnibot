@@ -12,6 +12,7 @@ interface StreamCallbacks {
   onFinal?: (content: string) => void;
   /** 方案5:思考轮标记,把当前 text 段从主气泡迁移到思考块 */
   onThought?: (content: string) => void;
+  onReasoning?: (content: string) => void;
   onDone: (fullContent: string) => void;
   onError: (error: Error) => void;
 }
@@ -54,7 +55,7 @@ export const chatService = {
     content: string,
     callbacks: StreamCallbacks
   ): Promise<void> {
-    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onDone, onError } = callbacks;
+    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onReasoning, onDone, onError } = callbacks;
 
     try {
       const token = localStorage.getItem('token');
@@ -139,6 +140,12 @@ export const chatService = {
             if (currentEvent === 'thought') {
               // 方案5:思考轮标记。parsed.content 是该轮思考文本。
               onThought?.(parsed.content);
+              currentEvent = 'message';
+              continue;
+            }
+            if (currentEvent === 'reasoning') {
+              // 深度思考增量(M5/C):模型 reasoning_content 实时流。
+              onReasoning?.(parsed.content);
               currentEvent = 'message';
               continue;
             }

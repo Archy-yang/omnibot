@@ -37,14 +37,15 @@ type EmbeddingAPIConfig struct {
 
 // LLMConfigView 配置视图，用于前端展示
 type LLMConfigView struct {
-	HasConfig    bool
-	APIKeyMasked string
-	BaseURL      string
-	Model        string
-	Provider     string
-	StatusText   string
-	Temperature  float64
-	MaxTokens    int
+	HasConfig       bool
+	APIKeyMasked    string
+	BaseURL         string
+	Model           string
+	Provider        string
+	StatusText      string
+	Temperature     float64
+	MaxTokens       int
+	DisableThinking bool // 快模式(M5/C)回显
 	// 用户级向量配置回显(12-记忆系统技术方案 §5.3):未配置为空;Key 脱敏
 	EmbeddingProvider     string
 	EmbeddingBaseURL      string
@@ -56,22 +57,24 @@ type LLMConfigView struct {
 
 // FullLLMConfig 完整配置，用于 LLM 客户端创建
 type FullLLMConfig struct {
-	APIKey      string
-	BaseURL     string
-	Model       string
-	Provider    string
-	Temperature float64
-	MaxTokens   int
+	APIKey          string
+	BaseURL         string
+	Model           string
+	Provider        string
+	Temperature     float64
+	MaxTokens       int
+	DisableThinking bool // 快模式(M5/C):跳过模型思考阶段
 }
 
 // UpdateConfigRequest 更新配置请求
 type UpdateConfigRequest struct {
-	Provider    string
-	APIKey      string
-	BaseURL     string
-	Model       string
-	Temperature float64
-	MaxTokens   int
+	Provider        string
+	APIKey          string
+	BaseURL         string
+	Model           string
+	Temperature     float64
+	MaxTokens       int
+	DisableThinking bool
 	// 用户级向量配置(可选):全空=不设置;部分填写=校验拒绝
 	EmbeddingProvider string
 	EmbeddingBaseURL  string
@@ -219,14 +222,15 @@ func (s *GormLLMConfigService) GetConfigView(userID int64) (*LLMConfigView, erro
 	maskedKey := s.maskAPIKey(cfg.APIKey)
 
 	view := LLMConfigView{
-		HasConfig:    true,
-		APIKeyMasked: maskedKey,
-		BaseURL:      cfg.GetBaseURL(),
-		Model:        cfg.GetModel(),
-		Provider:     cfg.Provider,
-		StatusText:   "使用你的自定义模型",
-		Temperature:  cfg.GetTemperature(0.7),
-		MaxTokens:    cfg.GetMaxTokens(2048),
+		HasConfig:       true,
+		APIKeyMasked:    maskedKey,
+		BaseURL:         cfg.GetBaseURL(),
+		Model:           cfg.GetModel(),
+		Provider:        cfg.Provider,
+		StatusText:      "使用你的自定义模型",
+		Temperature:     cfg.GetTemperature(0.7),
+		MaxTokens:       cfg.GetMaxTokens(2048),
+		DisableThinking: cfg.DisableThinking,
 	}
 	s.fillEmbeddingView(cfg, &view)
 	return &view, nil
@@ -317,12 +321,13 @@ func (s *GormLLMConfigService) GetFullConfigForUser(userID int64) (*FullLLMConfi
 	}
 
 	return &FullLLMConfig{
-		APIKey:      plainKey,
-		BaseURL:     cfg.GetBaseURL(),
-		Model:       cfg.GetModel(),
-		Provider:    cfg.Provider,
-		Temperature: cfg.GetTemperature(0.7),
-		MaxTokens:   cfg.GetMaxTokens(2048),
+		APIKey:          plainKey,
+		BaseURL:         cfg.GetBaseURL(),
+		Model:           cfg.GetModel(),
+		Provider:        cfg.Provider,
+		Temperature:     cfg.GetTemperature(0.7),
+		MaxTokens:       cfg.GetMaxTokens(2048),
+		DisableThinking: cfg.DisableThinking,
 	}, true, nil
 }
 
@@ -439,6 +444,7 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 		cfg.Temperature = &temp
 		tokens := req.MaxTokens
 		cfg.MaxTokens = &tokens
+		cfg.DisableThinking = req.DisableThinking // 快模式(M5/C)
 
 		if hasAny, _ := embeddingFieldsState(req); hasAny {
 			encryptedEmbedKey, err := crypto.Encrypt(req.EmbeddingAPIKey)
@@ -482,6 +488,7 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	cfg.Temperature = &temp
 	tokens := req.MaxTokens
 	cfg.MaxTokens = &tokens
+	cfg.DisableThinking = req.DisableThinking // 快模式(M5/C)
 
 	// 用户级向量配置(全空=不改动既有嵌入配置;部分填写已在前面校验拒绝;显式清除=回退系统默认)
 	if req.ClearEmbedding {

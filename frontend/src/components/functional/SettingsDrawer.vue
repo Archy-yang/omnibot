@@ -419,6 +419,22 @@ const showEmbeddingApiKey = ref(false);
       />
     </div>
 
+    <!-- 快模式(M5/C):跳过模型思考阶段 -->
+    <div class="form-field">
+      <label class="form-label" for="settings-disable-thinking">快模式</label>
+      <label class="thinking-toggle">
+        <input
+          id="settings-disable-thinking"
+          type="checkbox"
+          class="thinking-checkbox"
+          :checked="localConfig.disableThinking ?? false"
+          @change="localConfig.disableThinking = ($event.target as HTMLInputElement).checked"
+        />
+        <span>关闭深度思考（回复更快，复杂任务质量略降）</span>
+      </label>
+      <div class="form-hint">对 DeepSeek 思考类模型生效（如 deepseek-v4-flash）；开启后跳过思考阶段，对话延迟显著降低。</div>
+    </div>
+
     <!-- ===== 向量模型(可选,用户级覆盖系统默认) ===== -->
     <div class="embedding-block">
       <div class="entry-label">向量模型（可选）</div>
@@ -690,6 +706,23 @@ const showEmbeddingApiKey = ref(false);
   color: #999;
   margin-top: 6px;
   line-height: 1.4;
+}
+
+/* 快模式开关(M5/C) */
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+}
+
+.thinking-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #7c6ee0;
+  cursor: pointer;
 }
 .form-input,
 .form-select {
