@@ -24,7 +24,7 @@ type Tool struct {
 // 给工具打标:一个工具可具多个能力;config 的 allowed_capabilities 命中的能力所覆盖的工具才对子 Agent 可见。
 const (
 	CapBasic       = "basic"       // 基础/通用(get_current_time, calculator)
-	CapMemory      = "memory"      // 记忆检索(search_memories, search_history)
+	CapMemory      = "memory"      // 记忆检索(search_memories)
 	CapResearch    = "research"    // 研究/检索类(rss_reader, web_read 及记忆检索)
 	CapWeb         = "web"         // 联网抓取(web_read, rss_reader)
 	CapIngest      = "ingest"      // 信息摄入汇总(rss_reader)

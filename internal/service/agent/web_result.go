@@ -20,7 +20,7 @@ import (
 //   [抓取失败] HTTP 401
 //   URL: https://www.volcengine.com/activity
 //   原因: 目标站点要求登录鉴权
-//   建议: 不要再试同站点其他页面;换用 search_memories/search_history 或基于已有信息汇总
+//   建议: 不要再试同站点其他页面;换用 search_memories 或基于已有信息汇总
 //
 //   [抓取成功] HTTP 200
 //   URL: https://blog.example.com/post
@@ -59,7 +59,7 @@ func formatWebSuccess(httpCode int, url, content string) string {
 // 其他(超时/404/500/连接错误) -> 换来源或基于已有信息汇总。
 func webFailureSuggestion(httpCode int) string {
 	if httpCode == 401 || httpCode == 403 {
-		return "目标站点要求登录鉴权,该站点页面普遍抓不到;不要再试同站点其他页面,换用 search_memories/search_history 或基于已有信息汇总"
+		return "目标站点要求登录鉴权,该站点页面普遍抓不到;不要再试同站点其他页面,换用 search_memories 或基于已有信息汇总"
 	}
 	return "该 URL 无法获取有效内容,换用其他来源或基于已有信息汇总,不要反复重试同类失败"
 }

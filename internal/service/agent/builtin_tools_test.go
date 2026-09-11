@@ -83,10 +83,15 @@ func TestBuiltinTools_SearchMemories_NoMatch(t *testing.T) {
 type matterFirstFake struct {
 	matters []memorydomain.MatterHit
 	hits    []memorydomain.MemoryHit
+	recent  []memorydomain.MessageHit // M7 中期区
 }
 
 func (f *matterFirstFake) SearchMatters(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MatterHit, error) {
 	return f.matters, nil
+}
+
+func (f *matterFirstFake) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MessageHit, error) {
+	return f.recent, nil
 }
 
 func (f *matterFirstFake) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
@@ -123,6 +128,47 @@ func TestSearchMemoriesTool_MatterFirstRendering(t *testing.T) {
 	require.Contains(t, out, "待核实实时票价(loop · 2026-09-09)")
 	require.Contains(t, out, "用户是后端工程师(自动记忆 · 2026-09-09)")
 	require.Equal(t, 1, strings.Count(out, "待核实实时票价"), "事项全景里已展示的记忆不应在散点区重复")
+}
+
+// TestSearchMemoriesTool_ThreeSections M7 三段式:事项区 → 近期对话原文区(带时间/角色/消息号) → 长期区。
+func TestSearchMemoriesTool_ThreeSections(t *testing.T) {
+	mid := int64(7)
+	matter := &memorydomain.Matter{ID: mid, Title: "充电台账", StateDesc: "已读完 23 条记录", UpdatedAt: time.Now()}
+	fact := &memorydomain.Memory{ID: 101, Content: "用户车辆电池 78 度", Kind: "fact", MatterID: &mid, CreatedAt: time.Now()}
+	fake := &matterFirstFake{
+		matters: []memorydomain.MatterHit{{Matter: matter, Facts: []*memorydomain.Memory{fact}, Score: 0.5}},
+		recent: []memorydomain.MessageHit{
+			{MessageID: 61, Role: "user", Content: "你能看到我充电记录的多维表格吗", CreatedAt: time.Date(2026, 9, 9, 23, 43, 0, 0, time.Local), Score: 0.9},
+		},
+		hits: []memorydomain.MemoryHit{
+			{Memory: &memorydomain.Memory{ID: 103, Content: "用户注重性价比", Source: memorydomain.MemorySourceAuto, CreatedAt: time.Now()}, Score: 0.4},
+		},
+	}
+	tool := CreateSearchMemoriesTool(fake)
+
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"query": "充电"})
+	require.NoError(t, err)
+	require.Contains(t, out, "【事项】充电台账")
+	require.Contains(t, out, "【近期对话】1 段相关原文:")
+	require.Contains(t, out, "[2026-09-09 23:43 user] [#61] 你能看到我充电记录的多维表格吗")
+	require.Contains(t, out, "1. 用户注重性价比(自动记忆")
+	// 顺序:事项 → 近期 → 长期
+	require.Less(t, strings.Index(out, "【事项】"), strings.Index(out, "【近期对话】"))
+	require.Less(t, strings.Index(out, "【近期对话】"), strings.Index(out, "1. 用户注重性价比"))
+}
+
+// TestSearchMemoriesTool_RecentEmpty_SkipsSection 中期无命中时该段整段省略(不出现空标题)。
+func TestSearchMemoriesTool_RecentEmpty_SkipsSection(t *testing.T) {
+	fake := &matterFirstFake{
+		hits: []memorydomain.MemoryHit{
+			{Memory: &memorydomain.Memory{ID: 103, Content: "用户是后端工程师", CreatedAt: time.Now()}, Score: 0.4},
+		},
+	}
+	tool := CreateSearchMemoriesTool(fake)
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"query": "工程师"})
+	require.NoError(t, err)
+	require.NotContains(t, out, "【近期对话】")
+	require.Contains(t, out, "用户是后端工程师")
 }
 
 func TestSearchMemoriesTool_NoMatterHit_FallsBackToMemories(t *testing.T) {

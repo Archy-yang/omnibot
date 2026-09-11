@@ -5,7 +5,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
+	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/pkg/logger"
 
@@ -164,39 +166,84 @@ func (s *memoryService) SearchMatters(ctx context.Context, userID int64, query s
 	return hits, nil
 }
 
-// SearchDigests 语义+子串融合检索对话纪要(中期),按分数降序取 topK。
-func (s *memoryService) SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error) {
-	query = strings.TrimSpace(query)
-	if query == "" || s.digestRepo == nil {
+// midtermRecencyHalfLife 中期时间加权半衰期(M7 §10.6):30 天前的消息权重减半。
+const midtermRecencyHalfLife = 30 * 24 * time.Hour
+
+// SearchRecentMessages 中期记忆检索(M7 §10.6):消息级向量余弦 + 时间加权,
+// score = 0.8×cos + 0.2×recency(recency 指数半衰,30 天减半)。
+// 原文不落向量表——按余弦取候选,回表取 content/时间(零抽象,细节永不丢)。
+// embedding 未配置/无向量/回表失败 → 返回空(中期层静默缺失,不报错不阻塞长期/事项)。
+func (s *memoryService) SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error) {
+	if s.msgEmbRepo == nil || s.msgSource == nil {
 		return nil, nil
 	}
-	digests, err := s.digestRepo.ListActiveByUserID(userID)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	provider := s.resolveProvider(userID)
+	if provider == nil {
+		return nil, nil
+	}
+	qvec := s.embedQuery(ctx, provider, query)
+	if qvec == nil {
+		return nil, nil
+	}
+	embs, err := s.msgEmbRepo.ListByUserID(userID)
 	if err != nil {
 		return nil, err
 	}
 
-	provider := s.resolveProvider(userID)
-	qvec := s.embedQuery(ctx, provider, query)
-	var currentModel string
-	if provider != nil {
-		currentModel = provider.Name()
+	// 第一遍:纯余弦取候选(4×topK),避免为 recency 回表全量消息
+	currentModel := provider.Name()
+	type cand struct {
+		msgID int64
+		cos   float64
 	}
-
-	lowered := strings.ToLower(query)
-	hits := make([]memorydomain.DigestHit, 0, len(digests))
-	for _, d := range digests {
-		score := 0.0
-		if qvec != nil && len(d.Embedding) > 0 && d.EmbeddingModel == currentModel {
-			score = CosineSimilarity(qvec, d.Embedding)
+	cands := make([]cand, 0, len(embs))
+	for _, e := range embs {
+		if e.EmbeddingModel != currentModel || len(e.Embedding) == 0 {
+			continue
 		}
-		if strings.Contains(strings.ToLower(d.Summary), lowered) {
-			score += substringBonus
-		}
-		if score > 0 {
-			hits = append(hits, memorydomain.DigestHit{Digest: d, Score: score})
-		}
+		cands = append(cands, cand{msgID: e.MessageID, cos: CosineSimilarity(qvec, e.Embedding)})
 	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].cos > cands[j].cos })
+	candN := topK * 4
+	if candN == 0 || candN > len(cands) {
+		candN = len(cands)
+	}
+	cands = cands[:candN]
 
+	// 回表取原文与时间,做时间加权后重排
+	ids := make([]int64, len(cands))
+	for i, c := range cands {
+		ids[i] = c.msgID
+	}
+	msgs, err := s.msgSource.GetByIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]*conversation.Message, len(msgs))
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	now := time.Now()
+	hits := make([]memorydomain.MessageHit, 0, len(cands))
+	for _, c := range cands {
+		m, ok := byID[c.msgID]
+		if !ok {
+			continue // 消息已删除
+		}
+		recency := 0.5
+		if elapsed := now.Sub(m.CreatedAt); elapsed > 0 {
+			recency = math.Pow(0.5, float64(elapsed)/float64(midtermRecencyHalfLife))
+		}
+		score := 0.8*c.cos + 0.2*recency
+		hits = append(hits, memorydomain.MessageHit{
+			MessageID: m.ID, Role: m.Role, Content: m.Content,
+			CreatedAt: m.CreatedAt, Score: score,
+		})
+	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if topK > 0 && len(hits) > topK {
 		hits = hits[:topK]

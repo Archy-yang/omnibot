@@ -91,7 +91,14 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 12-记忆系统技术方案 §5.3:向量化 provider 按配置装配,未配置=子串降级(记忆照常存取)。
 	memoryEmbedding := buildEmbeddingProvider(cfg)
 	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
-	memorySvc := memoryService.NewMemoryService(memoryRepository, digestRepository, memoryRepo.NewMatterRepository(dbConn.GetGormDB()))
+	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
+	// M7 中期记忆(§10.6):消息向量 + 原文回表注入检索;任一缺省则中期区静默缺失
+	memorySvc := memoryService.NewMemoryService(
+		memoryRepository,
+		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
+		memoryRepo.NewMessageEmbeddingRepository(dbConn.GetGormDB()),
+		msgRepo, // RecentMessageSource(GetByIDs 回表)
+	)
 	if aware, ok := memorySvc.(memoryService.EmbeddingAware); ok {
 		aware.SetEmbeddingProvider(memoryEmbedding)
 	}
@@ -103,7 +110,6 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	if aware, ok := memorySvc.(memoryService.ResolverAware); ok {
 		aware.SetEmbeddingResolver(embeddingResolver)
 	}
-	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
 	// 沉淀管线(M2,§7;M5.1 修订):轮次结束异步生成纪要+提取记忆。
 	// LLM/embedding 均按用户解析:用户 Web 端配置优先,系统默认兜底,皆无则静默跳过。
@@ -141,6 +147,20 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	msgSvcOpts := []interface{}{memorySvc, stepRepo}
 	if digestPipeline != nil {
 		msgSvcOpts = append(msgSvcOpts, digestPipeline) // chat.TurnSink
+	}
+	// M7 中期记忆(§10.5):消息级向量增量嵌入,同一 TurnSink 链路、独立水位独立降级。
+	// 复用沉淀的 ConversationSource(msgRepo)与用户级向量解析;存量回填=水位 0 首轮自然全量。
+	if cfg.Memory.Extraction.Enabled {
+		msgEmbedder := memoryService.NewMessageEmbedder(
+			memoryRepo.NewEmbeddingWatermarkRepository(dbConn.GetGormDB()),
+			memoryRepo.NewMessageEmbeddingRepository(dbConn.GetGormDB()),
+			msgRepo,
+			memoryEmbedding,
+		)
+		msgEmbedder.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
+		msgSvcOpts = append(msgSvcOpts, msgEmbedder) // chat.TurnSink
+		logger.Info("memory: 消息嵌入器已启用(中期记忆)",
+			zap.Bool("embedding", memoryEmbedding != nil))
 	}
 	msgSvc := chatService.NewMessageService(msgRepo, msgSvcOpts...)
 
@@ -190,7 +210,6 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
 	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
 	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchMemoriesTool(memorySvc) })
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchHistoryTool(memorySvc) })
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域

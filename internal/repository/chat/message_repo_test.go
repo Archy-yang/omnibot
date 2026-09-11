@@ -115,3 +115,34 @@ func TestMessageRepository_ExistsByMsgID(t *testing.T) {
 		t.Error("Expected message to not exist")
 	}
 }
+
+// TestMessageRepository_GetByIDs 按 id 集合回表(M7 中期记忆原文回取;缺失 id 跳过,空集合返回空)。
+func TestMessageRepository_GetByIDs(t *testing.T) {
+	testDB := db.NewTestDB(t)
+	repo := NewMessageRepository(testDB)
+
+	m1 := conversation.NewUserMessage(123, "第一条", "wx_1")
+	m2 := conversation.NewAssistantMessage(123, "第二条")
+	for _, m := range []*conversation.Message{m1, m2} {
+		if err := repo.Create(m); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+
+	got, err := repo.GetByIDs([]int64{m1.ID, m2.ID, 99999})
+	if err != nil {
+		t.Fatalf("get by ids: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("缺失 id 应跳过, got %d", len(got))
+	}
+	ids := map[int64]bool{got[0].ID: true, got[1].ID: true}
+	if !ids[m1.ID] || !ids[m2.ID] {
+		t.Errorf("结果应含两条原文消息: %v", ids)
+	}
+
+	empty, err := repo.GetByIDs(nil)
+	if err != nil || empty != nil {
+		t.Errorf("空集合应返回空, got %v err=%v", empty, err)
+	}
+}

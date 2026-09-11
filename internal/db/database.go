@@ -155,6 +155,8 @@ func autoMigrate(db *gorm.DB) error {
 		&memory.Matter{},             // M6:事项层(助理人视角,状态覆写式)
 		&memory.ConversationDigest{}, // 12-记忆系统技术方案 §4.2:中期纪要
 		&memory.DigestWatermark{},    // §4.3:摘要管线水位(单用户单行)
+		&memory.MessageEmbedding{},   // M7 §10.4:消息级向量(中期=原文直达)
+		&memory.EmbeddingWatermark{}, // M7 §10.4:消息嵌入水位(独立于 digest 水位)
 		&agent.AgentTask{},
 		&agent.Artifact{},  // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{}, // #22 任务事件流(状态变化历史,供审计/未来推送)

@@ -30,11 +30,6 @@ type MemorySearcher interface {
 	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
 }
 
-// DigestSearcher 对话纪要检索(中期记忆,12-记忆系统技术方案 §8)。
-type DigestSearcher interface {
-	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
-}
-
 // CreateGetCurrentTimeTool 获取当前时间工具
 func CreateGetCurrentTimeTool() Tool {
 	return Tool{
@@ -88,8 +83,9 @@ func CreateCalculatorTool() Tool {
 func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 	return Tool{
 		Name: "search_memories",
-		Description: "搜索用户的记忆。优先返回进行中的事项（含当前状态与相关记忆全景，" +
-			"适合问\"某件事怎么样了/进展如何\"），以及与查询相关的长期记忆条目",
+		Description: "搜索用户的记忆，一次返回三段：①进行中的事项（含当前状态与相关记忆全景，" +
+			"适合问\"某件事怎么样了/进展如何\"）；②近期对话原文（带发生时间，适合问\"最近/当时聊了什么\"）；" +
+			"③与查询相关的长期记忆条目",
 		DisplayLabel: "翻了翻记忆",
 		Capabilities: []string{CapMemory, CapResearch},
 		Parameters: map[string]interface{}{
@@ -109,11 +105,12 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) Tool {
 			}
 			userID := getUserIDFromContext(ctx)
 			if searcher, ok := memorySvc.(MemorySearcher); ok {
-				// M6.2 两段式:事项命中优先(返回"这件事"的全景),再回落散点记忆
+				recent, _ := memorySvc.(RecentMessageSearcher) // M7:中期区可选,无实现则省略
+				// M7 三段式:事项命中优先(返回"这件事"的全景) → 近期对话原文 → 散点记忆
 				if matterSearcher, ok := memorySvc.(MatterSearcher); ok {
-					return searchMemoriesMatterFirst(ctx, matterSearcher, searcher, userID, query)
+					return searchMemoriesMatterFirst(ctx, matterSearcher, recent, searcher, userID, query)
 				}
-				return searchMemoriesSemantic(ctx, searcher, userID, query)
+				return searchMemoriesSemantic(ctx, recent, searcher, userID, query)
 			}
 			memories, err := memorySvc.GetRecentForContext(ctx, userID, 50)
 			if err != nil {
@@ -129,21 +126,55 @@ type MatterSearcher interface {
 	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 }
 
-// searchMemoriesSemantic 语义检索路径:返回记忆内容 + 来源标识 + 记忆发生时间。
-func searchMemoriesSemantic(ctx context.Context, searcher MemorySearcher, userID int64, query string) (string, error) {
+// RecentMessageSearcher 中期记忆检索(可选增强,M7):原文片段直达,零抽象细节。
+type RecentMessageSearcher interface {
+	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error)
+}
+
+// searchMemoriesSemantic 语义检索路径:近期对话原文(可选)+ 记忆内容 + 来源/时间标注。
+func searchMemoriesSemantic(ctx context.Context, recent RecentMessageSearcher, searcher MemorySearcher, userID int64, query string) (string, error) {
 	hits, err := searcher.SearchMemories(ctx, userID, query, 10)
 	if err != nil {
 		return "", fmt.Errorf("查询记忆失败: %w", err)
 	}
-	if len(hits) == 0 {
-		return "未找到相关记忆", nil
-	}
 	var b strings.Builder
+	writeRecentSection(ctx, recent, userID, query, &b)
+	if len(hits) == 0 {
+		if b.Len() == 0 {
+			return "未找到相关记忆", nil
+		}
+		return strings.TrimRight(b.String(), "\n"), nil
+	}
 	fmt.Fprintf(&b, "找到 %d 条相关记忆:\n", len(hits))
 	for i, h := range hits {
 		fmt.Fprintf(&b, "%d. %s%s\n", i+1, h.Memory.Content, memoryAnnotation(h.Memory))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// recentSearchTopK 中期区条数(M7 §10.6):话题稀释实验结论——比长期区宽,邻域命中也可用。
+const recentSearchTopK = 8
+
+// writeRecentSection 中期区渲染(M7):近期对话原文直达,带发生时间。
+// 无实现/无命中时整段省略。
+func writeRecentSection(ctx context.Context, recent RecentMessageSearcher, userID int64, query string, b *strings.Builder) {
+	if recent == nil {
+		return
+	}
+	msgHits, err := recent.SearchRecentMessages(ctx, userID, query, recentSearchTopK)
+	if err != nil || len(msgHits) == 0 {
+		return // 中期层静默缺失(§10.5 降级)
+	}
+	fmt.Fprintf(b, "【近期对话】%d 段相关原文:\n", len(msgHits))
+	for _, mh := range msgHits {
+		content := strings.ReplaceAll(mh.Content, "\n", " ")
+		if len(content) > 120 {
+			content = content[:120] + "…"
+		}
+		fmt.Fprintf(b, "- [%s %s] [#%d] %s\n",
+			mh.CreatedAt.Format("2006-01-02 15:04"), mh.Role, mh.MessageID, content)
+	}
+	b.WriteString("\n")
 }
 
 // memoryAnnotation 记忆条目的括号标注:来源(自动/手动)+ 发生日期(记录时间),
@@ -164,7 +195,7 @@ func memoryAnnotation(m *memorydomain.Memory) string {
 
 // searchMemoriesMatterFirst 两段式检索:第一段事项(最多 2 个,命中即给全景),
 // 第二段散点记忆(排除已随事项展示过的,避免重复)。
-func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearcher, searcher MemorySearcher, userID int64, query string) (string, error) {
+func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearcher, recent RecentMessageSearcher, searcher MemorySearcher, userID int64, query string) (string, error) {
 	matterHits, err := matterSearcher.SearchMatters(ctx, userID, query, 2)
 	if err != nil {
 		return "", fmt.Errorf("查询记忆失败: %w", err)
@@ -183,6 +214,9 @@ func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearche
 		b.WriteString("\n")
 	}
 
+	// 中期区(M7):近期对话原文,事项区与散点区之间
+	writeRecentSection(ctx, recent, userID, query, &b)
+
 	hits, err := searcher.SearchMemories(ctx, userID, query, 10)
 	if err != nil {
 		return "", fmt.Errorf("查询记忆失败: %w", err)
@@ -200,58 +234,6 @@ func searchMemoriesMatterFirst(ctx context.Context, matterSearcher MatterSearche
 		return "未找到相关记忆", nil
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
-}
-
-// CreateSearchHistoryTool 搜索对话纪要工具(12-记忆系统技术方案 §8):
-// 中期记忆检索,返回纪要内容 + 溯源区间([from,to] 消息 ID,用户可据此回溯明细)。
-func CreateSearchHistoryTool(digestSearcher DigestSearcher) Tool {
-	return Tool{
-		Name:         "search_history",
-		Description:  "搜索用户的过往对话纪要（较早对话的主题和结论），返回内容附带来源对话范围",
-		DisplayLabel: "搜索了历史对话",
-		Capabilities: []string{CapMemory, CapResearch},
-		Parameters: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"query": map[string]interface{}{
-					"type":        "string",
-					"description": "搜索关键词或语义描述",
-				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "返回条数限制，默认 5",
-				},
-			},
-			"required": []string{"query"},
-		},
-		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			query, ok := args["query"].(string)
-			if !ok || query == "" {
-				return "", fmt.Errorf("query is required")
-			}
-			limit := 5
-			if v, ok := args["limit"].(float64); ok && v > 0 {
-				limit = int(v)
-			}
-			userID := getUserIDFromContext(ctx)
-			hits, err := digestSearcher.SearchDigests(ctx, userID, query, limit)
-			if err != nil {
-				return "", fmt.Errorf("搜索对话纪要失败: %w", err)
-			}
-			if len(hits) == 0 {
-				return "未找到相关对话纪要", nil
-			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "找到 %d 段相关对话纪要:\n", len(hits))
-			for i, h := range hits {
-				// 纪要带生成日期:LLM 知道这段对话发生在什么时候
-				fmt.Fprintf(&b, "%d. %s（对话 #%d~#%d · %s）\n",
-					i+1, h.Digest.Summary, h.Digest.FromMessageID, h.Digest.ToMessageID,
-					h.Digest.CreatedAt.Format("2006-01-02"))
-			}
-			return strings.TrimRight(b.String(), "\n"), nil
-		},
-	}
 }
 
 // safeEval 安全的数学表达式求值（仅允许数字、运算符、括号、空格和小数点）

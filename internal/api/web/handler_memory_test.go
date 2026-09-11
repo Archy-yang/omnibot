@@ -396,7 +396,7 @@ func (m *mockMemoryService) SearchMatters(_ context.Context, _ int64, _ string, 
 	return nil, nil
 }
 
-func (m *mockMemoryService) SearchDigests(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.DigestHit, error) {
+func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MessageHit, error) {
 	return nil, nil
 }
 

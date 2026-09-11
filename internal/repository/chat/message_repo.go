@@ -16,6 +16,8 @@ type MessageRepository interface {
 	GetLatestMessageID(userID int64) (int64, error)
 	// GetRangeByUserID 返回 (afterID, toID] 区间的消息,id 升序(纪要区间即本次处理范围)。
 	GetRangeByUserID(userID int64, afterID, toID int64) ([]*conversation.Message, error)
+	// GetByIDs 按 id 集合取消息原文(中期记忆命中后回表,M7 §10.6;id 无序返回,缺失跳过)。
+	GetByIDs(ids []int64) ([]*conversation.Message, error)
 }
 
 type messageRepository struct {
@@ -104,5 +106,15 @@ func (r *messageRepository) GetRangeByUserID(userID int64, afterID, toID int64) 
 	err := r.db.Where("user_id = ? AND id > ? AND id <= ?", userID, afterID, toID).
 		Order("id ASC").
 		Find(&messages).Error
+	return messages, err
+}
+
+// GetByIDs 按 id 集合取消息原文(中期记忆命中后回表,M7 §10.6;缺失 id 跳过)。
+func (r *messageRepository) GetByIDs(ids []int64) ([]*conversation.Message, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var messages []*conversation.Message
+	err := r.db.Where("id IN ?", ids).Find(&messages).Error
 	return messages, err
 }

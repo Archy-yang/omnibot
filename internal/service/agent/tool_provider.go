@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultSubAgentCapabilities 默认子 Agent 能力白名单。
-// 复刻原 researcher 卡工具集(research 类)+ request_input(interactive 基线):rss_reader/web_read/search_memories/search_history。
+// 复刻原 researcher 卡工具集(research 类)+ request_input(interactive 基线):rss_reader/web_read/search_memories。
 // 装配点(cfg.Agent.SubAgent.AllowedCapabilities)为空时回落此默认。
 var DefaultSubAgentCapabilities = []string{CapResearch, CapInteractive}
 
