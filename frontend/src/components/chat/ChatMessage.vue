@@ -280,38 +280,29 @@ defineEmits<{
                     :aria-expanded="seg.expanded ? 'true' : 'false'"
                     @click="toggleExpand(seg)"
                   >
-                    <svg
-                      v-if="seg.result === undefined"
-                      class="tool-segment-spinner"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                    >
-                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                      <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    <svg
-                      v-else
-                      class="tool-segment-icon"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                    >
-                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                      <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    <span class="tool-segment-label">
+                    <span class="tool-badge">工具</span>
+                    <span class="tool-segment-preview">
                       {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
                       <!-- 实际工具名:友好标签之外让用户知道底层调了什么 -->
                       <span v-if="seg.tool" class="tool-segment-name">· {{ seg.tool }}</span>
                     </span>
+                    <!-- 执行中:右侧转圈;结束:单 V 箭头(与深度思考一致,展开旋转 180°) -->
                     <svg
-                      v-if="seg.result !== undefined"
-                      class="tool-segment-chevron"
-                      :class="{ 'is-open': seg.expanded }"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      v-if="seg.result === undefined"
+                      class="tool-segment-spinner"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                     >
-                      <path d="m7 15 5 5 5-5"/>
-                      <path d="m7 9 5-5 5 5"/>
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                    </svg>
+                    <svg
+                      v-else
+                      class="tool-segment-chevron"
+                      :class="{ 'is-open': seg.expanded }"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="m6 9 6 6 6-6"/>
                     </svg>
                   </button>
                   <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
@@ -688,32 +679,34 @@ defineEmits<{
   margin: 8px 0;
 }
 
+/* 与深度思考段同款的扁平行样式:徽标+预览+箭头,无底色边框 */
 .tool-segment-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 12px;
-  background: #f9fafb;
   border: none;
-  border-left: 2px solid #e5e7eb;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #6b7280;
-  line-height: 1.5;
+  background: none;
+  padding: 2px 0;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s ease;
 }
 
-.tool-segment-header:hover {
-  background: #f3f4f6;
+.tool-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 11px;
+  color: #7c6ee0;
+  background: rgba(124, 110, 224, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
 }
 
-.tool-segment-icon,
 .tool-segment-spinner {
   flex-shrink: 0;
   color: #9ca3af;
+  animation: tool-spin 0.8s linear infinite;
 }
 
 .tool-segment-spinner {
@@ -726,8 +719,19 @@ defineEmits<{
   }
 }
 
-.tool-segment-label {
+/* 收起态的单行预览:超出省略(结构与 .reasoning-preview 一致) */
+.tool-segment-preview {
   flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-segment-header:hover .tool-segment-preview {
+  color: #374151;
 }
 
 /* 工具实际名称:跟在友好标签后的浅灰小字(如 查询了任务 · query_task) */
@@ -741,13 +745,12 @@ defineEmits<{
 .tool-segment-chevron {
   flex-shrink: 0;
   color: #9ca3af;
-  transition: color 0.15s ease;
+  transition: transform 0.15s ease;
 }
 
-/* v2.0:展开图标是 chevrons-up-down(上下双 V),旋转 180° 视觉等价,
-   不旋转,改为加深颜色表示展开态 */
+/* 单 V 箭头与深度思考一致:展开旋转 180° */
 .tool-segment-chevron.is-open {
-  color: #6b7280;
+  transform: rotate(180deg);
 }
 
 /* 展开区：限高滚动，长结果（RSS 全文 / 长 JSON）内部滚动，不撑乱对话 */
