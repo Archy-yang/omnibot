@@ -75,13 +75,21 @@ const thoughtStepCount = computed(
 // 思考块折叠状态:流式中(streaming=true)强制展开实时看过程,结束自动收起。
 // 用户可手动 toggle(历史消息默认收起,点击展开)。
 const thoughtCollapsed = ref(true);
+// 深度思考(reasoning)折叠:同上联动流式——流式中展开全文,结束收起为前几行。
+const reasoningExpanded = ref(true);
 watch(
   () => props.message.streaming,
   (streaming) => {
     // true -> 展开;false -> 收起。仅在 streaming 变化时驱动,不覆盖用户手动操作后的状态。
     thoughtCollapsed.value = !streaming;
+    reasoningExpanded.value = streaming === true;
   },
   { immediate: true },
+);
+
+// 思考块里是否有深度思考段(决定「展开/收起深度思考」按钮是否出现)
+const hasReasoning = computed(() =>
+  thoughtSegments.value.some((s) => s.type === 'reasoning'),
 );
 
 // 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
@@ -232,6 +240,7 @@ defineEmits<{
                 <div
                   v-if="seg.type === 'reasoning'"
                   class="reasoning-text"
+                  :class="{ 'is-collapsed': !reasoningExpanded }"
                 >
                   <span class="reasoning-badge">深度思考</span>
                   <span class="reasoning-body">{{ seg.content }}<span v-if="message.streaming && idx === thoughtSegments.length - 1" class="reasoning-cursor">▍</span></span>
@@ -283,6 +292,24 @@ defineEmits<{
                   <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
                 </div>
               </template>
+              <!-- 深度思考折叠开关:默认(非流式)收起为前几行,点击展开全文 -->
+              <button
+                v-if="hasReasoning"
+                type="button"
+                class="reasoning-toggle"
+                :aria-expanded="reasoningExpanded ? 'true' : 'false'"
+                @click="reasoningExpanded = !reasoningExpanded"
+              >
+                {{ reasoningExpanded ? '收起深度思考' : '展开深度思考' }}
+                <svg
+                  class="reasoning-toggle-chevron"
+                  :class="{ 'is-open': reasoningExpanded }"
+                  width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -594,6 +621,40 @@ defineEmits<{
   50% {
     opacity: 0;
   }
+}
+
+/* 深度思考收起态:正文截为前 4 行,底部渐隐提示还有更多 */
+.reasoning-text.is-collapsed .reasoning-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+/* 深度思考折叠开关:小号文字按钮,贴思考块底部 */
+.reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #7c6ee0;
+  cursor: pointer;
+}
+
+.reasoning-toggle:hover {
+  text-decoration: underline;
+}
+
+.reasoning-toggle-chevron {
+  transition: transform 0.15s ease;
+}
+
+.reasoning-toggle-chevron.is-open {
+  transform: rotate(180deg);
 }
 
 /* 思考块内的 tool 段去掉外层 margin,贴合思考块内边距 */
