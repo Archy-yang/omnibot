@@ -91,6 +91,10 @@ watch(
 const hasReasoning = computed(() =>
   thoughtSegments.value.some((s) => s.type === 'reasoning'),
 );
+// 第一段深度思考的下标:收起态只预览它(带截断),其余段隐藏,保证收起态紧凑
+const firstReasoningIdx = computed(() =>
+  thoughtSegments.value.findIndex((s) => s.type === 'reasoning'),
+);
 
 // 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
 // 以及无 segments 时的 content 回退渲染共用。
@@ -237,8 +241,9 @@ defineEmits<{
             <!-- 思考过程段:展开时按序渲染(reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
             <div v-show="!thoughtCollapsed" class="thought-content">
               <template v-for="(seg, idx) in thoughtSegments" :key="idx">
+                <!-- 深度思考段:收起态只预览第一段(截 2 行+渐隐),其余段隐藏;展开显示全部 -->
                 <div
-                  v-if="seg.type === 'reasoning'"
+                  v-if="seg.type === 'reasoning' && (reasoningExpanded || idx === firstReasoningIdx)"
                   class="reasoning-text"
                   :class="{ 'is-collapsed': !reasoningExpanded }"
                 >
@@ -250,7 +255,7 @@ defineEmits<{
                   class="thought-text markdown-body"
                   v-html="renderMarkdown(seg.content)"
                 ></div>
-                                <div v-else class="tool-segment">
+                                <div v-else-if="seg.type === 'tool'" class="tool-segment">
                   <button
                     type="button"
                     class="tool-segment-header"
@@ -623,12 +628,26 @@ defineEmits<{
   }
 }
 
-/* 深度思考收起态:正文截为前 4 行,底部渐隐提示还有更多 */
+/* 深度思考收起态:预览截为前 2 行,底部渐隐提示还有更多 */
+.reasoning-text.is-collapsed {
+  position: relative;
+}
+
 .reasoning-text.is-collapsed .reasoning-body {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 2;
   overflow: hidden;
+}
+
+.reasoning-text.is-collapsed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.2em;
+  background: linear-gradient(transparent, #f9fafb);
 }
 
 /* 深度思考折叠开关:小号文字按钮,贴思考块底部 */
