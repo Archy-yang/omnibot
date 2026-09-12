@@ -22,7 +22,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/user';
 import { APP_NAME, APP_VERSION, APP_TAGLINE, CHANNELS, ABOUT_LINKS } from '@/constants/about';
 import { channelBindingService } from '@/services/channelBinding';
-import DrawerShell from '@/components/layout/DrawerShell.vue';
+import DialogShell from '@/components/layout/DialogShell.vue';
 
 const props = defineProps<{
   visible: boolean;
@@ -37,6 +37,13 @@ const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const router = useRouter();
 const { success, error } = useToast();
+
+// dsh 设置弹窗:左侧分类导航(模型配置 / 关于)
+const navItems = [
+  { key: 'model', label: '模型配置' },
+  { key: 'about', label: '关于' },
+] as const;
+const activeSection = ref<string>('model');
 
 // Local form state — 编辑时不直接改 store,取消时恢复
 const localConfig = ref<LLMConfig>({
@@ -280,8 +287,16 @@ const showEmbeddingApiKey = ref(false);
 </script>
 
 <template>
-  <DrawerShell :visible="visible" title="设置" @close="emit('close')">
+  <DialogShell
+    :visible="visible"
+    title="设置"
+    :nav-items="navItems"
+    :active-nav="activeSection"
+    @update:active-nav="activeSection = $event"
+    @close="emit('close')"
+  >
     <!-- ===== 模型配置 section ===== -->
+    <div v-show="activeSection === 'model'" class="section-pane">
     <div class="section-title">模型配置</div>
 
     <!-- 配置状态提示条 -->
@@ -536,8 +551,10 @@ const showEmbeddingApiKey = ref(false);
       </button>
     </div>
 
+    </div><!-- /.section-pane 模型配置 -->
+
     <!-- ===== 关于 section ===== -->
-    <div class="section-about">
+    <div v-show="activeSection === 'about'" class="section-about">
       <div class="section-title">关于</div>
 
       <!-- 应用信息 -->
@@ -635,7 +652,7 @@ const showEmbeddingApiKey = ref(false);
     </div>
 
     <div class="drawer-footer-spacer"></div>
-  </DrawerShell>
+  </DialogShell>
 </template>
 
 <style scoped>

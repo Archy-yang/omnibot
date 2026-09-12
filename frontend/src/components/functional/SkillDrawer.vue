@@ -13,7 +13,7 @@ import { useToast } from '@/composables/useToast';
 import type { MCPServerItem, SkillItem } from '@/types/api';
 import { skillService } from '@/services/skill';
 import { mcpServerService } from '@/services/mcpServer';
-import DrawerShell from '@/components/layout/DrawerShell.vue';
+import DialogShell from '@/components/layout/DialogShell.vue';
 
 const props = defineProps<{
   visible: boolean;
@@ -230,7 +230,7 @@ watch(
 </script>
 
 <template>
-  <DrawerShell :visible="visible" title="技能" @close="emit('close')">
+  <DialogShell :visible="visible" title="技能" width="640px" @close="emit('close')">
     <!-- ===== MCP 服务 section ===== -->
     <div class="section-title">外部能力服务</div>
     <p class="section-hint">接入 MCP 服务后,它提供的技能会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
@@ -415,7 +415,7 @@ watch(
     </div>
 
     <div class="drawer-footer-spacer"></div>
-  </DrawerShell>
+  </DialogShell>
 </template>
 
 <style scoped>

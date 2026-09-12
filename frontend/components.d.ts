@@ -21,7 +21,7 @@ declare module 'vue' {
     ChatInput: typeof import('./src/components/chat/ChatInput.vue')['default']
     ChatMessage: typeof import('./src/components/chat/ChatMessage.vue')['default']
     ChatMessageList: typeof import('./src/components/chat/ChatMessageList.vue')['default']
-    DrawerShell: typeof import('./src/components/layout/DrawerShell.vue')['default']
+    DialogShell: typeof import('./src/components/layout/DialogShell.vue')['default']
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     MarkdownRenderer: typeof import('./src/components/functional/MarkdownRenderer.vue')['default']
     MemoryDrawer: typeof import('./src/components/functional/MemoryDrawer.vue')['default']

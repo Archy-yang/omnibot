@@ -13,7 +13,7 @@
  * 视觉对齐设计稿,不用 NaiveUI(原 NCard/NList/NEmpty/NInput 全部移除)。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import DrawerShell from '@/components/layout/DrawerShell.vue';
+import DialogShell from '@/components/layout/DialogShell.vue';
 import { useMemory } from '@/composables/useMemory';
 import { useToast } from '@/composables/useToast';
 
@@ -183,7 +183,7 @@ const formatTime = (iso: string): string => {
 </script>
 
 <template>
-  <DrawerShell :visible="visible" title="记忆" @close="emit('close')">
+  <DialogShell :visible="visible" title="记忆" width="640px" @close="emit('close')">
     <!-- 安全提醒条 -->
     <div class="safety-bar">
       <svg class="safety-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -364,7 +364,7 @@ const formatTime = (iso: string): string => {
         </div>
       </div>
     </div>
-  </DrawerShell>
+  </DialogShell>
 </template>
 
 <style scoped>
