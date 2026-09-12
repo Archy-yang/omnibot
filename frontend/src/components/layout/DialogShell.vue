@@ -62,10 +62,9 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <Transition name="dialog">
-      <div v-show="visible" class="dialog-root">
-        <!-- 遮罩:点击关闭(24% 黑 + 2px 模糊) -->
-        <div class="dialog-mask" @click="emit('close')"></div>
+    <div class="dialog-root" :class="{ 'is-open': visible }" :aria-hidden="!visible">
+      <!-- 遮罩:点击关闭 -->
+      <div class="dialog-mask" @click="emit('close')"></div>
 
         <div
           class="dialog-panel"
@@ -119,42 +118,10 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </div>
-    </Transition>
   </Teleport>
 </template>
 
 <style scoped>
-.dialog-root {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.dialog-mask {
-  position: absolute;
-  inset: 0;
-  /* 纯色遮罩,不用 backdrop-filter:模糊光栅化开销大且随宿主页面复杂度
-     波动,是打开卡顿的另一主因;24% 黑已能压住背景层级 */
-  background: var(--bg-mask);
-}
-
-.dialog-panel {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 48px);
-  border-radius: 24px;
-  overflow: hidden;
-  background: var(--bg-layer-2);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
 /* 导航布局:800 高面板固定高度,分类切换不抖动(dsh SettingsRoot) */
 .dialog-panel.has-nav {
   flex-direction: row;
@@ -271,48 +238,68 @@ onBeforeUnmount(() => {
   padding: 24px 24px 24px;
 }
 
-/* ===== 进出场性能要点 =====
-   不在 .dialog-root 整层上做 opacity 动画——整层容器内含 backdrop-filter
-   模糊层,对它做透明度动画会迫使 Chrome 每帧重算背景模糊(卡顿根源)。
-   改为拆开:遮罩只动自己的 opacity(模糊纹理可缓存),面板只动
-   transform+opacity(合成器路径),各自动画各自提升图层。 */
-.dialog-enter-active .dialog-mask {
+/* ===== 显隐与动画性能要点 =====
+   不用 display:none 切换(v-show)——它会把内容从渲染树摘掉,每次打开都要
+   对整棵弹窗子树重新布局,首帧掉在动画起点上,表现为「一点点出来」。
+   改用 visibility + opacity 常驻渲染树:布局/样式常驻,打开只做
+   合成器动画(遮罩动 opacity,面板动 transform+opacity)。
+   离场动画结束后才真正隐藏(transition-delay 兜底动画播完)。 */
+.dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  visibility: hidden;
+  pointer-events: none;
+  transition: visibility 0s linear 200ms;
+}
+
+.dialog-root.is-open {
+  visibility: visible;
+  pointer-events: auto;
+  transition: visibility 0s;
+}
+
+.dialog-mask {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-mask);
+  opacity: 0;
   transition: opacity 160ms ease;
 }
 
-.dialog-leave-active .dialog-mask {
-  transition: opacity 140ms ease;
+.is-open .dialog-mask {
+  opacity: 1;
 }
 
-.dialog-enter-from .dialog-mask,
-.dialog-leave-to .dialog-mask {
+.dialog-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  border-radius: 24px;
+  overflow: hidden;
+  background: var(--bg-layer-2);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.08);
   opacity: 0;
-}
-
-.dialog-enter-active .dialog-panel {
-  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1), opacity 160ms ease;
-  will-change: transform; /* 仅 enter 期间存在,类移除即释放 */
-}
-
-.dialog-leave-active .dialog-panel {
-  transition: transform 140ms ease, opacity 140ms ease;
-}
-
-.dialog-enter-from .dialog-panel {
   transform: scale(0.96);
-  opacity: 0;
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1), opacity 160ms ease;
 }
 
-.dialog-leave-to .dialog-panel {
-  transform: scale(0.98);
-  opacity: 0;
+.is-open .dialog-panel {
+  opacity: 1;
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dialog-enter-active .dialog-mask,
-  .dialog-leave-active .dialog-mask,
-  .dialog-enter-active .dialog-panel,
-  .dialog-leave-active .dialog-panel {
+  .dialog-root,
+  .dialog-mask,
+  .dialog-panel {
     transition: none;
   }
 }
