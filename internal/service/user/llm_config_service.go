@@ -265,15 +265,6 @@ func (s *GormLLMConfigService) ClearConfig(userID int64) error {
 	return s.repo.Delete(userID)
 }
 
-// embeddingFieldsState 嵌入配置字段状态:(是否有任一字段填写, 五要素是否齐全)。
-func embeddingFieldsState(req UpdateConfigRequest) (hasAny bool, complete bool) {
-	hasAny = req.EmbeddingProvider != "" || req.EmbeddingBaseURL != "" ||
-		req.EmbeddingAPIKey != "" || req.EmbeddingModel != "" || req.EmbeddingDims != 0
-	complete = req.EmbeddingProvider != "" && req.EmbeddingBaseURL != "" &&
-		req.EmbeddingAPIKey != "" && req.EmbeddingModel != "" && req.EmbeddingDims > 0
-	return
-}
-
 // GetEmbeddingConfigForUser 返回解密后的用户级向量配置(12-记忆系统技术方案 §5.3)。
 // 未配置/不完整/解密失败 → false;密文解密失败按无配置降级(装配点回落系统默认)。
 func (s *GormLLMConfigService) GetEmbeddingConfigForUser(userID int64) (*EmbeddingAPIConfig, bool, error) {
@@ -366,24 +357,6 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 		}
 	}
 
-	// 用户级向量配置校验(12-记忆系统技术方案 §5.3):全空=不设置,部分填写=拒绝;显式清除跳过
-	if !req.ClearEmbedding {
-		if hasAny, complete := embeddingFieldsState(req); hasAny && !complete {
-			return errors.New("向量配置不完整：provider、API 地址、API Key、模型、维度需全部填写")
-		}
-		if req.EmbeddingProvider != "" {
-			if !user.EmbeddingProviderAllowed(req.EmbeddingProvider) {
-				return errors.New("不支持的向量服务商，支持: openai_compatible, ollama")
-			}
-			if !strings.HasPrefix(req.EmbeddingBaseURL, "http://") && !strings.HasPrefix(req.EmbeddingBaseURL, "https://") {
-				return errors.New("向量 API 地址必须以 http:// 或 https:// 开头")
-			}
-			if len(req.EmbeddingAPIKey) < 10 || len(req.EmbeddingAPIKey) > 512 {
-				return errors.New("向量 API Key 长度不正确")
-			}
-		}
-	}
-
 	// 自定义 OpenAI-compatible 必须提供 BaseURL 和 Model
 	if req.Provider == "custom_openai_compatible" {
 		if req.BaseURL == "" {
@@ -446,20 +419,8 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 		cfg.MaxTokens = &tokens
 		cfg.DisableThinking = req.DisableThinking // 快模式(M5/C)
 
-		if hasAny, _ := embeddingFieldsState(req); hasAny {
-			encryptedEmbedKey, err := crypto.Encrypt(req.EmbeddingAPIKey)
-			if err != nil {
-				return err
-			}
-			provider := req.EmbeddingProvider
-			cfg.EmbeddingProvider = &provider
-			base := req.EmbeddingBaseURL
-			cfg.EmbeddingBaseURL = &base
-			cfg.EmbeddingAPIKey = encryptedEmbedKey
-			embedModel := req.EmbeddingModel
-			cfg.EmbeddingModel = &embedModel
-			dims := req.EmbeddingDims
-			cfg.EmbeddingDims = &dims
+		if err := applyEmbedding(cfg, req); err != nil {
+			return err
 		}
 
 		return s.repo.Create(cfg)
@@ -490,29 +451,85 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	cfg.MaxTokens = &tokens
 	cfg.DisableThinking = req.DisableThinking // 快模式(M5/C)
 
-	// 用户级向量配置(全空=不改动既有嵌入配置;部分填写已在前面校验拒绝;显式清除=回退系统默认)
+	// 用户级向量配置(空 key=沿用已存;字段缺省从既有回落;显式清除=回退系统默认)
+	if err := applyEmbedding(cfg, req); err != nil {
+		return err
+	}
+	cfg.UpdatedAt = now
+
+	return s.repo.Update(cfg)
+}
+
+// applyEmbedding 向量配置合并落库(M7 修订,与主 LLM key 行为对齐):
+//   - 全空 = 不改动既有配置;
+//   - 显式清除(ClearEmbedding)= 回退系统默认;
+//   - 任一字段填写 = 要设置向量配置,缺省字段从既有配置回落——key 留空 = 沿用已存 key,
+//     不再要求每次保存都重输;
+//     合并后仍不完整,或首次配置(无已存 key)未提供 key → 拒绝。
+func applyEmbedding(cfg *user.LLMConfig, req UpdateConfigRequest) error {
 	if req.ClearEmbedding {
 		cfg.EmbeddingProvider = nil
 		cfg.EmbeddingBaseURL = nil
 		cfg.EmbeddingAPIKey = ""
 		cfg.EmbeddingModel = nil
 		cfg.EmbeddingDims = nil
-	} else if hasAny, _ := embeddingFieldsState(req); hasAny {
-		encryptedEmbedKey, err := crypto.Encrypt(req.EmbeddingAPIKey)
+		return nil
+	}
+	hasInput := req.EmbeddingProvider != "" || req.EmbeddingBaseURL != "" ||
+		req.EmbeddingAPIKey != "" || req.EmbeddingModel != "" || req.EmbeddingDims != 0
+	if !hasInput {
+		return nil
+	}
+
+	// 缺省字段从既有配置回落
+	effProvider := pickStr(req.EmbeddingProvider, cfg.EmbeddingProvider)
+	effBaseURL := pickStr(req.EmbeddingBaseURL, cfg.EmbeddingBaseURL)
+	effModel := pickStr(req.EmbeddingModel, cfg.EmbeddingModel)
+	effDims := req.EmbeddingDims
+	if effDims == 0 && cfg.EmbeddingDims != nil {
+		effDims = *cfg.EmbeddingDims
+	}
+
+	if effProvider == "" || effBaseURL == "" || effModel == "" || effDims <= 0 {
+		return errors.New("向量配置不完整：provider、API 地址、模型、维度需完整")
+	}
+	if !user.EmbeddingProviderAllowed(effProvider) {
+		return errors.New("不支持的向量服务商，支持: openai_compatible, ollama")
+	}
+	if !strings.HasPrefix(effBaseURL, "http://") && !strings.HasPrefix(effBaseURL, "https://") {
+		return errors.New("向量 API 地址必须以 http:// 或 https:// 开头")
+	}
+
+	// key:留空=沿用已存;无已存 key(首次)必须提供
+	encKey := cfg.EmbeddingAPIKey
+	if req.EmbeddingAPIKey != "" {
+		if len(req.EmbeddingAPIKey) < 10 || len(req.EmbeddingAPIKey) > 512 {
+			return errors.New("向量 API Key 长度不正确")
+		}
+		encrypted, err := crypto.Encrypt(req.EmbeddingAPIKey)
 		if err != nil {
 			return err
 		}
-		provider := req.EmbeddingProvider
-		cfg.EmbeddingProvider = &provider
-		base := req.EmbeddingBaseURL
-		cfg.EmbeddingBaseURL = &base
-		cfg.EmbeddingAPIKey = encryptedEmbedKey
-		embedModel := req.EmbeddingModel
-		cfg.EmbeddingModel = &embedModel
-		dims := req.EmbeddingDims
-		cfg.EmbeddingDims = &dims
+		encKey = encrypted
+	} else if encKey == "" {
+		return errors.New("向量 API Key 不能为空（首次配置必须提供）")
 	}
-	cfg.UpdatedAt = now
 
-	return s.repo.Update(cfg)
+	cfg.EmbeddingProvider = &effProvider
+	cfg.EmbeddingBaseURL = &effBaseURL
+	cfg.EmbeddingModel = &effModel
+	cfg.EmbeddingDims = &effDims
+	cfg.EmbeddingAPIKey = encKey
+	return nil
+}
+
+// pickStr 请求值非空取请求值,否则回落既有指针值。
+func pickStr(v string, existing *string) string {
+	if v != "" {
+		return v
+	}
+	if existing != nil {
+		return *existing
+	}
+	return ""
 }

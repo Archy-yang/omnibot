@@ -264,8 +264,12 @@ const handleEmbeddingDimsInput = (e: Event) => {
 const validateEmbeddingConfig = (): string => {
   const cfg = localConfig.value;
   if (!cfg.embeddingProvider) return '';
-  if (!cfg.embeddingBaseUrl || !cfg.embeddingModel || !cfg.embeddingDims || !cfg.embeddingApiKey) {
-    return '向量配置需填写完整(含 API Key 与维度),或选择"使用系统默认"';
+  // key 留空 = 沿用已存 key(后端合并语义),仅首次配置(尚无已存向量配置)时必填
+  if (!cfg.embeddingApiKey && !settingsStore.hasEmbeddingConfig) {
+    return '请输入向量 API Key';
+  }
+  if (!cfg.embeddingBaseUrl || !cfg.embeddingModel || !cfg.embeddingDims) {
+    return '向量配置需填写完整(API 地址、模型与维度),或选择"使用系统默认"';
   }
   if (cfg.embeddingDims <= 0) return '向量维度必须为正整数';
   return '';
