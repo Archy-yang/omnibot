@@ -99,7 +99,7 @@ onBeforeUnmount(() => {
 .drawer-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-mask);
   animation: drawer-fade-in 150ms ease forwards;
 }
 
@@ -110,8 +110,8 @@ onBeforeUnmount(() => {
   width: 400px;
   max-width: 100vw;
   height: 100vh;
-  background: #ffffff;
-  border-left: 1px solid #f0f0f0;
+  background: var(--bg-base);
+  border-left: 0.5px solid var(--border-l3);
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
@@ -127,49 +127,34 @@ onBeforeUnmount(() => {
 }
 
 .drawer-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
 }
 
 .drawer-close {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #999;
+  color: var(--label-tertiary);
   transition: background 150ms ease, color 150ms ease;
 }
 
 .drawer-close:hover {
-  background: #f5f5f5;
-  color: #666;
+  background: var(--bg-hover);
+  color: var(--label-secondary);
 }
 
 .drawer-body {
   flex: 1;
   overflow-y: auto;
   padding: 0 24px 32px;
-}
-
-/* 滚动条美化:4px 细线条 */
-.drawer-body::-webkit-scrollbar {
-  width: 4px;
-}
-.drawer-body::-webkit-scrollbar-track {
-  background: transparent;
-}
-.drawer-body::-webkit-scrollbar-thumb {
-  background: #e0e0e0;
-  border-radius: 2px;
-}
-.drawer-body::-webkit-scrollbar-thumb:hover {
-  background: #ccc;
 }
 
 @keyframes drawer-fade-in {

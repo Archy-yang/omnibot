@@ -371,8 +371,8 @@ const formatTime = (iso: string): string => {
 /* ===== 安全提醒条 ===== */
 .safety-bar {
   padding: 10px 12px;
-  background: #fffbeb;
-  border-left: 3px solid #f59e0b;
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
   border-radius: 0 8px 8px 0;
   display: flex;
   align-items: center;
@@ -380,11 +380,11 @@ const formatTime = (iso: string): string => {
 }
 .safety-icon {
   flex-shrink: 0;
-  color: #f59e0b;
+  color: var(--warning);
 }
 .safety-text {
   font-size: 13px;
-  color: #92400e;
+  color: var(--warning-label);
   line-height: 1.4;
 }
 
@@ -401,22 +401,22 @@ const formatTime = (iso: string): string => {
   justify-content: center;
   gap: 6px;
   padding: 8px 12px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
-  background: #f8f9fa;
-  color: #6b7280;
+  background: var(--bg-tip);
+  color: var(--label-tertiary);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
   transition: all 150ms ease;
 }
 .memory-tab:hover {
-  border-color: #10a37f;
-  color: #10a37f;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .memory-tab.active {
-  background: #10a37f;
-  border-color: #10a37f;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #ffffff;
   font-weight: 500;
 }
@@ -424,7 +424,7 @@ const formatTime = (iso: string): string => {
   min-width: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--bg-active);
   font-size: 12px;
   text-align: center;
 }
@@ -433,11 +433,11 @@ const formatTime = (iso: string): string => {
 }
 .memory-empty-hint code {
   padding: 1px 5px;
-  background: #e5e7eb;
+  background: var(--label-dimmed);
   border-radius: 4px;
   font-family: 'SF Mono', 'Menlo', monospace;
   font-size: 12px;
-  color: #171717;
+  color: var(--label-primary);
 }
 
 /* ===== 新增记忆区 ===== */
@@ -448,24 +448,24 @@ const formatTime = (iso: string): string => {
 .memory-textarea {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
   font-size: 14px;
-  color: #171717;
+  color: var(--label-primary);
   font-family: inherit;
   line-height: 1.5;
   min-height: 80px;
   resize: vertical;
   outline: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
-  background: #fff;
+  background: var(--bg-base);
 }
 .memory-textarea::placeholder {
-  color: #ccc;
+  color: var(--label-caption);
 }
 .memory-textarea:focus {
-  border-color: #10a37f;
-  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(65, 118, 230, 0.08);
 }
 
 .memory-toolbar {
@@ -477,15 +477,15 @@ const formatTime = (iso: string): string => {
 
 .char-count {
   font-size: 12px;
-  color: #ccc;
+  color: var(--label-caption);
 }
 .char-count.is-over {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .add-btn {
   padding: 6px 16px;
-  background: #10a37f;
+  background: var(--accent);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -495,10 +495,10 @@ const formatTime = (iso: string): string => {
   transition: background 150ms ease;
 }
 .add-btn:hover:not(:disabled) {
-  background: #0d8c6d;
+  background: var(--accent-hover);
 }
 .add-btn:disabled {
-  background: #d4d4d4;
+  background: var(--accent-dimmed);
   cursor: not-allowed;
 }
 
@@ -515,7 +515,7 @@ const formatTime = (iso: string): string => {
 .memory-list-title {
   font-size: 14px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
 }
 .memory-list-meta {
   display: flex;
@@ -524,11 +524,11 @@ const formatTime = (iso: string): string => {
 }
 .memory-count {
   font-size: 12px;
-  color: #ccc;
+  color: var(--label-caption);
 }
 .clear-all-btn {
   font-size: 12px;
-  color: #ef4444;
+  color: var(--error);
   background: none;
   border: none;
   cursor: pointer;
@@ -548,21 +548,21 @@ const formatTime = (iso: string): string => {
   margin-top: 12px;
   padding: 16px;
   text-align: center;
-  color: #999;
+  color: var(--label-tertiary);
   font-size: 13px;
   line-height: 1.6;
 }
 .memory-empty-hint {
   margin-top: 4px;
   font-size: 12px;
-  color: #bbb;
+  color: var(--label-caption);
 }
 .memory-loading {
   margin-top: 12px;
   padding: 16px;
   text-align: center;
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
 }
 
 .memory-list {
@@ -571,7 +571,7 @@ const formatTime = (iso: string): string => {
 
 .memory-card {
   padding: 12px 14px;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--border-l1);
   border-radius: 8px;
   margin-bottom: 6px;
   display: flex;
@@ -580,20 +580,20 @@ const formatTime = (iso: string): string => {
   transition: background 150ms ease, border-color 150ms ease;
 }
 .memory-card:hover {
-  background: #fafafa;
-  border-color: #e5e5e5;
+  background: var(--bg-tip);
+  border-color: var(--border-l2);
 }
 
 .memory-index {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #f0f0f0;
+  background: var(--bg-hover);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: #999;
+  color: var(--label-tertiary);
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -604,14 +604,14 @@ const formatTime = (iso: string): string => {
 }
 .memory-text {
   font-size: 14px;
-  color: #333;
+  color: var(--label-primary);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .memory-time {
   font-size: 11px;
-  color: #ccc;
+  color: var(--label-caption);
   margin-top: 4px;
 }
 
@@ -631,25 +631,25 @@ const formatTime = (iso: string): string => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ccc;
+  color: var(--label-caption);
   transition: all 150ms ease;
 }
 .memory-action-btn.edit-btn:hover {
-  color: #999;
-  background: #f5f5f5;
+  color: var(--label-tertiary);
+  background: var(--bg-hover);
 }
 .memory-action-btn.delete-btn:hover {
-  color: #ef4444;
-  background: #fef2f2;
+  color: var(--error);
+  background: var(--error-bg);
 }
 
 /* ===== 编辑态 ===== */
 .memory-card.editing {
-  background: #fafafa;
-  border-color: #e5e5e5;
+  background: var(--bg-tip);
+  border-color: var(--border-l2);
 }
 .memory-card.editing .editing-index {
-  background: #10a37f;
+  background: var(--accent);
   color: white;
 }
 
@@ -660,21 +660,21 @@ const formatTime = (iso: string): string => {
 .memory-edit-textarea {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border-l2);
   border-radius: 6px;
   font-size: 14px;
-  color: #171717;
+  color: var(--label-primary);
   font-family: inherit;
   line-height: 1.5;
   min-height: 48px;
   resize: vertical;
   outline: none;
-  background: #ffffff;
+  background: var(--bg-base);
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 .memory-edit-textarea:focus {
-  border-color: #10a37f;
-  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(65, 118, 230, 0.08);
 }
 
 .memory-edit-toolbar {
@@ -690,22 +690,22 @@ const formatTime = (iso: string): string => {
 
 .edit-cancel-btn {
   padding: 4px 12px;
-  background: #f5f5f5;
+  background: var(--bg-hover);
   border: none;
   border-radius: 6px;
   font-size: 13px;
   font-family: inherit;
-  color: #666;
+  color: var(--label-secondary);
   cursor: pointer;
   transition: background 150ms ease;
 }
 .edit-cancel-btn:hover {
-  background: #ebebeb;
+  background: var(--bg-active);
 }
 
 .edit-save-btn {
   padding: 4px 12px;
-  background: #10a37f;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;
@@ -715,10 +715,10 @@ const formatTime = (iso: string): string => {
   transition: background 150ms ease;
 }
 .edit-save-btn:hover:not(:disabled) {
-  background: #0d8c6d;
+  background: var(--accent-hover);
 }
 .edit-save-btn:disabled {
-  background: #b8d9ce;
+  background: var(--accent-dimmed);
   cursor: not-allowed;
 }
 </style>

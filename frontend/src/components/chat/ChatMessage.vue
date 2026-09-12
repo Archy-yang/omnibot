@@ -397,11 +397,11 @@ defineEmits<{
 
 .user-bubble {
   max-width: 75%;
-  background: #f4f4f4;
-  color: #0d0d0d;
-  padding: 10px 18px;
+  background: var(--bubble-user);
+  color: var(--label-primary);
+  padding: 10px 16px;
   border-radius: 22px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -425,7 +425,7 @@ defineEmits<{
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2080f0 0%, #4dabff 100%);
+  background: var(--accent);
   color: #ffffff;
   font-size: 15px;
   font-weight: 600;
@@ -439,7 +439,7 @@ defineEmits<{
 
 .assistant-name {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   font-weight: 500;
 }
 
@@ -451,8 +451,8 @@ defineEmits<{
   font-size: 11px;
   font-weight: 500;
   line-height: 1.5;
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
   border-radius: 9999px;
   user-select: none;
 }
@@ -463,8 +463,8 @@ defineEmits<{
 }
 
 .assistant-content {
-  color: #0d0d0d;
-  font-size: 15px;
+  color: var(--label-primary);
+  font-size: 14px;
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
@@ -495,28 +495,28 @@ defineEmits<{
   background: transparent;
   border-radius: 6px;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--label-tertiary);
   transition: all 0.15s ease;
   padding: 0;
 }
 
 .action-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #111827;
+  background: var(--bg-hover);
+  color: var(--label-primary);
 }
 
 .action-btn:active {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--bg-active);
 }
 
 /* v2.0:thumbs up/down 选中态——填充 + 主题蓝,再次点击取消 */
 .action-btn.is-active {
-  color: #2563eb;
+  color: var(--accent);
 }
 
 .action-btn.is-active:hover {
-  background: rgba(37, 99, 235, 0.08);
-  color: #1d4ed8;
+  background: rgba(65, 118, 230, 0.1);
+  color: var(--accent-hover);
 }
 
 /* ===== 思考块 (思考模式改造) =====
@@ -525,8 +525,8 @@ defineEmits<{
    视觉语言沿用 tool-segment:浅灰底、左边框、小字、低对比度,不打扰主气泡阅读。 */
 .thought-block {
   margin: 8px 0 12px 0;
-  background: #f9fafb;
-  border-left: 2px solid #e5e7eb;
+  background: var(--code-bg);
+  border-left: 2px solid var(--border-l2);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -540,7 +540,7 @@ defineEmits<{
   background: transparent;
   border: none;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   line-height: 1.5;
   cursor: pointer;
   text-align: left;
@@ -548,13 +548,13 @@ defineEmits<{
 }
 
 .thought-toggle:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--bg-hover);
 }
 
 .thought-spinner,
 .thought-icon {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
 }
 
 .thought-spinner {
@@ -567,25 +567,25 @@ defineEmits<{
 
 .thought-chevron {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
   transition: transform 0.2s ease, color 0.15s ease;
 }
 
 .thought-chevron.is-open {
   transform: rotate(180deg);
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 
 .thought-content {
   padding: 4px 12px 10px 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
 }
 
 /* 思考文本段:小字、浅灰,与主气泡正文区分 */
 .thought-text {
   font-size: 13px;
   line-height: 1.6;
-  color: #6b7280;
+  color: var(--label-tertiary);
   margin: 6px 0;
 }
 
@@ -608,7 +608,7 @@ defineEmits<{
 }
 
 .reasoning-header:hover .reasoning-preview {
-  color: #6b7089;
+  color: var(--label-secondary);
 }
 
 .reasoning-badge {
@@ -616,8 +616,8 @@ defineEmits<{
   flex-shrink: 0;
   font-style: normal;
   font-size: 11px;
-  color: #7c6ee0;
-  background: rgba(124, 110, 224, 0.1);
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -627,7 +627,7 @@ defineEmits<{
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #8b8fa3;
+  color: var(--label-caption);
   font-style: italic;
   white-space: nowrap;
   overflow: hidden;
@@ -636,7 +636,7 @@ defineEmits<{
 
 .reasoning-chevron {
   flex-shrink: 0;
-  color: #8b8fa3;
+  color: var(--label-caption);
   transition: transform 0.15s ease;
 }
 
@@ -648,7 +648,7 @@ defineEmits<{
 .reasoning-body {
   font-size: 13px;
   line-height: 1.6;
-  color: #8b8fa3;
+  color: var(--label-caption);
   font-style: italic;
   margin: 4px 0;
   white-space: pre-wrap;
@@ -657,7 +657,7 @@ defineEmits<{
 
 .reasoning-cursor {
   display: inline-block;
-  color: #7c6ee0;
+  color: var(--accent);
   animation: reasoning-blink 1s step-end infinite;
 }
 
@@ -697,15 +697,15 @@ defineEmits<{
   flex-shrink: 0;
   font-style: normal;
   font-size: 11px;
-  color: #7c6ee0;
-  background: rgba(124, 110, 224, 0.1);
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
   border-radius: 4px;
   padding: 1px 6px;
 }
 
 .tool-segment-spinner {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
   animation: tool-spin 0.8s linear infinite;
 }
 
@@ -724,27 +724,27 @@ defineEmits<{
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .tool-segment-header:hover .tool-segment-preview {
-  color: #374151;
+  color: var(--label-secondary);
 }
 
 /* 工具实际名称:跟在友好标签后的浅灰小字(如 查询了任务 · query_task) */
 .tool-segment-name {
   margin-left: 4px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--label-caption);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .tool-segment-chevron {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
   transition: transform 0.15s ease;
 }
 
@@ -759,12 +759,12 @@ defineEmits<{
   padding: 10px 12px;
   max-height: 240px;
   overflow-y: auto;
-  background: #f4f4f4;
+  background: var(--code-bg);
   border-radius: 8px;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.6;
-  color: #374151;
+  color: var(--label-secondary);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -781,8 +781,8 @@ defineEmits<{
   line-height: 1.5;
 }
 
-:deep(.markdown-body) h1 { font-size: 24px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
-:deep(.markdown-body) h2 { font-size: 20px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+:deep(.markdown-body) h1 { font-size: 24px; border-bottom: 1px solid var(--border-l2); padding-bottom: 6px; }
+:deep(.markdown-body) h2 { font-size: 20px; border-bottom: 1px solid var(--border-l2); padding-bottom: 4px; }
 :deep(.markdown-body) h3 { font-size: 18px; }
 :deep(.markdown-body) h4 { font-size: 16px; }
 
@@ -878,13 +878,13 @@ defineEmits<{
   top: 2px;
   width: 16px;
   height: 16px;
-  accent-color: #2080f0; /* 勾选框用主题蓝色 */
+  accent-color: var(--accent); /* 勾选框用主题蓝色 */
   cursor: default;
 }
 
 /* 已完成的任务加删除线、变灰 */
 :deep(.markdown-body) .task-list-item:has(input:checked) {
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 :deep(.markdown-body) .task-list-item input:checked + * {
   text-decoration: line-through;
@@ -896,7 +896,7 @@ defineEmits<{
   position: absolute !important;
   left: 4px !important; /* 圆点和内容之间留4px空隙 */
   top: 0 !important;
-  color: #333 !important;
+  color: var(--label-primary) !important;
   font-size: 16px !important;
   line-height: 1.5 !important;
   z-index: 999 !important; /* 圆点层级最高，永远不会被文字盖住 */
@@ -922,14 +922,14 @@ defineEmits<{
 :deep(.markdown-body) blockquote {
   margin: 12px 0;
   padding: 8px 16px;
-  border-left: 4px solid #e5e7eb;
-  color: #6b7280;
-  background: #f9fafb;
+  border-left: 4px solid var(--border-l2);
+  color: var(--label-tertiary);
+  background: var(--code-bg);
   border-radius: 0 4px 4px 0;
 }
 
 :deep(.markdown-body) code {
-  background: #f4f4f4;
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
@@ -939,7 +939,7 @@ defineEmits<{
 :deep(.markdown-body) pre {
   margin: 12px 0;
   padding: 16px;
-  background: #f4f4f4;
+  background: var(--code-bg);
   border-radius: 8px;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
@@ -953,38 +953,38 @@ defineEmits<{
 }
 
 :deep(.markdown-body) a {
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: all 0.2s;
 }
 
 :deep(.markdown-body) a:hover {
-  border-bottom-color: #2563eb;
+  border-bottom-color: var(--accent);
 }
 
 :deep(.markdown-body) table {
   width: 100%;
   margin: 12px 0;
   border-collapse: collapse;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
 }
 
 :deep(.markdown-body) th,
 :deep(.markdown-body) td {
   padding: 8px 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-l2);
 }
 
 :deep(.markdown-body) th {
-  background: #f9fafb;
+  background: var(--code-bg);
   font-weight: 600;
 }
 
 :deep(.markdown-body) hr {
   margin: 20px 0;
   border: none;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border-l2);
 }
 </style>

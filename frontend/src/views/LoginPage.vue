@@ -130,7 +130,7 @@ const togglePassword = () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #fafafa;
+  background: var(--bg-tip);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
   padding: 24px;
 }
@@ -140,7 +140,7 @@ const togglePassword = () => {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: #10a37f;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -155,7 +155,7 @@ const togglePassword = () => {
 
 /* 登录卡片 */
 .auth-card {
-  background: #ffffff;
+  background: var(--bg-base);
   border-radius: 12px;
   width: 380px;
   max-width: 100%;
@@ -166,12 +166,12 @@ const togglePassword = () => {
 .card-title {
   font-size: 20px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   margin-bottom: 4px;
 }
 .card-subtitle {
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-bottom: 24px;
 }
 
@@ -186,32 +186,32 @@ const togglePassword = () => {
 }
 .form-label {
   font-size: 13px;
-  color: #666;
+  color: var(--label-secondary);
   font-weight: 500;
   margin-bottom: 6px;
 }
 .form-input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
   font-size: 14px;
-  color: #171717;
-  background: #ffffff;
+  color: var(--label-primary);
+  background: var(--bg-base);
   outline: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
   font-family: inherit;
   box-sizing: border-box;
 }
 .form-input::placeholder {
-  color: #bbb;
+  color: var(--label-caption);
 }
 .form-input:focus {
-  border-color: #10a37f;
-  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(65, 118, 230, 0.08);
 }
 .form-input:disabled {
-  background: #f9f9f9;
+  background: var(--bg-tip);
   cursor: not-allowed;
 }
 
@@ -239,12 +239,12 @@ const togglePassword = () => {
   transition: background 150ms ease;
 }
 .password-toggle:hover {
-  background: #f5f5f5;
+  background: var(--bg-hover);
 }
 .password-toggle svg {
   width: 16px;
   height: 16px;
-  color: #999;
+  color: var(--label-tertiary);
 }
 
 /* 错误提示 */
@@ -252,9 +252,9 @@ const togglePassword = () => {
   margin: 12px 0 0;
   padding: 8px 12px;
   font-size: 13px;
-  color: #b91c1c;
-  background: #fef2f2;
-  border-left: 3px solid #ef4444;
+  color: var(--error);
+  background: var(--error-bg);
+  border-left: 3px solid var(--error);
   border-radius: 4px;
 }
 
@@ -262,8 +262,8 @@ const togglePassword = () => {
 .submit-btn {
   width: 100%;
   padding: 10px;
-  background: #171717;
-  color: #ffffff;
+  background: var(--btn-primary-fill);
+  color: var(--btn-primary-foreground);
   border: none;
   border-radius: 8px;
   font-size: 14px;
@@ -274,7 +274,7 @@ const togglePassword = () => {
   margin-top: 24px;
 }
 .submit-btn:hover:not(:disabled) {
-  background: #333;
+  background: var(--btn-primary-hover);
 }
 .submit-btn:disabled {
   opacity: 0.6;
@@ -285,11 +285,11 @@ const togglePassword = () => {
 .auth-footer {
   text-align: center;
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-top: 20px;
 }
 .link {
-  color: #10a37f;
+  color: var(--accent);
   text-decoration: none;
   cursor: pointer;
 }
@@ -304,6 +304,6 @@ const togglePassword = () => {
 }
 .footer-version {
   font-size: 12px;
-  color: #ccc;
+  color: var(--label-caption);
 }
 </style>

@@ -87,8 +87,8 @@ defineEmits<{
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  background: #ffffff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--bg-base);
+  border-bottom: 0.5px solid var(--border-l2);
   flex-shrink: 0;
 }
 
@@ -103,7 +103,7 @@ defineEmits<{
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #10a37f;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -111,9 +111,9 @@ defineEmits<{
 }
 
 .brand-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   line-height: 1;
 }
 
@@ -121,7 +121,7 @@ defineEmits<{
 .nav-actions {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
 }
 
 .nav-btn {
@@ -132,19 +132,21 @@ defineEmits<{
   border: none;
   cursor: pointer;
   font-size: 14px;
-  color: #666666;
+  color: var(--label-tertiary);
   font-family: inherit;
-  padding: 4px 0;
-  transition: color 150ms ease;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .nav-btn:hover {
-  color: #171717;
+  background: var(--bg-hover);
+  color: var(--label-primary);
 }
 
 /* 当前页对应按钮高亮 */
 .nav-btn.is-active {
-  color: #171717;
+  color: var(--label-primary);
   font-weight: 500;
 }
 

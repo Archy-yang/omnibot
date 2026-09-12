@@ -19,7 +19,7 @@ const isUser = computed(() => props.role === 'user');
 <template>
   <div
     class="flex items-center justify-center rounded-sm flex-shrink-0 select-none"
-    :class="isUser ? 'bg-[#5436da]' : 'bg-[#19c37d]'"
+    :class="isUser ? 'bg-[var(--btn-primary-fill)]' : 'bg-[var(--accent)]'"
     :style="{ width: `${avatarSize}px`, height: `${avatarSize}px` }"
   >
     <!-- User Icon -->

@@ -144,7 +144,7 @@ const handleSend = async (content: string) => {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-base);
 }
 
 .main {
@@ -170,7 +170,7 @@ const handleSend = async (content: string) => {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: #10a37f;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -181,14 +181,14 @@ const handleSend = async (content: string) => {
 .welcome-title {
   font-size: 22px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   line-height: 1.3;
   margin: 0;
 }
 
 .welcome-subtitle {
   font-size: 14px;
-  color: #999999;
+  color: var(--label-tertiary);
   line-height: 1.4;
   margin: 0 0 16px;
   text-align: center;

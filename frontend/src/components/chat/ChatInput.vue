@@ -130,7 +130,7 @@ onMounted(() => {
 <style scoped>
 .chat-input-wrap {
   width: 100%;
-  background: #ffffff;
+  background: var(--bg-base);
   padding: 12px 24px 16px;
   flex-shrink: 0;
 }
@@ -148,16 +148,16 @@ onMounted(() => {
   flex-direction: column;
   align-items: stretch;
   width: 100%;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-base);
+  border: 0.5px solid var(--border-l4);
   border-radius: 16px;
   transition: all 0.2s;
   padding: 12px;
 }
 
 .chat-input-box:focus-within {
-  border-color: #2080f0;
-  box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(65, 118, 230, 0.08);
 }
 
 /* 输入区域 */
@@ -168,9 +168,9 @@ onMounted(() => {
   outline: none;
   border: none;
   padding: 0 0 12px 0;
-  font-size: 15px;
-  line-height: 1.5;
-  color: #333;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--label-primary);
   font-family: inherit;
   max-height: 200px;
   overflow-y: auto;
@@ -179,7 +179,7 @@ onMounted(() => {
 }
 
 .chat-textarea::placeholder {
-  color: #9ca3af;
+  color: var(--label-caption);
 }
 
 /* 底部工具栏 */
@@ -216,14 +216,14 @@ onMounted(() => {
   background: transparent;
   border-radius: 8px;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--label-tertiary);
   flex-shrink: 0;
   transition: all 0.15s;
 }
 
 .tool-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #374151;
+  background: var(--bg-hover);
+  color: var(--label-secondary);
 }
 
 /* 发送按钮 */
@@ -235,25 +235,25 @@ onMounted(() => {
   height: 36px;
   border: none;
   border-radius: 50%;
-  background: #e5e5e5;
-  color: #8e8ea0;
+  background: var(--accent-dimmed);
+  color: var(--label-caption);
   cursor: not-allowed;
   transition: all 0.15s;
   flex-shrink: 0;
 }
 
 .send-btn.active {
-  background: #000000;
-  color: #ffffff;
+  background: var(--btn-primary-fill);
+  color: var(--btn-primary-foreground);
   cursor: pointer;
 }
 
-.send-btn.active:hover { background: #2a2a2a; }
+.send-btn.active:hover { background: var(--btn-primary-hover); }
 
 .chat-input-hint {
   text-align: center;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--label-caption);
   margin-top: 12px;
 }
 </style>

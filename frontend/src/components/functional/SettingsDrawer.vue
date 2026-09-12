@@ -643,9 +643,9 @@ const showEmbeddingApiKey = ref(false);
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-l1);
   margin-bottom: 16px;
 }
 
@@ -655,7 +655,7 @@ const showEmbeddingApiKey = ref(false);
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #f8f9fa;
+  background: var(--bg-tip);
   border-radius: 8px;
   margin-bottom: 16px;
 }
@@ -663,15 +663,15 @@ const showEmbeddingApiKey = ref(false);
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #9ca3af;
+  background: var(--label-caption);
   flex-shrink: 0;
 }
 .config-hint-dot.is-custom {
-  background: #10a37f;
+  background: var(--accent);
 }
 .config-hint-text {
   font-size: 13px;
-  color: #888;
+  color: var(--label-tertiary);
   line-height: 1.5;
 }
 
@@ -680,7 +680,7 @@ const showEmbeddingApiKey = ref(false);
 }
 .clear-config-btn {
   font-size: 12px;
-  color: #ef4444;
+  color: var(--error);
   background: none;
   border: none;
   cursor: pointer;
@@ -702,12 +702,12 @@ const showEmbeddingApiKey = ref(false);
 .form-label {
   display: block;
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-bottom: 6px;
 }
 .form-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-top: 6px;
   line-height: 1.4;
 }
@@ -718,36 +718,36 @@ const showEmbeddingApiKey = ref(false);
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #666;
+  color: var(--label-secondary);
   cursor: pointer;
 }
 
 .thinking-checkbox {
   width: 16px;
   height: 16px;
-  accent-color: #7c6ee0;
+  accent-color: var(--accent);
   cursor: pointer;
 }
 .form-input,
 .form-select {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
   font-size: 14px;
-  color: #171717;
-  background: #ffffff;
+  color: var(--label-primary);
+  background: var(--bg-base);
   outline: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
   font-family: inherit;
 }
 .form-input:focus,
 .form-select:focus {
-  border-color: #2080f0;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.1);
 }
 .form-input::placeholder {
-  color: #bbb;
+  color: var(--label-caption);
 }
 .form-select {
   appearance: none;
@@ -780,10 +780,10 @@ const showEmbeddingApiKey = ref(false);
   justify-content: center;
   cursor: pointer;
   transition: background 150ms ease;
-  color: #999;
+  color: var(--label-tertiary);
 }
 .password-toggle:hover {
-  background: #f5f5f5;
+  background: var(--bg-hover);
 }
 
 /* ===== Temperature 滑块 ===== */
@@ -797,7 +797,7 @@ const showEmbeddingApiKey = ref(false);
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: #e5e5e5;
+  background: var(--label-dimmed);
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -808,7 +808,7 @@ const showEmbeddingApiKey = ref(false);
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #10a37f;
+  background: var(--accent);
   border: 2px solid #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
   cursor: pointer;
@@ -821,14 +821,14 @@ const showEmbeddingApiKey = ref(false);
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #10a37f;
+  background: var(--accent);
   border: 2px solid #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
   cursor: pointer;
 }
 .temperature-value {
   font-size: 13px;
-  color: #666;
+  color: var(--label-secondary);
   min-width: 28px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -838,7 +838,7 @@ const showEmbeddingApiKey = ref(false);
 .embedding-block {
   margin-top: 20px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
 }
 .embedding-row {
   display: flex;
@@ -853,7 +853,7 @@ const showEmbeddingApiKey = ref(false);
 .form-actions {
   margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -868,21 +868,21 @@ const showEmbeddingApiKey = ref(false);
   font-family: inherit;
 }
 .btn-cancel {
-  background: #f5f5f5;
-  color: #666;
+  background: var(--bg-hover);
+  color: var(--label-secondary);
 }
 .btn-cancel:hover {
-  background: #ebebeb;
+  background: var(--bg-active);
 }
 .btn-save {
-  background: #171717;
-  color: #ffffff;
+  background: var(--btn-primary-fill);
+  color: var(--btn-primary-foreground);
 }
 .btn-save:hover:not(:disabled) {
-  background: #333;
+  background: var(--btn-primary-hover);
 }
 .btn-save:disabled {
-  background: #d4d4d4;
+  background: var(--accent-dimmed);
   cursor: not-allowed;
 }
 
@@ -896,16 +896,16 @@ const showEmbeddingApiKey = ref(false);
 .app-name {
   font-size: 16px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
 }
 .app-version {
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-top: 2px;
 }
 .app-desc {
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-top: 4px;
 }
 
@@ -920,12 +920,12 @@ const showEmbeddingApiKey = ref(false);
 .entry-label {
   font-size: 13px;
   font-weight: 500;
-  color: #999;
+  color: var(--label-tertiary);
   margin-bottom: 8px;
 }
 .entry-item {
   padding: 10px 12px;
-  background: #f8f9fa;
+  background: var(--bg-tip);
   border-radius: 8px;
   margin-bottom: 6px;
   display: flex;
@@ -941,17 +941,17 @@ const showEmbeddingApiKey = ref(false);
 }
 .entry-name {
   font-size: 13px;
-  color: #333;
+  color: var(--label-primary);
   font-weight: 500;
 }
 .entry-desc {
   font-size: 12px;
-  color: #999;
+  color: var(--label-tertiary);
   margin-top: 1px;
 }
 .entry-badge {
-  background: #e8f5e9;
-  color: #10a37f;
+  background: var(--success-bg);
+  color: var(--accent);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -963,11 +963,11 @@ const showEmbeddingApiKey = ref(false);
 .source-link {
   margin-top: 16px;
   font-size: 13px;
-  color: #999;
+  color: var(--label-tertiary);
   word-break: break-all;
 }
 .source-link a {
-  color: #10a37f;
+  color: var(--accent);
   text-decoration: none;
   transition: opacity 150ms ease;
 }
@@ -980,23 +980,23 @@ const showEmbeddingApiKey = ref(false);
   margin-top: 20px;
   padding: 10px 16px;
   width: 100%;
-  background: #ffffff;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
+  background: var(--bg-base);
+  color: var(--error);
+  border: 1px solid rgba(236, 19, 19, 0.25);
   border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
   transition: background 0.15s;
 }
 .logout-btn:hover {
-  background: #fef2f2;
+  background: var(--error-bg);
 }
 
 /* v2.3 渠道绑定区块 */
 .feishu-bind-block {
   margin-top: 20px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
 }
 .channel-status-row {
   display: flex;
@@ -1009,40 +1009,40 @@ const showEmbeddingApiKey = ref(false);
   align-items: center;
   gap: 6px;
   padding: 10px 12px;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--code-bg);
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
   font-size: 13px;
 }
 .channel-status-item.bound {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
+  background: var(--success-bg);
+  border-color: rgba(34, 197, 94, 0.3);
 }
 .channel-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #d1d5db;
+  background: var(--label-dimmed);
 }
 .channel-status-item.bound .channel-dot {
-  background: #22c55e;
+  background: var(--success);
 }
 .channel-name {
   font-weight: 500;
-  color: #171717;
+  color: var(--label-primary);
 }
 .channel-state {
   margin-left: auto;
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 .channel-status-item.bound .channel-state {
-  color: #15803d;
+  color: var(--success);
 }
 
 .feishu-code-btn {
   width: 100%;
   padding: 10px 16px;
-  background: #10a37f;
+  background: var(--accent);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -1052,7 +1052,7 @@ const showEmbeddingApiKey = ref(false);
   transition: background 0.15s;
 }
 .feishu-code-btn:hover:not(:disabled) {
-  background: #0d8f6f;
+  background: var(--accent-hover);
 }
 .feishu-code-btn:disabled {
   opacity: 0.6;
@@ -1060,15 +1060,15 @@ const showEmbeddingApiKey = ref(false);
 }
 .feishu-code-display {
   padding: 16px;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--code-bg);
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
 }
 .feishu-code-text {
   font-size: 32px;
   font-weight: 700;
   letter-spacing: 6px;
-  color: #10a37f;
+  color: var(--accent);
   text-align: center;
   font-family: 'SF Mono', 'Menlo', monospace;
 }
@@ -1080,22 +1080,22 @@ const showEmbeddingApiKey = ref(false);
 }
 .feishu-countdown {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 .feishu-countdown.expired {
-  color: #b91c1c;
+  color: var(--error);
 }
 .feishu-regen-btn {
   padding: 4px 12px;
-  background: #ffffff;
-  color: #10a37f;
-  border: 1px solid #10a37f;
+  background: var(--bg-base);
+  color: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
 }
 .feishu-regen-btn:hover:not(:disabled) {
-  background: #f0fdf4;
+  background: var(--success-bg);
 }
 .feishu-regen-btn:disabled {
   opacity: 0.6;
@@ -1104,15 +1104,15 @@ const showEmbeddingApiKey = ref(false);
 .feishu-code-tip {
   margin: 12px 0 0;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   line-height: 1.5;
 }
 .feishu-code-tip code {
   padding: 2px 6px;
-  background: #e5e7eb;
+  background: var(--label-dimmed);
   border-radius: 4px;
   font-family: 'SF Mono', 'Menlo', monospace;
-  color: #171717;
+  color: var(--label-primary);
 }
 
 .drawer-footer-spacer {
