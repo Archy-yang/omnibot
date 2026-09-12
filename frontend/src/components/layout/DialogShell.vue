@@ -266,32 +266,48 @@ onBeforeUnmount(() => {
   padding: 24px 24px 24px;
 }
 
-/* ===== 进出场(dsh 弹窗淡入 + 轻微缩放) ===== */
-.dialog-enter-active {
+/* ===== 进出场性能要点 =====
+   不在 .dialog-root 整层上做 opacity 动画——整层容器内含 backdrop-filter
+   模糊层,对它做透明度动画会迫使 Chrome 每帧重算背景模糊(卡顿根源)。
+   改为拆开:遮罩只动自己的 opacity(模糊纹理可缓存),面板只动
+   transform+opacity(合成器路径),各自动画各自提升图层。 */
+.dialog-enter-active .dialog-mask {
   transition: opacity 160ms ease;
 }
 
-.dialog-leave-active {
+.dialog-leave-active .dialog-mask {
   transition: opacity 140ms ease;
 }
 
-.dialog-enter-active .dialog-panel {
-  transition: transform 160ms ease;
+.dialog-enter-from .dialog-mask,
+.dialog-leave-to .dialog-mask {
+  opacity: 0;
 }
 
-.dialog-enter-from,
-.dialog-leave-to {
-  opacity: 0;
+.dialog-enter-active .dialog-panel {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1), opacity 160ms ease;
+  will-change: transform; /* 仅 enter 期间存在,类移除即释放 */
+}
+
+.dialog-leave-active .dialog-panel {
+  transition: transform 140ms ease, opacity 140ms ease;
 }
 
 .dialog-enter-from .dialog-panel {
   transform: scale(0.96);
+  opacity: 0;
+}
+
+.dialog-leave-to .dialog-panel {
+  transform: scale(0.98);
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dialog-enter-active,
-  .dialog-leave-active,
-  .dialog-enter-active .dialog-panel {
+  .dialog-enter-active .dialog-mask,
+  .dialog-leave-active .dialog-mask,
+  .dialog-enter-active .dialog-panel,
+  .dialog-leave-active .dialog-panel {
     transition: none;
   }
 }
