@@ -12,6 +12,10 @@
  * 行为：点遮罩 / 点 X / 按 ESC → emit 'close'；visible 时锁 body 滚动。
  * 无 navItems 时为窄弹窗（标题在顶部 header）；有 navItems 时为宽弹窗
  * （标题进导航列，内容区随 activeNav 切换由调用方控制）。
+ *
+ * 性能：内容常驻挂载（v-show 切换显示），不做 v-if 重建——每次打开都
+ * 重新挂载整棵弹窗子树（几百节点 + 样式计算）是打开卡顿的主因之一。
+ * 遮罩不用 backdrop-filter：模糊光栅化开销大且不可控，24% 黑遮罩足够。
  */
 import { watch, onBeforeUnmount } from 'vue';
 
@@ -59,7 +63,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition name="dialog">
-      <div v-if="visible" class="dialog-root">
+      <div v-show="visible" class="dialog-root">
         <!-- 遮罩:点击关闭(24% 黑 + 2px 模糊) -->
         <div class="dialog-mask" @click="emit('close')"></div>
 
@@ -133,8 +137,9 @@ onBeforeUnmount(() => {
 .dialog-mask {
   position: absolute;
   inset: 0;
+  /* 纯色遮罩,不用 backdrop-filter:模糊光栅化开销大且随宿主页面复杂度
+     波动,是打开卡顿的另一主因;24% 黑已能压住背景层级 */
   background: var(--bg-mask);
-  backdrop-filter: blur(2px);
 }
 
 .dialog-panel {
