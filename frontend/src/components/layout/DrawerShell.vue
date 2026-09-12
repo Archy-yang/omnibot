@@ -3,7 +3,7 @@
  * DrawerShell — v2.0 右侧抽屉通用壳
  *
  * 设计稿(docs/60-设计/omnibot-prototype/pages/v2-memory.html /
- * v2-settings.html)统一交互:点击 AppNav 的「记忆」/「设置」从右侧滑入
+ * v2-settings.html)统一交互:点击左侧栏的「记忆」/「设置」从右侧滑入
  * 400px 抽屉,主对话页面常驻背景。MemoryDrawer / SettingsDrawer 共用这一壳层,
  * 避免重复实现遮罩/滑入动画/ESC 关闭/标题栏。
  *

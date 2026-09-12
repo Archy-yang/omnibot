@@ -103,14 +103,17 @@ export type AppContentProps = {
   maxWidth?: string;
 };
 
-// Sidebar types
+// Sidebar types（dsh 左侧栏：常驻，可折叠，无遮罩/visible 概念）
 export type SidebarProps = {
-  visible: boolean;
-  width?: string;
+  /** 当前高亮的导航项：抽屉打开时对应高亮，都没开时为 chat */
+  current?: 'chat' | 'memory' | 'skills' | 'settings';
 };
 
 export type SidebarEmits = {
-  close: [];
+  'open-chat': [];
+  'open-memory': [];
+  'open-skills': [];
+  'open-settings': [];
 };
 
 // SettingsPanel types

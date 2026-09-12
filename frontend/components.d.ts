@@ -13,7 +13,6 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppContent: typeof import('./src/components/layout/AppContent.vue')['default']
     AppHeader: typeof import('./src/components/layout/AppHeader.vue')['default']
-    AppNav: typeof import('./src/components/layout/AppNav.vue')['default']
     BaseButton: typeof import('./src/components/common/BaseButton.vue')['default']
     BaseIcon: typeof import('./src/components/common/BaseIcon.vue')['default']
     BaseInput: typeof import('./src/components/common/BaseInput.vue')['default']
