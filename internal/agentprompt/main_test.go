@@ -15,7 +15,7 @@ import (
 func TestMainAgentMigration_Golden_WithSubAgents(t *testing.T) {
 	got, err := BuildMainAgentSystemPrompt(true)
 	require.NoError(t, err)
-	want := DefaultSystemPrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt
+	want := DefaultSystemPrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt + MainSubscriptionRulesPrompt
 	require.Equal(t, want, got,
 		"主 Agent(有子 Agent)的 registry 组装必须与默认拼接逐字节一致")
 }
@@ -33,11 +33,13 @@ func TestMainAgentSections_Scoping(t *testing.T) {
 	assert.True(t, sectionHas(withSub, ScopeMain, "delegation_rules"))
 	assert.True(t, sectionHas(withSub, ScopeMain, "reporting_rules"))
 	assert.True(t, sectionHas(withSub, ScopeMain, "task_mgmt"))
+	assert.True(t, sectionHas(withSub, ScopeMain, "subscription_rules"))
 
 	noSub := MainAgentSections(false)
 	assert.False(t, sectionHas(noSub, ScopeMain, "delegation_rules"), "无子 Agent 时不装配派活 section")
 	assert.False(t, sectionHas(noSub, ScopeMain, "reporting_rules"))
 	assert.False(t, sectionHas(noSub, ScopeMain, "task_mgmt"))
+	assert.False(t, sectionHas(noSub, ScopeMain, "subscription_rules"))
 	assert.True(t, sectionHas(noSub, ScopeMain, "agent_base"), "基础人格恒在")
 }
 

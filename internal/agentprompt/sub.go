@@ -58,6 +58,7 @@ func buildSubContract(spec domainagent.TaskSpec) string {
 //   - agent_base(-100):共享基础人格(与主 Agent 同款 DefaultSystemPrompt)
 //   - sub_role(0):通用执行器 persona(SubAgentExecutorPersona),不再"你是研究员"
 //   - sub_persona_hint(50):taskSpec.PersonaHint 非空才注册 → 【本次任务角色】{hint}(主 Agent 按任务给,可空)
+//   - sub_source_rules(60):信息源选择规则(14-订阅源管理 §6.4:先看订阅清单)
 //   - sub_contract(100):任务合同(spec 无详情时为空文本,组装时跳过)
 func SubAgentPromptSections(scope ScopeKey, spec domainagent.TaskSpec) []PromptSection {
 	sections := []PromptSection{
@@ -67,6 +68,7 @@ func SubAgentPromptSections(scope ScopeKey, spec domainagent.TaskSpec) []PromptS
 	if strings.TrimSpace(spec.PersonaHint) != "" {
 		sections = append(sections, StaticSection("sub_persona_hint", scope, 50, "【本次任务角色】"+strings.TrimSpace(spec.PersonaHint)))
 	}
+	sections = append(sections, StaticSection("sub_source_rules", scope, 60, SubSourceRulesPrompt))
 	return append(sections, StaticSection("sub_contract", scope, 100, buildSubContract(spec)))
 }
 

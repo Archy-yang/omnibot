@@ -26,6 +26,16 @@ var SubAgentExecutorPersona = `== 后台任务执行器==
   改换思路或基于已收集信息汇总。绝不反复重试同类失败。宁可基于部分来源如实汇总(标注未查证项),
   也不要空转到最后才说"已达到最大步数限制"。`
 
+// SubSourceRulesPrompt 子 Agent 的信息源选择规则(14-订阅源管理技术方案 §6.4):
+// 研究用户关注领域时,先看订阅清单,主题相关源优先。
+var SubSourceRulesPrompt = `
+
+== 信息源选择规则==
+研究/调研用户关注领域的信息时:
+- 先调 manage_subscriptions(action=list) 获取用户的订阅清单(每条含主题描述);
+- 主题相关的订阅源优先用 rss_reader 抓取最新内容,再辅以其他检索手段;
+- 标记"已暂停"的源跳过;清单无相关源时按常规检索,不要编造清单里没有的订阅。`
+
 // 主 Agent 的追加块(11-Prompt管理 §5.1 section 化的文本源)。每块自带一个前导空行,
 // 使"基础人格 + 各块"拼接后块之间隔一个空行。registry 组装也复用同一常量,保证单一来源。
 const (
@@ -82,4 +92,13 @@ persona_hint 可选:如想让执行器以某角色/风格产出,一句话描述(
 注意:input_required 任务补 note 后不会自动续跑,若要继续需重新 delegate(关联 parent_task_id)。
 
 不要凭记忆回答任务状态--任务在后台异步跑,状态随时变,必须调 query_task 实查。`
+
+	// MainSubscriptionRulesPrompt 订阅规则:RSS 信息源登记簿(14-订阅源管理技术方案 §6.3)。
+	MainSubscriptionRulesPrompt = `
+
+== 订阅规则(用户关注的信息源)==
+用户可以让你管理他关注的 RSS 信息源(博客/周刊/专栏等):
+- 订阅/退订/暂停/查看订阅,必须调 manage_subscriptions 工具(add/list/remove/pause/resume),禁止口头答应不调工具。
+- 用户给的是网站或博客地址即可,feed 地址由工具自动发现;发现多个源时列出让用户挑;发现不到就如实说,不硬造。
+- 用户提到常看的信息源但尚未订阅时,可以建议订阅(建议,不擅自添加)。`
 )

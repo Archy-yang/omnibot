@@ -32,11 +32,13 @@ import (
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
 	skillRepo "omnibot/internal/repository/skill"
+	subscriptionRepo "omnibot/internal/repository/subscription"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	skillService "omnibot/internal/service/skill"
+	subscriptionService "omnibot/internal/service/subscription"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -92,6 +94,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	memoryEmbedding := buildEmbeddingProvider(cfg)
 	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
+	// 14-订阅源管理:RSS 信息源登记簿(查询时按需取,无定时抓取)
+	subscriptionSvc := subscriptionService.NewSubscriptionService(
+		subscriptionRepo.NewSubscriptionRepository(dbConn.GetGormDB()),
+		subscriptionService.NewDiscoverer(),
+	)
 	// M7 中期记忆(§10.6):消息向量 + 原文回表注入检索;任一缺省则中期区静默缺失
 	memorySvc := memoryService.NewMemoryService(
 		memoryRepository,
@@ -210,6 +217,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
 	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
 	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchMemoriesTool(memorySvc) })
+	// 订阅源管理(14 §6.1):主 Agent 管理订阅;子 Agent list 取清单选源(能力打标 research/memory)
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateManageSubscriptionsTool(subscriptionSvc) })
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
 	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
