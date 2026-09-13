@@ -105,13 +105,14 @@ export type AppContentProps = {
 
 // Sidebar types（dsh 左侧栏：常驻，可折叠，无遮罩/visible 概念）
 export type SidebarProps = {
-  /** 当前高亮的导航项：抽屉打开时对应高亮，都没开时为 chat */
-  current?: 'chat' | 'memory' | 'skills' | 'settings';
+  /** 当前高亮的导航项：弹窗打开时对应高亮，都没开时为 chat */
+  current?: 'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings';
 };
 
 export type SidebarEmits = {
   'open-chat': [];
   'open-memory': [];
+  'open-subscriptions': [];
   'open-skills': [];
   'open-settings': [];
 };

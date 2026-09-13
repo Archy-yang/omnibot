@@ -305,3 +305,39 @@ export interface SyncMCPServerResponse {
   tool_count: number;
   err?: string;
 }
+
+/**
+ * 订阅源条目(14-订阅源管理):用户关注的 RSS 信息源
+ */
+export interface SubscriptionItem {
+  id: number;
+  site_url: string;
+  feed_url: string;
+  title: string;
+  topic_desc: string;
+  status: 'active' | 'paused';
+}
+
+/**
+ * 订阅清单响应
+ */
+export interface ListSubscriptionsResponse {
+  subscriptions: SubscriptionItem[];
+}
+
+/**
+ * 候选 feed(订阅站点自动发现出多个源时让用户挑)
+ */
+export interface SubscriptionFeedCandidate {
+  feed_url: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * 订阅响应:subscription=入库成功;candidates=多候选待选,二选一非空
+ */
+export interface AddSubscriptionResponse {
+  subscription?: SubscriptionItem;
+  candidates?: SubscriptionFeedCandidate[];
+}

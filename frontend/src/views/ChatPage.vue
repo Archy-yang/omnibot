@@ -7,6 +7,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import ChatAvatar from '@/components/chat/ChatAvatar.vue';
 import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
+import SubscriptionDialog from '@/components/functional/SubscriptionDialog.vue';
 import SkillDrawer from '@/components/functional/SkillDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
@@ -19,8 +20,9 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
-// 记忆/技能抽屉本地状态(设置抽屉走 settingsStore.showSettingsPanel)
+// 记忆/订阅/技能弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
+const showSubscriptionDialog = ref(false);
 const showSkillDrawer = ref(false);
 
 const isEmpty = computed(() => messages.value.length === 0);
@@ -28,17 +30,19 @@ const inputPlaceholder = computed(() =>
   isEmpty.value ? '有什么可以帮你的？' : '继续对话...'
 );
 
-// 侧栏导航高亮:抽屉打开时高亮对应项,都没开时高亮「对话」
-const navCurrent = computed<'chat' | 'memory' | 'skills' | 'settings'>(() => {
+// 侧栏导航高亮:弹窗打开时高亮对应项,都没开时高亮「对话」
+const navCurrent = computed<'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
+  if (showSubscriptionDialog.value) return 'subscriptions';
   if (showSkillDrawer.value) return 'skills';
   if (showSettingsPanel.value) return 'settings';
   return 'chat';
 });
 
-// 侧栏「对话」:回到对话主页面,收起全部抽屉
+// 侧栏「对话」:回到对话主页面,收起全部弹窗
 const closeAllDrawers = () => {
   showMemoryDrawer.value = false;
+  showSubscriptionDialog.value = false;
   showSkillDrawer.value = false;
   if (showSettingsPanel.value) toggleSettingsPanel();
 };
@@ -77,6 +81,7 @@ const handleSend = async (content: string) => {
       :current="navCurrent"
       @open-chat="closeAllDrawers"
       @open-memory="showMemoryDrawer = true"
+      @open-subscriptions="showSubscriptionDialog = true"
       @open-skills="showSkillDrawer = true"
       @open-settings="toggleSettingsPanel"
     />
@@ -134,6 +139,11 @@ const handleSend = async (content: string) => {
     <MemoryDrawer
       :visible="showMemoryDrawer"
       @close="showMemoryDrawer = false"
+    />
+
+    <SubscriptionDialog
+      :visible="showSubscriptionDialog"
+      @close="showSubscriptionDialog = false"
     />
 
     <SkillDrawer

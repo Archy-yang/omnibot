@@ -16,13 +16,14 @@ import { ref } from 'vue';
 import { useSettingsStore } from '@/stores/settings';
 
 const props = defineProps<{
-  /** 当前高亮的导航项：抽屉打开时对应高亮，都没开时为 chat */
-  current?: 'chat' | 'memory' | 'skills' | 'settings';
+  /** 当前高亮的导航项：弹窗打开时对应高亮，都没开时为 chat */
+  current?: 'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings';
 }>();
 
 const emit = defineEmits<{
   'open-chat': [];
   'open-memory': [];
+  'open-subscriptions': [];
   'open-skills': [];
   'open-settings': [];
 }>();
@@ -35,14 +36,16 @@ const collapsed = ref(false);
 const navItems = [
   { key: 'chat', label: '对话' },
   { key: 'memory', label: '记忆' },
+  { key: 'subscriptions', label: '订阅' },
   { key: 'skills', label: '技能' },
   { key: 'settings', label: '设置' },
 ] as const;
 
-const handleNav = (key: 'chat' | 'memory' | 'skills' | 'settings') => {
+const handleNav = (key: 'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings') => {
   switch (key) {
     case 'chat': emit('open-chat'); break;
     case 'memory': emit('open-memory'); break;
+    case 'subscriptions': emit('open-subscriptions'); break;
     case 'skills': emit('open-skills'); break;
     case 'settings': emit('open-settings'); break;
   }
@@ -99,6 +102,12 @@ const handleNav = (key: 'chat' | 'memory' | 'skills' | 'settings') => {
           <svg v-else-if="item.key === 'memory'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2 2 0 0 1-2-2V6.5a.5.5 0 0 0-.5-.5H4a2 2 0 0 1 0-4h5.5z"/>
             <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2 2 0 0 0 2-2V6.5a.5.5 0 0 1 .5-.5H20a2 2 0 0 0 0-4h-5.5z"/>
+          </svg>
+          <!-- 订阅(RSS) -->
+          <svg v-else-if="item.key === 'subscriptions'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 11a9 9 0 0 1 9 9"/>
+            <path d="M4 4a16 16 0 0 1 16 16"/>
+            <circle cx="5" cy="19" r="1"/>
           </svg>
           <!-- 技能 -->
           <svg v-else-if="item.key === 'skills'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

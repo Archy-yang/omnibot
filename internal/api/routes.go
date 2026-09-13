@@ -379,6 +379,17 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.PUT("/:id", webHandler.HandleUpdateMemory)
 	}
 
+	// 订阅源管理路由(14-订阅源管理:对话入口之外的页面管理入口)
+	subscriptionAPIGroup := r.Group("/api/v1/subscriptions")
+	subscriptionAPIGroup.Use(middleware.AuthRequired(jwtSvc))
+	{
+		subscriptionHandler := web.NewSubscriptionHandler(subscriptionSvc)
+		subscriptionAPIGroup.GET("", subscriptionHandler.HandleListSubscriptions)
+		subscriptionAPIGroup.POST("", subscriptionHandler.HandleAddSubscription)
+		subscriptionAPIGroup.DELETE("/:id", subscriptionHandler.HandleDeleteSubscription)
+		subscriptionAPIGroup.PUT("/:id/status", subscriptionHandler.HandleUpdateSubscriptionStatus)
+	}
+
 	// 技能管理路由(13-插件系统):清单 + 启停
 	skillAPIGroup := r.Group("/api/v1/skills")
 	skillAPIGroup.Use(middleware.AuthRequired(jwtSvc))
