@@ -8,8 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"omnibot/internal/middleware"
 	subdomain "omnibot/internal/domain/subscription"
+	"omnibot/internal/middleware"
 	"omnibot/pkg/logger"
 )
 
@@ -51,7 +51,7 @@ type ListSubscriptionsResponse struct {
 
 type AddSubscriptionResponse struct {
 	Subscription *SubscriptionDTO `json:"subscription,omitempty"` // 入库成功时非空(含幂等重订)
-	Candidates   []FeedDTO        `json:"candidates,omitempty"`  // 多候选时非空,等用户挑
+	Candidates   []FeedDTO        `json:"candidates,omitempty"`   // 多候选时非空,等用户挑
 }
 
 // FeedDTO 候选 feed(多候选让用户挑时返回)。
