@@ -11,19 +11,11 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AppContent: typeof import('./src/components/layout/AppContent.vue')['default']
-    AppHeader: typeof import('./src/components/layout/AppHeader.vue')['default']
-    BaseButton: typeof import('./src/components/common/BaseButton.vue')['default']
-    BaseIcon: typeof import('./src/components/common/BaseIcon.vue')['default']
-    BaseInput: typeof import('./src/components/common/BaseInput.vue')['default']
-    BaseLoading: typeof import('./src/components/common/BaseLoading.vue')['default']
     ChatAvatar: typeof import('./src/components/chat/ChatAvatar.vue')['default']
     ChatInput: typeof import('./src/components/chat/ChatInput.vue')['default']
     ChatMessage: typeof import('./src/components/chat/ChatMessage.vue')['default']
     ChatMessageList: typeof import('./src/components/chat/ChatMessageList.vue')['default']
     DialogShell: typeof import('./src/components/layout/DialogShell.vue')['default']
-    HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
-    MarkdownRenderer: typeof import('./src/components/functional/MarkdownRenderer.vue')['default']
     MemoryDrawer: typeof import('./src/components/functional/MemoryDrawer.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

@@ -1,59 +1,3 @@
-// BaseIcon types
-export type BaseIconProps = {
-  name: string;
-  size?: number;
-  color?: string;
-};
-
-// BaseLoading types
-export type BaseLoadingSize = 'small' | 'medium' | 'large';
-
-export type BaseLoadingProps = {
-  size?: BaseLoadingSize;
-  color?: string;
-};
-
-// BaseButton types
-export type BaseButtonSize = 'small' | 'medium' | 'large';
-export type BaseButtonVariant =
-  | 'primary'
-  | 'secondary'
-  | 'outline'
-  | 'ghost'
-  | 'danger';
-export type BaseButtonType = 'button' | 'submit' | 'reset';
-
-export type BaseButtonProps = {
-  size?: BaseButtonSize;
-  variant?: BaseButtonVariant;
-  disabled?: boolean;
-  loading?: boolean;
-  fullWidth?: boolean;
-  type?: BaseButtonType;
-};
-
-export type BaseButtonEmits = {
-  click: [event: MouseEvent];
-};
-
-// BaseInput types
-export type BaseInputSize = 'small' | 'medium' | 'large';
-export type BaseInputType = 'text' | 'password' | 'email';
-export type NInputType = 'text' | 'password' | 'textarea';
-
-export type BaseInputProps = {
-  modelValue: string;
-  placeholder?: string;
-  disabled?: boolean;
-  type?: BaseInputType;
-  size?: BaseInputSize;
-};
-
-export type BaseInputEmits = {
-  'update:modelValue': [value: string];
-  enter: [event: KeyboardEvent];
-};
-
 // ChatAvatar types
 export type ChatAvatarSize = 'small' | 'medium' | 'large';
 export type ChatAvatarRole = 'user' | 'assistant';
@@ -86,21 +30,6 @@ export type ChatInputProps = {
 export type ChatInputEmits = {
   'update:modelValue': [value: string];
   send: [content: string];
-};
-
-// AppHeader types
-export type AppHeaderProps = {
-  title?: string;
-  showSettings?: boolean;
-};
-
-export type AppHeaderEmits = {
-  'toggle-settings': [];
-};
-
-// AppContent types
-export type AppContentProps = {
-  maxWidth?: string;
 };
 
 // Sidebar types（dsh 左侧栏：常驻，可折叠，无遮罩/visible 概念）
@@ -139,9 +68,4 @@ export interface Toast {
 
 export type ToastProps = {
   toasts: Toast[];
-};
-
-// MarkdownRenderer types
-export type MarkdownRendererProps = {
-  content: string;
 };
