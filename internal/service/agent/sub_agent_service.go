@@ -42,6 +42,7 @@ type SubAgentService struct {
 	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
 	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
 	notifier     TaskNotifier                  // 任务完成主动推送(方案A:飞书主动消息)
+	publisher    TaskCompletionPublisher       // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -436,15 +437,20 @@ func (s *SubAgentService) recordEvent(taskID int64, eventType, source string) {
 // (消息没到是异常,但重复汇报更糟;失败有日志可补救)。
 // notifier 为 nil 或 source 非 feishu 时跳过(web 任务靠前端轮询 + 前置汇报)。
 func (s *SubAgentService) notifyCompleted(taskID int64) {
-	if s.notifier == nil {
-		return
-	}
 	task, err := s.taskRepo.GetByID(taskID)
 	if err != nil || task == nil {
 		return
 	}
+	// web:实时推送事件(08 §4.8),前端收到后走 /report 链路拉取汇报。
+	// 不标 reported——reported 由 /report 处理,推送丢失时轮询兜底仍可发现。
+	if task.Source == domainagent.SourceWeb && s.publisher != nil {
+		s.publisher.PublishTaskCompleted(task.UserID, task.ID)
+	}
+	if s.notifier == nil {
+		return
+	}
 	if task.Source != domainagent.SourceFeishu || task.NotifyTarget == "" {
-		return // web 任务靠轮询 + 前置汇报;非飞书不主动推
+		return // 非飞书不主动推消息
 	}
 	// 先标记 reported:防 web 前端轮询在此期间查到 unreported 触发重复汇报
 	if err := s.taskRepo.MarkReported(task.ID); err != nil {
@@ -465,6 +471,11 @@ var ErrTaskNotOwned = errors.New("task not owned by user")
 // 飞书未配置时保持 nil(web 任务靠轮询,不主动推)。
 func (s *SubAgentService) SetNotifier(n TaskNotifier) {
 	s.notifier = n
+}
+
+// SetCompletionPublisher 注入 web 实时推送器(08 §4.8;realtime.Hub)。
+func (s *SubAgentService) SetCompletionPublisher(p TaskCompletionPublisher) {
+	s.publisher = p
 }
 
 // ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。

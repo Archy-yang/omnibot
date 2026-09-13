@@ -331,6 +331,36 @@ delegate({
 
 ---
 
+## 7.8 WebSocket 实时推送(2026-09-13 落地,v1.1 修订)
+
+web 端「任务完成」感知主路径从 8s 轮询升级为 WebSocket 实时推送,轮询降级为兜底:
+
+```
+子 Agent 任务完成(notifyCompleted,task.Source=web)
+  └→ SubAgentService.publisher.PublishTaskCompleted(userID, taskID)   ← TaskCompletionPublisher 接口
+       └→ realtime.Hub → {"type":"task.completed","data":{"task_id":N}} → 该用户全部在线连接
+            └→ 前端收到 → pollOnce() → 发现 unreported → 走 /report SSE 汇报链路(不变)
+```
+
+**设计要点**
+- **推送通道 only**:聊天流式仍走 SSE(POST 无状态、代理友好),WS 不承载请求方向
+- **鉴权走首条消息**:连接后 5s 内发 `{"type":"auth","token":"<JWT>"}`,超时/无效即断
+  (宪章 6.2 禁止 token 进 URL;浏览器 WS 无法自定义 header)。路由 `GET /api/v1/ws`
+  不挂 AuthRequired
+- **不标 reported**:WS 只送通知不送内容,reported 由 /report 处理;推送丢失/断线时
+  轮询兜底仍可发现
+- **心跳**:服务端 25s 协议级 ping,浏览器自动 pong;60s 无响应剔除
+- **鲁棒性**:前端指数退避重连(1s→30s 封顶),重连成功立即 poll 一次补漏;
+  兜底轮询 60s(原 8s);慢消费者(写通道满)丢帧不拖累其他连接
+- **协议版本**:第一版只有 `auth`(上行)/`task.completed`(下行)/ping-pong,
+  将来扩展不破坏格式
+
+**实现**:`internal/realtime/hub.go`(Hub/Client/双泵/首条消息鉴权);
+挂点 `SubAgentService.notifyCompleted` 按 task.Source 分派——web 走 publisher、
+飞书走 TaskNotifier(主动消息),互不干扰;前端 `services/realtime.ts` + chat store 接线。
+
+---
+
 ## 8. 不做(第一版)
 
 见 1.3。主动推送 / 多子 Agent 并行 / 动态配置 / 跨进程 A2A / 用户自定义子 Agent / 任务查询接口(可选)。

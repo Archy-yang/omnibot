@@ -3,6 +3,8 @@ import { ref, computed, reactive } from 'vue';
 import type { Message } from '../types/chat';
 import { chatService } from '../services/chat';
 import { agentTaskService } from '../services/agentTask';
+import { connectRealtime, disconnectRealtime } from '../services/realtime';
+import { useAuthStore } from './user';
 
 // v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId
 export const useChatStore = defineStore(
@@ -276,15 +278,32 @@ export const useChatStore = defineStore(
       }
     };
 
-    // startPollingUnreported 启动后台任务轮询(08 §4.5 前端轮询主路径)。
-    // 约 8s 一次,发现完成的任务自动在对话框展示主 Agent 汇报。
+    // startPollingUnreported 任务完成感知(08 §4.8):
+    // 主路径 = WS 实时推送(task.completed → 立即拉取汇报);
+    // 兜底 = 60s 低频轮询(WS 断开/丢帧时系统仍不哑,重连成功也会立即 poll 一次)。
     const startPollingUnreported = (): void => {
       if (pollingTimer !== null) return; // 已启动
+      // 低频兜底轮询
       pollingTimer = setInterval(() => {
-        pollOnce().catch((err) => console.error('Poll unreported failed:', err));
-      }, 8000);
-      // 启动时立即查一次(不等首个 8s)
+        pollOnce().catch((err) => console.error('Fallback poll failed:', err));
+      }, 60_000);
+      // 启动时立即查一次
       pollOnce().catch((err) => console.error('Initial poll failed:', err));
+
+      // WS 实时推送主路径
+      const authStore = useAuthStore();
+      if (!authStore.token) return;
+      connectRealtime({
+        token: authStore.token,
+        onEvent: (type) => {
+          if (type === 'task.completed') {
+            pollOnce().catch((err) => console.error('Realtime-triggered poll failed:', err));
+          }
+        },
+        onReconnect: () => {
+          pollOnce().catch((err) => console.error('Reconnect poll failed:', err));
+        },
+      });
     };
 
     const stopPollingUnreported = (): void => {
@@ -292,6 +311,7 @@ export const useChatStore = defineStore(
         clearInterval(pollingTimer);
         pollingTimer = null;
       }
+      disconnectRealtime();
     };
 
     return {

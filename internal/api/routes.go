@@ -28,6 +28,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/auth"
+	"omnibot/internal/realtime"
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
@@ -291,6 +292,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	artifactRepo := agentRepo.NewArtifactRepository(dbConn.GetGormDB())
 	eventRepo := agentRepo.NewTaskEventRepository(dbConn.GetGormDB())
 	subAgentSvc := agentpkg.NewSubAgentService(agentTaskRepo, subAgentRunner, stepRepo, artifactRepo, eventRepo, nil) // notifier 飞书启动后注入(见 startFeishuChannel)
+	// 08 §4.8:web 实时推送 Hub——任务完成事件经 WS 直推前端,轮询降级为兜底
+	realtimeHub := realtime.NewHub()
+	subAgentSvc.SetCompletionPublisher(realtimeHub)
 	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
 	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
 	// delegate 工具加入主 Agent 工具集(主 Agent 派活给通用执行器,去角色后无 registry)
@@ -341,6 +345,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		authAPIGroup.POST("/register", authHandler.HandleRegister)
 		authAPIGroup.POST("/login", authHandler.HandleLogin)
 	}
+
+	// WebSocket 实时推送(08 §4.8):鉴权走首条消息(浏览器 WS 无法带 header,
+	// 宪章 6.2 禁止 token 进 URL),故不挂 AuthRequired
+	r.GET("/api/v1/ws", realtimeHub.Handler(jwtSvc))
 
 	// v2.1: 业务接口按路由组挂 JWT 鉴权;handler 从 c.GetInt64('user_id') 取身份
 	chatAPIGroup := r.Group("/api/v1/chat")
