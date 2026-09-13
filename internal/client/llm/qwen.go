@@ -33,8 +33,8 @@ func NewQwenProvider(apiKey, model string, timeout time.Duration) *QwenProvider 
 
 // qwenRequest 通义千问请求
 type qwenRequest struct {
-	Model    string        `json:"model"`
-	Input    qwenInput     `json:"input"`
+	Model    string       `json:"model"`
+	Input    qwenInput    `json:"input"`
 	Settings qwenSettings `json:"parameters,omitempty"`
 }
 
@@ -53,16 +53,16 @@ type qwenSettings struct {
 
 // qwenResponse 通义千问响应
 type qwenResponse struct {
-	RequestID string         `json:"request_id"`
-	Output    qwenOutput      `json:"output"`
-	Usage     qwenUsage       `json:"usage"`
-	Code      string         `json:"code"`
-	Message   string         `json:"message"`
+	RequestID string     `json:"request_id"`
+	Output    qwenOutput `json:"output"`
+	Usage     qwenUsage  `json:"usage"`
+	Code      string     `json:"code"`
+	Message   string     `json:"message"`
 }
 
 type qwenOutput struct {
-	Text         string        `json:"text"`
-	FinishReason string        `json:"finish_reason"`
+	Text         string `json:"text"`
+	FinishReason string `json:"finish_reason"`
 }
 
 type qwenUsage struct {

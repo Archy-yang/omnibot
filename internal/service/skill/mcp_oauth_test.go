@@ -18,9 +18,10 @@ import (
 )
 
 // newMockAuthServer 起一个模拟 OAuth 授权服务器:
-//   /.well-known/oauth-authorization-server → 元数据(含注册端点)
-//   /register  → 动态客户端注册
-//   /token     → 授权码/刷新换 token
+//
+//	/.well-known/oauth-authorization-server → 元数据(含注册端点)
+//	/register  → 动态客户端注册
+//	/token     → 授权码/刷新换 token
 func newMockAuthServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {

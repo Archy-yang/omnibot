@@ -20,6 +20,7 @@ export type Role = 'user' | 'assistant' | 'system';
  */
 export type MessageSegment =
   | { type: 'text'; content: string; role?: 'thought' | 'final' }
+  | { type: 'reasoning'; content: string } // 深度思考(M5/C):模型 reasoning_content 实时流,渲染在"已思考"块内
   | {
       type: 'tool';
       tool: string;

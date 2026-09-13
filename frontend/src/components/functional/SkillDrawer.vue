@@ -13,7 +13,7 @@ import { useToast } from '@/composables/useToast';
 import type { MCPServerItem, SkillItem } from '@/types/api';
 import { skillService } from '@/services/skill';
 import { mcpServerService } from '@/services/mcpServer';
-import DrawerShell from '@/components/layout/DrawerShell.vue';
+import DialogShell from '@/components/layout/DialogShell.vue';
 
 const props = defineProps<{
   visible: boolean;
@@ -230,7 +230,7 @@ watch(
 </script>
 
 <template>
-  <DrawerShell :visible="visible" title="技能" @close="emit('close')">
+  <DialogShell :visible="visible" title="技能" width="640px" @close="emit('close')">
     <!-- ===== MCP 服务 section ===== -->
     <div class="section-title">外部能力服务</div>
     <p class="section-hint">接入 MCP 服务后,它提供的技能会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
@@ -415,25 +415,25 @@ watch(
     </div>
 
     <div class="drawer-footer-spacer"></div>
-  </DrawerShell>
+  </DialogShell>
 </template>
 
 <style scoped>
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   margin-bottom: 8px;
 }
 .section-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--label-caption);
   margin: 0 0 12px;
   line-height: 1.5;
 }
 .hint-text {
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--label-caption);
   padding: 8px 0;
 }
 
@@ -448,7 +448,7 @@ watch(
   align-items: center;
   gap: 8px;
   padding: 10px 0;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 0.5px solid var(--border-l1);
 }
 .server-item:last-child {
   border-bottom: none;
@@ -465,28 +465,28 @@ watch(
 .server-name {
   font-size: 14px;
   font-weight: 500;
-  color: #171717;
+  color: var(--label-primary);
 }
 .server-badge {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #f0fdf4;
-  color: #15803d;
+  background: var(--success-bg);
+  color: var(--success);
   white-space: nowrap;
 }
 .server-badge.is-off {
-  background: #f3f4f6;
-  color: #9ca3af;
+  background: var(--code-bg);
+  color: var(--label-caption);
 }
 .server-count {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--label-caption);
   white-space: nowrap;
 }
 .server-url {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -501,42 +501,42 @@ watch(
   font-size: 12px;
   padding: 4px 8px;
   border-radius: 6px;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
-  color: #374151;
+  border: 1px solid var(--border-l2);
+  background: var(--bg-base);
+  color: var(--label-secondary);
   cursor: pointer;
   font-family: inherit;
 }
 .server-btn:hover {
-  border-color: #d1d5db;
-  background: #f9fafb;
+  border-color: var(--border-l3);
+  background: var(--code-bg);
 }
 .server-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .server-btn.is-primary {
-  color: #10a37f;
-  border-color: #a7f3d0;
+  color: var(--accent);
+  border-color: rgba(34, 197, 94, 0.3);
 }
 .server-btn.is-primary:hover {
-  background: #f0fdf4;
+  background: var(--success-bg);
 }
 .server-btn.is-danger {
-  color: #dc2626;
-  border-color: #fecaca;
+  color: var(--error);
+  border-color: rgba(236, 19, 19, 0.25);
 }
 .server-btn.is-danger:hover {
-  background: #fef2f2;
+  background: var(--error-bg);
 }
 
 /* ===== 表单 ===== */
 .server-form {
   margin: 12px 0;
   padding: 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-l2);
   border-radius: 10px;
-  background: #f9fafb;
+  background: var(--code-bg);
 }
 .form-field {
   margin-bottom: 10px;
@@ -544,13 +544,13 @@ watch(
 .form-label {
   display: block;
   font-size: 13px;
-  color: #374151;
+  color: var(--label-secondary);
   margin-bottom: 4px;
 }
 .form-input {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border-l3);
   border-radius: 8px;
   font-size: 14px;
   font-family: inherit;
@@ -558,14 +558,14 @@ watch(
 }
 .form-input:focus {
   outline: none;
-  border-color: #10a37f;
+  border-color: var(--accent);
 }
 .server-enable-row {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #374151;
+  color: var(--label-secondary);
   cursor: pointer;
 }
 .form-actions {
@@ -578,15 +578,15 @@ watch(
   padding: 7px 14px;
   border-radius: 8px;
   font-size: 13px;
-  border: 1px solid #d1d5db;
-  background: #ffffff;
-  color: #374151;
+  border: 1px solid var(--border-l3);
+  background: var(--bg-base);
+  color: var(--label-secondary);
   cursor: pointer;
   font-family: inherit;
 }
 .form-btn.is-primary {
-  background: #10a37f;
-  border-color: #10a37f;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #ffffff;
 }
 .form-btn.is-primary:disabled {
@@ -596,25 +596,25 @@ watch(
 .add-server-btn {
   width: 100%;
   padding: 9px;
-  border: 1px dashed #d1d5db;
+  border: 1px dashed var(--border-l3);
   border-radius: 10px;
   background: transparent;
-  color: #6b7280;
+  color: var(--label-tertiary);
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;
   margin-bottom: 8px;
 }
 .add-server-btn:hover {
-  border-color: #10a37f;
-  color: #10a37f;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ===== 技能清单 ===== */
 .section-skills {
   margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
 }
 .skill-list {
   list-style: none;
@@ -628,14 +628,14 @@ watch(
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 0.5px solid var(--border-l1);
 }
 .skill-item:last-child {
   border-bottom: none;
 }
 .skill-item.is-disabled .skill-name,
 .skill-item.is-disabled .skill-desc {
-  color: #9ca3af;
+  color: var(--label-caption);
 }
 .skill-info {
   flex: 1;
@@ -649,23 +649,23 @@ watch(
 .skill-name {
   font-size: 14px;
   font-weight: 500;
-  color: #171717;
+  color: var(--label-primary);
 }
 .skill-source-badge {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--code-bg);
+  color: var(--label-tertiary);
   white-space: nowrap;
 }
 .skill-source-badge.is-mcp {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--accent-light);
+  color: var(--accent-hover);
 }
 .skill-desc {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -697,7 +697,7 @@ watch(
   position: absolute;
   inset: 0;
   border-radius: 10px;
-  background: #d1d5db;
+  background: var(--label-dimmed);
   transition: background 150ms ease;
   pointer-events: none;
 }
@@ -707,14 +707,14 @@ watch(
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--bg-base);
   top: 2px;
   left: 2px;
   transition: transform 150ms ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 .skill-switch input:checked + .skill-switch-slider {
-  background: #10a37f;
+  background: var(--accent);
 }
 .skill-switch input:checked + .skill-switch-slider::before {
   transform: translateX(16px);

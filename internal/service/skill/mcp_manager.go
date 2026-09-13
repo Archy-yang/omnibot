@@ -8,8 +8,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"omnibot/internal/pkg/crypto"
 	skilldomain "omnibot/internal/domain/skill"
+	"omnibot/internal/pkg/crypto"
 )
 
 // MCPServerRepository MCP server 配置持久化窄接口(service 层声明,repository 层实现)。

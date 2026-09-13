@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
+	chatrepo "omnibot/internal/repository/chat"
 	memoryrepo "omnibot/internal/repository/memory"
 
 	"github.com/glebarez/sqlite"
@@ -49,12 +52,11 @@ func retrievalSetup(t *testing.T) (MemoryService, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&memorydomain.Memory{}, &memorydomain.ConversationDigest{}); err != nil {
+	if err := db.AutoMigrate(&memorydomain.Memory{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	repo := memoryrepo.NewMemoryRepository(db)
-	digestRepo := memoryrepo.NewDigestRepository(db)
-	return NewMemoryService(repo, digestRepo, nil), db
+	return NewMemoryService(repo, nil, nil, nil), db
 }
 
 func setEmbedding(t *testing.T, svc MemoryService, p EmbeddingProvider) {
@@ -195,43 +197,70 @@ func TestSearchMemories_Empty(t *testing.T) {
 	}
 }
 
-// TestSearchDigests 纪要语义检索:命中且带溯源区间(TDD#11 服务侧)。
-func TestSearchDigests(t *testing.T) {
-	svc, db := retrievalSetup(t)
+// TestSearchRecentMessages 中期检索(M7 §10.6 / 测试清单#4):
+// 余弦取候选→回表→时间加权(新消息同分排前);异模型向量不参与;无 embedding 静默空。
+func TestSearchRecentMessages(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.MessageEmbedding{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	embRepo := memoryrepo.NewMessageEmbeddingRepository(db)
+	msgRepo := chatrepo.NewMessageRepository(db)
+	svc := NewMemoryService(memoryrepo.NewMemoryRepository(db), nil, embRepo, msgRepo)
+
+	// 无 embedding 配置:静默空,不报错
+	hits, err := svc.SearchRecentMessages(context.Background(), 42, "充电", 2)
+	if err != nil || hits != nil {
+		t.Fatalf("无 embedding 应返回空, got %v err=%v", hits, err)
+	}
+
 	setEmbedding(t, svc, &fakeEmbedding{
-		vectors: map[string][]float32{
-			"我们聊了什么": {1, 0, 0},
-			"聊了租房":   {1, 0, 0},
-			"聊了工作":   {0, 1, 0},
-		},
-		name: "fake/m1",
+		vectors: map[string][]float32{"充电花了多少钱": {1, 0, 0}},
+		name:    "fake/m1",
 	})
 
-	d1 := memorydomain.NewConversationDigest(42, "聊了租房", 1, 20, 20)
-	d1.Embedding = []float32{1, 0, 0}
-	d1.EmbeddingModel = "fake/m1"
-	d2 := memorydomain.NewConversationDigest(42, "聊了工作", 21, 40, 20)
-	d2.Embedding = []float32{0, 1, 0}
-	d2.EmbeddingModel = "fake/m1"
-	if err := db.Create(d1).Error; err != nil {
-		t.Fatalf("seed d1: %v", err)
+	now := time.Now()
+	old40d := now.Add(-40 * 24 * time.Hour)
+	msgs := []*conversation.Message{
+		{ID: 1, UserID: 42, Role: "user", Content: "我充电总共花了多少钱", CreatedAt: old40d},
+		{ID: 2, UserID: 42, Role: "assistant", Content: "老爷，充电总花费给您算好了", CreatedAt: now},
+		{ID: 3, UserID: 42, Role: "user", Content: "聊点别的", CreatedAt: now},
 	}
-	if err := db.Create(d2).Error; err != nil {
-		t.Fatalf("seed d2: %v", err)
+	for _, m := range msgs {
+		if err := db.Create(m).Error; err != nil {
+			t.Fatalf("seed msg %d: %v", m.ID, err)
+		}
+	}
+	vec := []float32{1, 0, 0}
+	embs := []*memorydomain.MessageEmbedding{
+		{MessageID: 1, UserID: 42, Role: "user", Embedding: vec, EmbeddingModel: "fake/m1"},
+		{MessageID: 2, UserID: 42, Role: "assistant", Embedding: vec, EmbeddingModel: "fake/m1"},
+		// 异模型向量:不可比,不参与
+		{MessageID: 3, UserID: 42, Role: "user", Embedding: vec, EmbeddingModel: "other/model"},
+	}
+	if err := embRepo.UpsertBatch(embs); err != nil {
+		t.Fatalf("seed embs: %v", err)
 	}
 
-	hits, err := svc.SearchDigests(context.Background(), 42, "我们聊了什么", 5)
+	hits, err = svc.SearchRecentMessages(context.Background(), 42, "充电花了多少钱", 2)
 	if err != nil {
-		t.Fatalf("SearchDigests: %v", err)
+		t.Fatalf("SearchRecentMessages: %v", err)
 	}
-	if len(hits) != 1 {
-		t.Fatalf("got %d digest hits, want 1", len(hits))
+	if len(hits) != 2 {
+		t.Fatalf("got %d hits, want 2(异模型消息被排除)", len(hits))
 	}
-	if hits[0].Digest.Summary != "聊了租房" {
-		t.Errorf("hit = %q, want 聊了租房", hits[0].Digest.Summary)
+	// 同余弦分,新消息时间加权后排前
+	if hits[0].MessageID != 2 || hits[1].MessageID != 1 {
+		t.Errorf("时间加权应新消息排前, got [%d %d]", hits[0].MessageID, hits[1].MessageID)
 	}
-	if hits[0].Digest.FromMessageID != 1 || hits[0].Digest.ToMessageID != 20 {
-		t.Errorf("溯源区间 = [%d,%d], want [1,20]", hits[0].Digest.FromMessageID, hits[0].Digest.ToMessageID)
+	if hits[0].Content == "" || hits[0].CreatedAt.IsZero() {
+		t.Errorf("命中应带回表原文与时间: %+v", hits[0])
+	}
+	if hits[0].Score <= hits[1].Score {
+		t.Errorf("分数应降序: %v vs %v", hits[0].Score, hits[1].Score)
 	}
 }
 
@@ -354,8 +383,8 @@ func retrievalSetupWithMatters(t *testing.T) (*gorm.DB, MemoryService) {
 	require.NoError(t, db.AutoMigrate(&memorydomain.Memory{}, &memorydomain.Matter{}))
 	svc := NewMemoryService(
 		memoryrepo.NewMemoryRepository(db),
-		memoryrepo.NewDigestRepository(db),
 		memoryrepo.NewMatterRepository(db),
+		nil, nil,
 	)
 	return db, svc
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	memoryrepo "omnibot/internal/repository/memory"
 	"omnibot/pkg/logger"
@@ -33,22 +34,32 @@ type MemoryService interface {
 	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
 	// SearchMatters 事项优先检索(M6.2 两段式第一段):命中事项返回其状态+挂靠记忆全景。
 	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
-	SearchDigests(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.DigestHit, error)
+	// SearchRecentMessages 中期记忆检索(M7 §10.6):消息级向量 + 时间加权,原文直达。
+	// embedding 未配置/无向量时返回空(中期层静默缺失,不报错)。
+	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error)
 	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订):
 	// 手动记忆全量(用户意志,按时间正序) + 自动记忆条数(只出存在性提示,内容走工具检索)。
 	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
 }
 
-type memoryService struct {
-	repo       memoryrepo.MemoryRepository
-	digestRepo memoryrepo.DigestRepository
-	matterRepo memoryrepo.MatterRepository // M6.2:事项优先检索;nil=无事项层(永不命中)
-	embedding  EmbeddingProvider           // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
-	resolver   EmbeddingResolver           // 用户级覆盖;SetEmbeddingResolver 注入,可选
+// RecentMessageSource 中期记忆原文回表(M7 §10.6):命中消息向量后取 content+时间。
+// 由 chat 消息仓储适配(GetByIDs)。
+type RecentMessageSource interface {
+	GetByIDs(ids []int64) ([]*conversation.Message, error)
 }
 
-func NewMemoryService(repo memoryrepo.MemoryRepository, digestRepo memoryrepo.DigestRepository, matterRepo memoryrepo.MatterRepository) MemoryService {
-	return &memoryService{repo: repo, digestRepo: digestRepo, matterRepo: matterRepo}
+type memoryService struct {
+	repo       memoryrepo.MemoryRepository
+	matterRepo memoryrepo.MatterRepository // M6.2:事项优先检索;nil=无事项层(永不命中)
+	// M7 中期记忆:消息向量 + 原文回表;任一为 nil 则中期层静默缺失
+	msgEmbRepo memoryrepo.MessageEmbeddingRepository
+	msgSource  RecentMessageSource
+	embedding  EmbeddingProvider // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
+	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
+}
+
+func NewMemoryService(repo memoryrepo.MemoryRepository, matterRepo memoryrepo.MatterRepository, msgEmbRepo memoryrepo.MessageEmbeddingRepository, msgSource RecentMessageSource) MemoryService {
+	return &memoryService{repo: repo, matterRepo: matterRepo, msgEmbRepo: msgEmbRepo, msgSource: msgSource}
 }
 
 // EmbeddingAware 支持注入向量化 provider 的实现增强接口(可选能力,不影响记忆存取)。

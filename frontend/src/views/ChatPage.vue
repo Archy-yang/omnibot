@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useChat, useSettings, useToast } from '@/composables';
-import AppNav from '@/components/layout/AppNav.vue';
+import Sidebar from '@/components/layout/Sidebar.vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ChatAvatar from '@/components/chat/ChatAvatar.vue';
 import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
+import SubscriptionDialog from '@/components/functional/SubscriptionDialog.vue';
 import SkillDrawer from '@/components/functional/SkillDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
@@ -19,8 +20,9 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
-// 记忆/技能抽屉本地状态(设置抽屉走 settingsStore.showSettingsPanel)
+// 记忆/订阅/技能弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
+const showSubscriptionDialog = ref(false);
 const showSkillDrawer = ref(false);
 
 const isEmpty = computed(() => messages.value.length === 0);
@@ -28,13 +30,22 @@ const inputPlaceholder = computed(() =>
   isEmpty.value ? '有什么可以帮你的？' : '继续对话...'
 );
 
-// AppNav 高亮:抽屉打开时高亮对应按钮,都没开时高亮 chat
-const navCurrent = computed<'chat' | 'memory' | 'skills' | 'settings'>(() => {
+// 侧栏导航高亮:弹窗打开时高亮对应项,都没开时高亮「对话」
+const navCurrent = computed<'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
+  if (showSubscriptionDialog.value) return 'subscriptions';
   if (showSkillDrawer.value) return 'skills';
   if (showSettingsPanel.value) return 'settings';
   return 'chat';
 });
+
+// 侧栏「对话」:回到对话主页面,收起全部弹窗
+const closeAllDrawers = () => {
+  showMemoryDrawer.value = false;
+  showSubscriptionDialog.value = false;
+  showSkillDrawer.value = false;
+  if (showSettingsPanel.value) toggleSettingsPanel();
+};
 
 onMounted(async () => {
   try {
@@ -66,9 +77,11 @@ const handleSend = async (content: string) => {
 
 <template>
   <div class="chat-layout">
-    <AppNav
+    <Sidebar
       :current="navCurrent"
+      @open-chat="closeAllDrawers"
       @open-memory="showMemoryDrawer = true"
+      @open-subscriptions="showSubscriptionDialog = true"
       @open-skills="showSkillDrawer = true"
       @open-settings="toggleSettingsPanel"
     />
@@ -128,6 +141,11 @@ const handleSend = async (content: string) => {
       @close="showMemoryDrawer = false"
     />
 
+    <SubscriptionDialog
+      :visible="showSubscriptionDialog"
+      @close="showSubscriptionDialog = false"
+    />
+
     <SkillDrawer
       :visible="showSkillDrawer"
       @close="showSkillDrawer = false"
@@ -138,13 +156,13 @@ const handleSend = async (content: string) => {
 </template>
 
 <style scoped>
+/* dsh AppFrame:左侧栏 + 中间对话列,水平排布 */
 .chat-layout {
   display: flex;
-  flex-direction: column;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-base);
 }
 
 .main {
@@ -170,7 +188,7 @@ const handleSend = async (content: string) => {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: #10a37f;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -181,14 +199,14 @@ const handleSend = async (content: string) => {
 .welcome-title {
   font-size: 22px;
   font-weight: 600;
-  color: #171717;
+  color: var(--label-primary);
   line-height: 1.3;
   margin: 0;
 }
 
 .welcome-subtitle {
   font-size: 14px;
-  color: #999999;
+  color: var(--label-tertiary);
   line-height: 1.4;
   margin: 0 0 16px;
   text-align: center;

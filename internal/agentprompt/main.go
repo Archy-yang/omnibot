@@ -18,10 +18,11 @@ func MainAgentSections(hasSubAgents bool) []PromptSection {
 		return sections
 	}
 	return append(sections,
-		// 派活规则 → 汇报规则 → 任务管理,按 Order 升序(100/110/120)。
+		// 派活规则 → 汇报规则 → 任务管理 → 订阅规则,按 Order 升序(100/110/120/130)。
 		StaticSection("delegation_rules", ScopeMain, 100, MainDelegationRulesPrompt),
 		StaticSection("reporting_rules", ScopeMain, 110, MainReportingRulesPrompt),
 		StaticSection("task_mgmt", ScopeMain, 120, MainTaskMgmtToolsPrompt),
+		StaticSection("subscription_rules", ScopeMain, 130, MainSubscriptionRulesPrompt),
 	)
 }
 

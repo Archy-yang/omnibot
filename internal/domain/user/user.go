@@ -13,13 +13,13 @@ const (
 
 // User 核心用户实体
 type User struct {
-	ID            int64      `gorm:"primaryKey;autoIncrement"`
-	Phone         *string    `gorm:"size:20;unique"`
-	PhoneVerified bool       `gorm:"default:false"`
+	ID            int64   `gorm:"primaryKey;autoIncrement"`
+	Phone         *string `gorm:"size:20;unique"`
+	PhoneVerified bool    `gorm:"default:false"`
 	PhoneBindTime *time.Time
-	Status        int8       `gorm:"default:0;not null"` // 0-正常, 1-封禁, 2-删除
-	CreatedAt     time.Time  `gorm:"not null"`
-	UpdatedAt     time.Time  `gorm:"not null"`
+	Status        int8      `gorm:"default:0;not null"` // 0-正常, 1-封禁, 2-删除
+	CreatedAt     time.Time `gorm:"not null"`
+	UpdatedAt     time.Time `gorm:"not null"`
 }
 
 // NewUser 创建新用户

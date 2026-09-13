@@ -30,6 +30,7 @@ export default defineConfig({
       '/api/v1': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        ws: true, // WebSocket 实时推送(08 §4.8:/api/v1/ws)开发期代理转发
       },
     },
   },

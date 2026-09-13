@@ -84,6 +84,24 @@ watch(
   { immediate: true },
 );
 
+// 深度思考段逐段折叠(嵌套在已思考块内,与 tool 段同级交互):
+// 用户手动 toggle 记录在 reasoningToggles;未动过的段默认态 = 流式中最后一段
+// (正在流式的)展开,其余收起。
+const reasoningToggles = ref<Record<number, boolean>>({});
+const lastReasoningIdx = computed(() => {
+  for (let i = thoughtSegments.value.length - 1; i >= 0; i--) {
+    if (thoughtSegments.value[i].type === 'reasoning') return i;
+  }
+  return -1;
+});
+function reasoningOpen(idx: number): boolean {
+  if (idx in reasoningToggles.value) return reasoningToggles.value[idx];
+  return props.message.streaming === true && idx === lastReasoningIdx.value;
+}
+function toggleReasoning(idx: number) {
+  reasoningToggles.value[idx] = !reasoningOpen(idx);
+}
+
 // 把任意 markdown 文本渲染成防 XSS 的 HTML。供 segments 里的每个 text 段
 // 以及无 segments 时的 content 回退渲染共用。
 function renderMarkdown(text: string): string {
@@ -226,51 +244,65 @@ defineEmits<{
               </svg>
             </button>
 
-            <!-- 思考过程段:展开时按序渲染(text 思考文本小字灰 + tool 调用条) -->
+            <!-- 思考过程段:展开时按序渲染(reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
             <div v-show="!thoughtCollapsed" class="thought-content">
               <template v-for="(seg, idx) in thoughtSegments" :key="idx">
+                <!-- 深度思考段:独立下拉折叠(与 tool 段同级)——标题行=徽标+单行预览,展开看全文 -->
+                <div v-if="seg.type === 'reasoning'" class="reasoning-item">
+                  <button
+                    type="button"
+                    class="reasoning-header"
+                    :aria-expanded="reasoningOpen(idx) ? 'true' : 'false'"
+                    @click="toggleReasoning(idx)"
+                  >
+                    <span class="reasoning-badge">深度思考</span>
+                    <span class="reasoning-preview">{{ seg.content }}</span>
+                    <svg
+                      class="reasoning-chevron"
+                      :class="{ 'is-open': reasoningOpen(idx) }"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    >
+                      <path d="m6 9 6 6 6-6"/>
+                    </svg>
+                  </button>
+                  <div v-show="reasoningOpen(idx)" class="reasoning-body">{{ seg.content }}<span v-if="message.streaming && idx === lastReasoningIdx" class="reasoning-cursor">▍</span></div>
+                </div>
                 <div
-                  v-if="seg.type === 'text'"
+                  v-else-if="seg.type === 'text'"
                   class="thought-text markdown-body"
                   v-html="renderMarkdown(seg.content)"
                 ></div>
-                                <div v-else class="tool-segment">
+                                <div v-else-if="seg.type === 'tool'" class="tool-segment">
                   <button
                     type="button"
                     class="tool-segment-header"
                     :aria-expanded="seg.expanded ? 'true' : 'false'"
                     @click="toggleExpand(seg)"
                   >
+                    <span class="tool-badge">工具</span>
+                    <span class="tool-segment-preview">
+                      {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
+                      <!-- 实际工具名:友好标签之外让用户知道底层调了什么 -->
+                      <span v-if="seg.tool" class="tool-segment-name">· {{ seg.tool }}</span>
+                    </span>
+                    <!-- 执行中:右侧转圈;结束:单 V 箭头(与深度思考一致,展开旋转 180°) -->
                     <svg
                       v-if="seg.result === undefined"
                       class="tool-segment-spinner"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                     >
-                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                      <circle cx="12" cy="12" r="3"/>
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
                     </svg>
                     <svg
                       v-else
-                      class="tool-segment-icon"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                    >
-                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                      <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    <span class="tool-segment-label">
-                      {{ seg.result === undefined ? `正在调用 ${seg.label}…` : seg.label }}
-                    </span>
-                    <svg
-                      v-if="seg.result !== undefined"
                       class="tool-segment-chevron"
                       :class="{ 'is-open': seg.expanded }"
-                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      width="12" height="12" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                     >
-                      <path d="m7 15 5 5 5-5"/>
-                      <path d="m7 9 5-5 5 5"/>
+                      <path d="m6 9 6 6 6-6"/>
                     </svg>
                   </button>
                   <pre v-if="seg.expanded && seg.result !== undefined" class="tool-segment-result">{{ seg.result }}</pre>
@@ -365,11 +397,11 @@ defineEmits<{
 
 .user-bubble {
   max-width: 75%;
-  background: #f4f4f4;
-  color: #0d0d0d;
-  padding: 10px 18px;
+  background: var(--bubble-user);
+  color: var(--label-primary);
+  padding: 10px 16px;
   border-radius: 22px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -393,7 +425,7 @@ defineEmits<{
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2080f0 0%, #4dabff 100%);
+  background: var(--accent);
   color: #ffffff;
   font-size: 15px;
   font-weight: 600;
@@ -407,7 +439,7 @@ defineEmits<{
 
 .assistant-name {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   font-weight: 500;
 }
 
@@ -419,8 +451,8 @@ defineEmits<{
   font-size: 11px;
   font-weight: 500;
   line-height: 1.5;
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
   border-radius: 9999px;
   user-select: none;
 }
@@ -431,8 +463,8 @@ defineEmits<{
 }
 
 .assistant-content {
-  color: #0d0d0d;
-  font-size: 15px;
+  color: var(--label-primary);
+  font-size: 14px;
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
@@ -463,28 +495,28 @@ defineEmits<{
   background: transparent;
   border-radius: 6px;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--label-tertiary);
   transition: all 0.15s ease;
   padding: 0;
 }
 
 .action-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #111827;
+  background: var(--bg-hover);
+  color: var(--label-primary);
 }
 
 .action-btn:active {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--bg-active);
 }
 
 /* v2.0:thumbs up/down 选中态——填充 + 主题蓝,再次点击取消 */
 .action-btn.is-active {
-  color: #2563eb;
+  color: var(--accent);
 }
 
 .action-btn.is-active:hover {
-  background: rgba(37, 99, 235, 0.08);
-  color: #1d4ed8;
+  background: rgba(65, 118, 230, 0.1);
+  color: var(--accent-hover);
 }
 
 /* ===== 思考块 (思考模式改造) =====
@@ -493,8 +525,8 @@ defineEmits<{
    视觉语言沿用 tool-segment:浅灰底、左边框、小字、低对比度,不打扰主气泡阅读。 */
 .thought-block {
   margin: 8px 0 12px 0;
-  background: #f9fafb;
-  border-left: 2px solid #e5e7eb;
+  background: var(--code-bg);
+  border-left: 2px solid var(--border-l2);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -508,7 +540,7 @@ defineEmits<{
   background: transparent;
   border: none;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--label-tertiary);
   line-height: 1.5;
   cursor: pointer;
   text-align: left;
@@ -516,13 +548,13 @@ defineEmits<{
 }
 
 .thought-toggle:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--bg-hover);
 }
 
 .thought-spinner,
 .thought-icon {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
 }
 
 .thought-spinner {
@@ -535,26 +567,104 @@ defineEmits<{
 
 .thought-chevron {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
   transition: transform 0.2s ease, color 0.15s ease;
 }
 
 .thought-chevron.is-open {
   transform: rotate(180deg);
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 
 .thought-content {
   padding: 4px 12px 10px 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-l1);
 }
 
 /* 思考文本段:小字、浅灰,与主气泡正文区分 */
 .thought-text {
   font-size: 13px;
   line-height: 1.6;
-  color: #6b7280;
+  color: var(--label-tertiary);
   margin: 6px 0;
+}
+
+/* 深度思考段(M5/C):模型 reasoning_content,独立下拉折叠——
+   标题行=徽标+单行摘要预览+箭头,展开显示斜体浅灰全文 */
+.reasoning-item {
+  margin: 6px 0;
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.reasoning-header:hover .reasoning-preview {
+  color: var(--label-secondary);
+}
+
+.reasoning-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* 收起态的单行摘要预览:超出省略,给用户判断要不要展开 */
+.reasoning-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--label-caption);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reasoning-chevron {
+  flex-shrink: 0;
+  color: var(--label-caption);
+  transition: transform 0.15s ease;
+}
+
+.reasoning-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* 展开态全文:斜体浅灰,保留换行 */
+.reasoning-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--label-caption);
+  font-style: italic;
+  margin: 4px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.reasoning-cursor {
+  display: inline-block;
+  color: var(--accent);
+  animation: reasoning-blink 1s step-end infinite;
+}
+
+@keyframes reasoning-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* 思考块内的 tool 段去掉外层 margin,贴合思考块内边距 */
@@ -569,32 +679,34 @@ defineEmits<{
   margin: 8px 0;
 }
 
+/* 与深度思考段同款的扁平行样式:徽标+预览+箭头,无底色边框 */
 .tool-segment-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 12px;
-  background: #f9fafb;
   border: none;
-  border-left: 2px solid #e5e7eb;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #6b7280;
-  line-height: 1.5;
+  background: none;
+  padding: 2px 0;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s ease;
 }
 
-.tool-segment-header:hover {
-  background: #f3f4f6;
+.tool-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
 }
 
-.tool-segment-icon,
 .tool-segment-spinner {
   flex-shrink: 0;
-  color: #9ca3af;
+  color: var(--label-caption);
+  animation: tool-spin 0.8s linear infinite;
 }
 
 .tool-segment-spinner {
@@ -607,20 +719,38 @@ defineEmits<{
   }
 }
 
-.tool-segment-label {
+/* 收起态的单行预览:超出省略(结构与 .reasoning-preview 一致) */
+.tool-segment-preview {
   flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-segment-header:hover .tool-segment-preview {
+  color: var(--label-secondary);
+}
+
+/* 工具实际名称:跟在友好标签后的浅灰小字(如 查询了任务 · query_task) */
+.tool-segment-name {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--label-caption);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .tool-segment-chevron {
   flex-shrink: 0;
-  color: #9ca3af;
-  transition: color 0.15s ease;
+  color: var(--label-caption);
+  transition: transform 0.15s ease;
 }
 
-/* v2.0:展开图标是 chevrons-up-down(上下双 V),旋转 180° 视觉等价,
-   不旋转,改为加深颜色表示展开态 */
+/* 单 V 箭头与深度思考一致:展开旋转 180° */
 .tool-segment-chevron.is-open {
-  color: #6b7280;
+  transform: rotate(180deg);
 }
 
 /* 展开区：限高滚动，长结果（RSS 全文 / 长 JSON）内部滚动，不撑乱对话 */
@@ -629,12 +759,12 @@ defineEmits<{
   padding: 10px 12px;
   max-height: 240px;
   overflow-y: auto;
-  background: #f4f4f4;
+  background: var(--code-bg);
   border-radius: 8px;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.6;
-  color: #374151;
+  color: var(--label-secondary);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -651,8 +781,8 @@ defineEmits<{
   line-height: 1.5;
 }
 
-:deep(.markdown-body) h1 { font-size: 24px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
-:deep(.markdown-body) h2 { font-size: 20px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+:deep(.markdown-body) h1 { font-size: 24px; border-bottom: 1px solid var(--border-l2); padding-bottom: 6px; }
+:deep(.markdown-body) h2 { font-size: 20px; border-bottom: 1px solid var(--border-l2); padding-bottom: 4px; }
 :deep(.markdown-body) h3 { font-size: 18px; }
 :deep(.markdown-body) h4 { font-size: 16px; }
 
@@ -748,13 +878,13 @@ defineEmits<{
   top: 2px;
   width: 16px;
   height: 16px;
-  accent-color: #2080f0; /* 勾选框用主题蓝色 */
+  accent-color: var(--accent); /* 勾选框用主题蓝色 */
   cursor: default;
 }
 
 /* 已完成的任务加删除线、变灰 */
 :deep(.markdown-body) .task-list-item:has(input:checked) {
-  color: #6b7280;
+  color: var(--label-tertiary);
 }
 :deep(.markdown-body) .task-list-item input:checked + * {
   text-decoration: line-through;
@@ -766,7 +896,7 @@ defineEmits<{
   position: absolute !important;
   left: 4px !important; /* 圆点和内容之间留4px空隙 */
   top: 0 !important;
-  color: #333 !important;
+  color: var(--label-primary) !important;
   font-size: 16px !important;
   line-height: 1.5 !important;
   z-index: 999 !important; /* 圆点层级最高，永远不会被文字盖住 */
@@ -792,14 +922,14 @@ defineEmits<{
 :deep(.markdown-body) blockquote {
   margin: 12px 0;
   padding: 8px 16px;
-  border-left: 4px solid #e5e7eb;
-  color: #6b7280;
-  background: #f9fafb;
+  border-left: 4px solid var(--border-l2);
+  color: var(--label-tertiary);
+  background: var(--code-bg);
   border-radius: 0 4px 4px 0;
 }
 
 :deep(.markdown-body) code {
-  background: #f4f4f4;
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
@@ -809,7 +939,7 @@ defineEmits<{
 :deep(.markdown-body) pre {
   margin: 12px 0;
   padding: 16px;
-  background: #f4f4f4;
+  background: var(--code-bg);
   border-radius: 8px;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
@@ -823,38 +953,38 @@ defineEmits<{
 }
 
 :deep(.markdown-body) a {
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: all 0.2s;
 }
 
 :deep(.markdown-body) a:hover {
-  border-bottom-color: #2563eb;
+  border-bottom-color: var(--accent);
 }
 
 :deep(.markdown-body) table {
   width: 100%;
   margin: 12px 0;
   border-collapse: collapse;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-l2);
   border-radius: 8px;
 }
 
 :deep(.markdown-body) th,
 :deep(.markdown-body) td {
   padding: 8px 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-l2);
 }
 
 :deep(.markdown-body) th {
-  background: #f9fafb;
+  background: var(--code-bg);
   font-weight: 600;
 }
 
 :deep(.markdown-body) hr {
   margin: 20px 0;
   border: none;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border-l2);
 }
 </style>

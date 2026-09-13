@@ -489,11 +489,13 @@ func TestLLMConfigService_UpdateFullConfig_KeepExistingAPIKeyWhenEmpty(t *testin
 // ========== v1.11 smoke 边界:加密落库不留明文 ==========
 //
 // 等价于 v1.11-end-to-end-smoke.md Phase 2.2 的 SQL 验证项:
-//   SELECT length(api_key_encrypted) FROM user_llm_configs WHERE user_id = 1;
+//
+//	SELECT length(api_key_encrypted) FROM user_llm_configs WHERE user_id = 1;
+//
 // 一次性确认三件事:
-//   1. 入库的 api_key 列 length > 0(确实写入了)
-//   2. 入库列**不**包含明文 sk- 前缀及任何明文字符片段(确实加密了,不是明文落库)
-//   3. 用同一 master key 能解回明文(加密往返正确)
+//  1. 入库的 api_key 列 length > 0(确实写入了)
+//  2. 入库列**不**包含明文 sk- 前缀及任何明文字符片段(确实加密了,不是明文落库)
+//  3. 用同一 master key 能解回明文(加密往返正确)
 //
 // 用 SetAPIKey 入口,因为它是 Web 设置面板「保存」最短路径的最后一步。
 func TestLLMConfigService_SetAPIKey_PersistsEncryptedNotPlaintext(t *testing.T) {
@@ -561,4 +563,104 @@ func TestLLMConfigService_UpdateFullConfig_PersistsEncryptedAPIKey(t *testing.T)
 	decrypted, err := crypto.Decrypt(raw.APIKey)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
+}
+
+// ===== M7 后修订:向量配置空 key = 沿用已存(与主 LLM key 行为一致),字段缺省从既有回落 =====
+
+// seedEmbeddingConfig 先存一份完整向量配置,返回服务。
+func seedEmbeddingConfig(t *testing.T, db *gorm.DB) LLMConfigService {
+	t.Helper()
+	llmRepo := repo.NewLLMConfigRepository(db)
+	service := NewLLMConfigService(llmRepo)
+	err := service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:          "qwen",
+		APIKey:            "sk-test-qwen-key-1234567890abcdefghijk",
+		Model:             "qwen-turbo",
+		EmbeddingProvider: "openai_compatible",
+		EmbeddingBaseURL:  "https://qianfan.baidubce.com/v2",
+		EmbeddingAPIKey:   "sk-embed-key-1234567890abcdefghijk",
+		EmbeddingModel:    "qwen3-embedding-4b",
+		EmbeddingDims:     1024,
+	})
+	require.NoError(t, err)
+	return service
+}
+
+func TestUpdateFullConfig_EmbeddingEmptyKeyKeepsExisting(t *testing.T) {
+	db := setupServiceDB(t)
+	service := seedEmbeddingConfig(t, db)
+
+	// 重存设置:不动向量字段(key 留空),不应报错,且已存 key 保留
+	err := service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:    "qwen",
+		APIKey:      "sk-test-qwen-key-1234567890abcdefghijk",
+		Model:       "qwen-turbo",
+		Temperature: 0.5,
+	})
+	require.NoError(t, err)
+
+	emb, has, err := service.GetEmbeddingConfigForUser(1)
+	require.NoError(t, err)
+	assert.True(t, has)
+	assert.Equal(t, "sk-embed-key-1234567890abcdefghijk", emb.APIKey)
+	assert.Equal(t, "openai_compatible", emb.Provider)
+	assert.Equal(t, 1024, emb.Dims)
+}
+
+func TestUpdateFullConfig_EmbeddingPartialUpdate_FallsBackToExisting(t *testing.T) {
+	db := setupServiceDB(t)
+	service := seedEmbeddingConfig(t, db)
+
+	// 只改维度:key/baseURL 留空 → 从既有配置回落
+	err := service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:      "qwen",
+		APIKey:        "sk-test-qwen-key-1234567890abcdefghijk",
+		Model:         "qwen-turbo",
+		EmbeddingDims: 2560,
+	})
+	require.NoError(t, err)
+
+	emb, has, err := service.GetEmbeddingConfigForUser(1)
+	require.NoError(t, err)
+	assert.True(t, has)
+	assert.Equal(t, 2560, emb.Dims)
+	assert.Equal(t, "openai_compatible", emb.Provider)
+	assert.Equal(t, "https://qianfan.baidubce.com/v2", emb.BaseURL)
+	assert.Equal(t, "sk-embed-key-1234567890abcdefghijk", emb.APIKey)
+}
+
+func TestUpdateFullConfig_EmbeddingNewKeyReplaces(t *testing.T) {
+	db := setupServiceDB(t)
+	service := seedEmbeddingConfig(t, db)
+
+	err := service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:        "qwen",
+		APIKey:          "sk-test-qwen-key-1234567890abcdefghijk",
+		Model:           "qwen-turbo",
+		EmbeddingAPIKey: "sk-brand-new-embed-key-1234567890",
+	})
+	require.NoError(t, err)
+
+	emb, has, _ := service.GetEmbeddingConfigForUser(1)
+	assert.True(t, has)
+	assert.Equal(t, "sk-brand-new-embed-key-1234567890", emb.APIKey)
+}
+
+func TestUpdateFullConfig_EmbeddingFirstTimeRequiresKey(t *testing.T) {
+	db := setupServiceDB(t)
+	llmRepo := repo.NewLLMConfigRepository(db)
+	service := NewLLMConfigService(llmRepo)
+
+	// 首次配置:填了其他向量字段但 key 为空 → 必须报错(无已存 key 可沿用)
+	err := service.UpdateFullConfig(1, UpdateConfigRequest{
+		Provider:          "qwen",
+		APIKey:            "sk-test-qwen-key-1234567890abcdefghijk",
+		Model:             "qwen-turbo",
+		EmbeddingProvider: "openai_compatible",
+		EmbeddingBaseURL:  "https://qianfan.baidubce.com/v2",
+		EmbeddingModel:    "qwen3-embedding-4b",
+		EmbeddingDims:     1024,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Key")
 }

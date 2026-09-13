@@ -7,12 +7,12 @@ import (
 // TestNewLLMStep 验证 LLM 调用步骤构造（v1.5.5 运行链路记录）。
 func TestNewLLMStep(t *testing.T) {
 	step := NewLLMStep(
-		42,                                  // userID
-		`[{"role":"user","content":"hi"}]`,  // request：发出的 messages
-		`{"content":"hello"}`,               // response：模型回复
-		"gpt-4o",                            // model
-		StepStatusSuccess,                   // status
-		320,                                 // durationMs
+		42,                                 // userID
+		`[{"role":"user","content":"hi"}]`, // request：发出的 messages
+		`{"content":"hello"}`,              // response：模型回复
+		"gpt-4o",                           // model
+		StepStatusSuccess,                  // status
+		320,                                // durationMs
 	)
 
 	if step.UserID != 42 {
@@ -52,12 +52,12 @@ func TestNewLLMStep(t *testing.T) {
 // TestNewToolStep 验证工具调用步骤构造，response 存原始未脱敏结果。
 func TestNewToolStep(t *testing.T) {
 	step := NewToolStep(
-		42,                                    // userID
-		"rss_reader",                          // tool
-		`{"url":"https://x"}`,                 // request：arguments
-		"工具执行错误: dial tcp refused",      // response：原始未脱敏结果
-		StepStatusError,                       // status
-		1200,                                  // durationMs
+		42,                         // userID
+		"rss_reader",               // tool
+		`{"url":"https://x"}`,      // request：arguments
+		"工具执行错误: dial tcp refused", // response：原始未脱敏结果
+		StepStatusError,            // status
+		1200,                       // durationMs
 	)
 
 	if step.Kind != StepKindToolCall {

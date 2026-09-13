@@ -16,14 +16,17 @@ import (
 // TestSubAgentPromptSections_NoRole 无 persona_hint:不含"研究员"等角色卡文案,含通用执行器 persona。
 func TestSubAgentPromptSections_NoRole(t *testing.T) {
 	s := SubAgentPromptSections(ScopeSub, domainagent.NewTaskSpec("查高铁票"))
-	require.Len(t, s, 3) // agent_base + sub_role + sub_contract(无 hint 不加段)
+	require.Len(t, s, 4) // agent_base + sub_role + sub_source_rules + sub_contract(无 hint 不加段)
 	assert.Equal(t, "agent_base", s[0].Name)
 	assert.Equal(t, "sub_role", s[1].Name)
-	assert.Equal(t, "sub_contract", s[2].Name)
+	assert.Equal(t, "sub_source_rules", s[2].Name)
+	assert.Equal(t, "sub_contract", s[3].Name)
 	assert.Less(t, s[0].Order, s[1].Order)
 	assert.Less(t, s[1].Order, s[2].Order)
+	assert.Less(t, s[2].Order, s[3].Order)
 	assert.NotContains(t, s[1].Text, "研究员", "通用执行器 persona 不得含角色卡文案")
 	assert.Contains(t, s[1].Text, "后台任务执行器")
+	assert.Contains(t, s[2].Text, "manage_subscriptions", "信息源选择规则必须引导先看订阅清单")
 }
 
 // TestSubAgentPromptSections_PersonaHint 有 persona_hint:注入【本次任务角色】;空白 hint 不注册该段。

@@ -11,26 +11,18 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AppContent: typeof import('./src/components/layout/AppContent.vue')['default']
-    AppHeader: typeof import('./src/components/layout/AppHeader.vue')['default']
-    AppNav: typeof import('./src/components/layout/AppNav.vue')['default']
-    BaseButton: typeof import('./src/components/common/BaseButton.vue')['default']
-    BaseIcon: typeof import('./src/components/common/BaseIcon.vue')['default']
-    BaseInput: typeof import('./src/components/common/BaseInput.vue')['default']
-    BaseLoading: typeof import('./src/components/common/BaseLoading.vue')['default']
     ChatAvatar: typeof import('./src/components/chat/ChatAvatar.vue')['default']
     ChatInput: typeof import('./src/components/chat/ChatInput.vue')['default']
     ChatMessage: typeof import('./src/components/chat/ChatMessage.vue')['default']
     ChatMessageList: typeof import('./src/components/chat/ChatMessageList.vue')['default']
-    DrawerShell: typeof import('./src/components/layout/DrawerShell.vue')['default']
-    HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
-    MarkdownRenderer: typeof import('./src/components/functional/MarkdownRenderer.vue')['default']
+    DialogShell: typeof import('./src/components/layout/DialogShell.vue')['default']
     MemoryDrawer: typeof import('./src/components/functional/MemoryDrawer.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SettingsDrawer: typeof import('./src/components/functional/SettingsDrawer.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
     SkillDrawer: typeof import('./src/components/functional/SkillDrawer.vue')['default']
+    SubscriptionDialog: typeof import('./src/components/functional/SubscriptionDialog.vue')['default']
     Toast: typeof import('./src/components/functional/Toast.vue')['default']
   }
 }

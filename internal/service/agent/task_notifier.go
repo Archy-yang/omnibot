@@ -25,3 +25,12 @@ type noopTaskNotifier struct{}
 func (noopTaskNotifier) NotifyTaskCompleted(ctx context.Context, target string, task *domainagent.AgentTask) error {
 	return nil
 }
+
+// TaskCompletionPublisher web 任务完成时向该用户在线连接推送实时事件(08 §4.8)。
+// realtime.Hub 实现;为 nil 时退化纯轮询(兼容老路径/测试)。与 TaskNotifier(飞书
+// 主动消息)并行:按 task.Source 分派,web 推 WS 事件、飞书走主动消息。
+type TaskCompletionPublisher interface {
+	// PublishTaskCompleted 推送 {"type":"task.completed","data":{"task_id":N}}。
+	// 只送通知不送内容——汇报正文仍由前端触发 /report SSE 链路生成并落库。
+	PublishTaskCompleted(userID, taskID int64)
+}

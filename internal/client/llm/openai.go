@@ -46,9 +46,9 @@ func NewOpenAIProvider(apiKey, baseURL, model string, timeout time.Duration) *Op
 
 // openAIRequest OpenAI API 请求结构
 type openAIRequest struct {
-	Model    string        `json:"model"`
+	Model    string          `json:"model"`
 	Messages []openAIMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Stream   bool            `json:"stream"`
 }
 
 // openAIMessage 消息结构

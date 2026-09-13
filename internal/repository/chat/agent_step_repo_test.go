@@ -9,7 +9,6 @@ import (
 
 func int64p(v int64) *int64 { return &v }
 
-
 // TestAgentStepRepository_CreateBatchAndListByMessage 验证一轮对话的步骤链按 seq 有序写入读回。
 func TestAgentStepRepository_CreateBatchAndListByMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)

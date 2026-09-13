@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend clean run dev start stop restart status logs test test-backend test-all lint help install-tools
+.PHONY: all build build-frontend build-backend clean run dev dev-frontend dev-stop dev-logs dev-backend start stop restart status logs test test-backend test-all lint help install-tools
 
 # Go related variables
 GO_CMD = go
@@ -22,6 +22,11 @@ CONFIG_PATH = configs/config.yaml
 PID_FILE = $(BIN_DIR)/omnibot.pid
 LOG_FILE = logs/omnibot.log
 
+# 前端开发服务器(Vite 热更新,前后端分离工作流)
+VITE_PID_FILE = $(BIN_DIR)/vite.pid
+VITE_LOG_FILE = logs/vite.log
+VITE_PORT = 5173
+
 # Default target: 完整构建(前端+后端)并后台启动
 all: build start
 
@@ -44,7 +49,8 @@ build-frontend:  ## Build Vue frontend
 	@cd $(FRONTEND_DIR) && $(NPM_CMD) install && $(NPM_CMD) run build
 	@echo "✅ Frontend built: $(FRONTEND_DIR)/dist"
 
-build-all: build-backend build-frontend  ## Build both backend and frontend
+# 前端必须先于后端:go:embed dist/* 在编译期打包,顺序反了会嵌入上一轮旧前端
+build-all: build-frontend build-backend  ## Build both backend and frontend
 
 ##@ Service (daemon)
 
@@ -81,14 +87,22 @@ stop:  ## Stop the running server (pidfile first, pgrep fallback)
 
 status:  ## Show server status + recent log tail
 	@if [ -f $(PID_FILE) ] && kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
-		echo "🟢 运行中 PID=$$(cat $(PID_FILE))"; \
+		echo "🟢 后端 运行中 PID=$$(cat $(PID_FILE))  http://localhost:8080/chat/"; \
 	else \
-		echo "🔴 未运行"; \
+		echo "🔴 后端 未运行"; \
+	fi
+	@if [ -f $(VITE_PID_FILE) ] && kill -0 $$(cat $(VITE_PID_FILE)) 2>/dev/null; then \
+		echo "🟢 前端开发服务器 运行中 PID=$$(cat $(VITE_PID_FILE))  http://localhost:$(VITE_PORT)/chat/ (热更新)"; \
+	else \
+		echo "🔴 前端开发服务器 未运行"; \
 	fi
 	@[ -f $(LOG_FILE) ] && tail -5 $(LOG_FILE) || true
 
 logs:  ## Follow server log
 	@tail -f $(LOG_FILE)
+
+dev-logs:  ## Follow frontend dev server log
+	@tail -f $(VITE_LOG_FILE)
 
 ##@ Development
 
@@ -96,9 +110,32 @@ run: build  ## Build and run the server (foreground)
 	@echo "🚀 Starting OmniBot server..."
 	@./$(SERVER_BIN)
 
-dev:  ## Run development mode (frontend dev server only)
-	@echo "🎨 Starting frontend dev server..."
-	@cd $(FRONTEND_DIR) && $(NPM_CMD) run dev
+# 前后端分离工作流:后端二进制照常 serve 8080,前端改动走 Vite 热更新,
+# 免 go:embed 重编译。后端改了代码 → make dev 重跑;只改前端 → 存盘即生效。
+dev: build start dev-frontend  ## 一键开发模式:后端构建并启动 + 前端热更新服务
+
+dev-frontend: dev-stop  ## Start frontend dev server (Vite hot reload, daemon)
+	@mkdir -p $(BIN_DIR) logs
+	@cd $(FRONTEND_DIR) && ( nohup $(NPM_CMD) run dev -- --port $(VITE_PORT) --strictPort > ../$(VITE_LOG_FILE) 2>&1 < /dev/null & echo $$! > ../$(VITE_PID_FILE) )
+	@sleep 2; if curl -sf -o /dev/null http://localhost:$(VITE_PORT)/chat/; then \
+		echo "✅ 前端开发服务器已启动 PID=$$(cat $(VITE_PID_FILE))  打开: http://localhost:$(VITE_PORT)/chat/"; \
+	else \
+		echo "❌ 前端开发服务器启动失败,最近日志:"; tail -20 $(VITE_LOG_FILE); exit 1; \
+	fi
+
+dev-stop:  ## Stop frontend dev server
+	@if [ -f $(VITE_PID_FILE) ]; then \
+		pid=$$(cat $(VITE_PID_FILE)); \
+		pkill -P $$pid 2>/dev/null || true; \
+		kill $$pid 2>/dev/null || true; \
+		echo "🛑 停止前端开发服务器:$$pid"; \
+		rm -f $(VITE_PID_FILE); \
+	else \
+		echo "ℹ️ 前端开发服务器未在运行"; \
+	fi; \
+	for p in $$(pgrep -f "vite --port $(VITE_PORT) --strictPort" 2>/dev/null); do \
+		kill $$p 2>/dev/null || true; \
+	done
 
 dev-backend:  ## Run backend dev server with hot reload (requires air)
 	@echo "🔧 Starting backend dev server with hot reload..."

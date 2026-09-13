@@ -37,6 +37,7 @@ export const useSettingsStore = defineStore(
           model: fullConfig.model,
           temperature: fullConfig.temperature,
           max_tokens: fullConfig.maxTokens,
+          disable_thinking: fullConfig.disableThinking,
           // 用户级向量配置(12-记忆系统技术方案 §5.3):
           // 已配置且现在选"使用系统默认" → 显式清除;否则透传表单值(undefined 字段不发送)
           clear_embedding: hasEmbeddingConfig.value && !fullConfig.embeddingProvider,
@@ -70,6 +71,7 @@ export const useSettingsStore = defineStore(
             baseUrl: userConfig.base_url,
             temperature: userConfig.temperature,
             maxTokens: userConfig.max_tokens,
+            disableThinking: userConfig.disable_thinking,
             // API Key 不返回明文，使用时让用户重新输入或保持原样
             apiKey: '',
             // 向量配置回显:Key 脱敏不回填输入框,用户重新输入才发送

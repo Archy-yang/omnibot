@@ -16,18 +16,18 @@ import (
 //
 // 与展示用 Message.Segments 的分工：segments.result 脱敏对外，agent_steps 存完整原始供分析。
 type AgentStep struct {
-	ID         int64     `gorm:"primaryKey;autoIncrement"`
-	UserID     int64     `gorm:"index;not null"`          // 用户 ID
-	MessageID  *int64    `gorm:"index"`                   // 主 Agent 步骤:锚到 assistant 消息 ID;子 Agent 步骤为 nil
-	TaskID     *int64    `gorm:"index"`                   // 子 Agent 步骤:锚到 agent_tasks ID;主 Agent 步骤为 nil
-	Seq        int       `gorm:"not null"`                // 链内顺序 0,1,2...
-	Kind       string    `gorm:"size:20;index;not null"`  // llm_call / tool_call
-	Status     string    `gorm:"size:20;index"`           // success / error / not_found
-	DurationMs int64     // 本步耗时（毫秒）
-	Tool       string    `gorm:"size:100;index"` // tool_call 用：工具名
-	Model      string    `gorm:"size:100"`       // llm_call 用：模型名（best-effort）
-	Request    string    `gorm:"type:text"`      // llm: messages JSON；tool: arguments
-	Response   string    `gorm:"type:text"`      // llm: {content,tool_calls} JSON；tool: 原始结果
+	ID         int64  `gorm:"primaryKey;autoIncrement"`
+	UserID     int64  `gorm:"index;not null"`         // 用户 ID
+	MessageID  *int64 `gorm:"index"`                  // 主 Agent 步骤:锚到 assistant 消息 ID;子 Agent 步骤为 nil
+	TaskID     *int64 `gorm:"index"`                  // 子 Agent 步骤:锚到 agent_tasks ID;主 Agent 步骤为 nil
+	Seq        int    `gorm:"not null"`               // 链内顺序 0,1,2...
+	Kind       string `gorm:"size:20;index;not null"` // llm_call / tool_call
+	Status     string `gorm:"size:20;index"`          // success / error / not_found
+	DurationMs int64  // 本步耗时（毫秒）
+	Tool       string `gorm:"size:100;index"` // tool_call 用：工具名
+	Model      string `gorm:"size:100"`       // llm_call 用：模型名（best-effort）
+	Request    string `gorm:"type:text"`      // llm: messages JSON；tool: arguments
+	Response   string `gorm:"type:text"`      // llm: {content,tool_calls} JSON；tool: 原始结果
 	// token 用量：预留列，本轮恒 0；将来加 stream_options.include_usage 后填充。
 	PromptTokens     int
 	CompletionTokens int

@@ -8,20 +8,21 @@ import (
 
 	skilldomain "omnibot/internal/domain/skill"
 	agentpkg "omnibot/internal/service/agent"
+	agenttools "omnibot/internal/service/agent/tools"
 )
 
 // ---- mock repo ----
 
 type mockSkillRepository struct {
-	upserted []skilldomain.BuiltinDef
-	upsertErr error
-	rows     []*skilldomain.Skill
-	listErr  error
-	enabledName   string
-	enabledValue  bool
-	setEnabledErr error
-	upsertedMCP  []skilldomain.MCPToolDef
-	deletedNotIn []string
+	upserted       []skilldomain.BuiltinDef
+	upsertErr      error
+	rows           []*skilldomain.Skill
+	listErr        error
+	enabledName    string
+	enabledValue   bool
+	setEnabledErr  error
+	upsertedMCP    []skilldomain.MCPToolDef
+	deletedNotIn   []string
 	deletedServers []string
 }
 
@@ -103,8 +104,8 @@ func (m *mockSkillRepository) DeleteMCPSkillsByServer(serverName string) (int64,
 
 // ---- 工具 ----
 
-func timeBuilder() agentpkg.Tool { return agentpkg.CreateGetCurrentTimeTool() }
-func calcBuilder() agentpkg.Tool { return agentpkg.CreateCalculatorTool() }
+func timeBuilder() agentpkg.Tool { return agenttools.CreateGetCurrentTimeTool() }
+func calcBuilder() agentpkg.Tool { return agenttools.CreateCalculatorTool() }
 
 func newService(repo *mockSkillRepository) *SkillService {
 	svc := NewSkillService(repo)
@@ -197,7 +198,7 @@ func TestApplyTo_SubOnlySkill_NotInMain(t *testing.T) {
 	row.MainVisible = false
 	repo := &mockSkillRepository{rows: []*skilldomain.Skill{row}}
 	svc := newService(repo)
-	svc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateRSSReaderTool() })
+	svc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateRSSReaderTool() })
 	main, global := newRegistries()
 
 	err := svc.ApplyTo(main, global)

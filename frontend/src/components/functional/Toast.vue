@@ -1,16 +1,8 @@
 <script setup lang="ts">
-import type { ToastProps, ToastType } from '@/types/components';
+import type { ToastProps } from '@/types/components';
 
+// 图标配色走 CSS 类（亮暗两套令牌），不再由 JS 返回写死的 hex
 defineProps<ToastProps>();
-
-const getIconColor = (type: ToastType) => {
-  switch (type) {
-    case 'success': return '#10b981';
-    case 'error': return '#ef4444';
-    case 'warning': return '#f59e0b';
-    default: return '#3b82f6';
-  }
-};
 </script>
 
 <template>
@@ -23,7 +15,7 @@ const getIconColor = (type: ToastType) => {
           class="toast-item"
         >
           <!-- Icon -->
-          <div class="toast-icon" :style="{ color: getIconColor(toast.type) }">
+          <div class="toast-icon" :class="`toast-icon--${toast.type}`">
             <svg v-if="toast.type === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"/>
             </svg>
@@ -55,7 +47,7 @@ const getIconColor = (type: ToastType) => {
 <style scoped>
 .toast-container {
   position: fixed;
-  top: 20px;
+  top: 40px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 9999;
@@ -70,13 +62,15 @@ const getIconColor = (type: ToastType) => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  padding: 12px 16px;
+  /* dsh Toast：反色胶囊（亮色下深底、暗色下浅底），无边框 */
+  background: var(--btn-primary-fill);
+  color: var(--btn-primary-foreground);
+  border-radius: 14px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 4px rgba(0, 0, 0, 0.06);
   pointer-events: auto;
-  max-width: 420px;
+  width: max-content;
+  max-width: min(640px, calc(100vw - 48px));
 }
 
 .toast-icon {
@@ -86,11 +80,22 @@ const getIconColor = (type: ToastType) => {
   flex-shrink: 0;
 }
 
+/* 图标语义色：深底上用亮阶，浅底（暗色模式反色胶囊）上用深阶 */
+.toast-icon--success { color: var(--ds-green-400); }
+.toast-icon--error { color: var(--ds-red-400); }
+.toast-icon--warning { color: var(--ds-amber-400); }
+.toast-icon--info { color: var(--ds-blue-400); }
+
+:global(.dark) .toast-icon--success { color: var(--ds-green-500); }
+:global(.dark) .toast-icon--error { color: var(--ds-red-600); }
+:global(.dark) .toast-icon--warning { color: var(--ds-amber-500); }
+:global(.dark) .toast-icon--info { color: var(--ds-blue-500); }
+
 .toast-message {
   font-size: 14px;
   font-weight: 500;
-  color: #f4f4f5;
-  line-height: 1.4;
+  color: inherit;
+  line-height: 1.6;
   white-space: nowrap;
 }
 

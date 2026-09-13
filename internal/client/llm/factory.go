@@ -16,7 +16,7 @@ import (
 // Client LLM 客户端管理器
 // 管理默认厂商和降级列表，自动处理降级
 type Client struct {
-	defaultProvider    LLMProvider
+	defaultProvider   LLMProvider
 	fallbackProviders []LLMProvider
 }
 
@@ -61,7 +61,7 @@ func NewClient(cfg config.LLMConfig) (*Client, error) {
 	}
 
 	return &Client{
-		defaultProvider:    defaultProvider,
+		defaultProvider:   defaultProvider,
 		fallbackProviders: fallbackProviders,
 	}, nil
 }
@@ -84,7 +84,7 @@ func NewClientFromUserConfig(cfg UserConfig) (*Client, error) {
 	}
 
 	return &Client{
-		defaultProvider:    provider,
+		defaultProvider:   provider,
 		fallbackProviders: nil, // 用户级配置不支持 fallback
 	}, nil
 }

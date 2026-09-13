@@ -14,6 +14,9 @@ type LLMConfig struct {
 	Model       *string  `gorm:"size:128"`
 	Temperature *float64 `gorm:"type:decimal(3,2)"` // 0-2，保留两位小数
 	MaxTokens   *int     `gorm:"type:int"`
+	// DisableThinking 快模式(M5/C):true 时对话请求带 {"thinking":{"type":"disabled"}},
+	// 跳过思考阶段换低延迟(仅对 DeepSeek thinking 方言端点生效,如千帆 deepseek-v4 系)。
+	DisableThinking bool `gorm:"not null;default:false"`
 	// 用户级向量配置(12-记忆系统技术方案 §5.3):全空=用系统默认;APIKey 加密存储。
 	EmbeddingProvider *string `gorm:"size:32"` // openai_compatible | ollama
 	EmbeddingBaseURL  *string `gorm:"size:256"`

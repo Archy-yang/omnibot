@@ -84,6 +84,12 @@ const (
 	// 前端把该轮文本迁移到思考块--简单问题(单轮回复)无 Thought,主气泡零跳动。
 	AgentEventThought AgentEventType = "thought"
 
+	// AgentEventReasoning：深度思考增量(M5/C 方案)。模型 reasoning_content(思维链)
+	// 的逐 delta 透传——此前被吞掉导致思考阶段(10~40s)界面完全静默,用户体感"慢"。
+	// 前端渲染为"已思考"块内的「深度思考」段,实时展开、正文 token 到达后收起。
+	// 与 Thought 的分工:Thought=中间工具轮的正文(轮末整段标记),Reasoning=思维链本身(实时)。
+	AgentEventReasoning AgentEventType = "reasoning"
+
 	// AgentEventTaskCreated：本轮派活创建的后台 task_id 列表(方向 B 独立下发)。
 	// 不拼进回复文本(避免重复/污染历史/被模型模仿),作为独立 SSE 事件发给前端,
 	// 前端据此渲染可点击的任务卡片(点击用 task_id 查 /api/v1/agent/tasks/:id/steps 看执行步骤)。

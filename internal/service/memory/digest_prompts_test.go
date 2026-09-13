@@ -11,6 +11,8 @@ func TestPipelinePrompt_ReconcileConstraints(t *testing.T) {
 	for _, want := range []string{
 		"世界观快照", "增量对账", "matter_updates", "facts",
 		`"fact"`, `"episode"`, `"loop"`, "覆写", "宁可漏记", "只输出 JSON", "source_message_ids",
+		// 助理人语气(M7 期间确认):记自己的笔记,禁"用户"开头
+		"严禁以\"用户\"开头", "你怎么称呼对方",
 	} {
 		if !strings.Contains(pipelineSystemPrompt, want) {
 			t.Errorf("沉淀 prompt 缺少关键约束 %q", want)

@@ -336,6 +336,8 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				}
 				if chunk.ReasoningDelta != "" {
 					roundReasoning += chunk.ReasoningDelta
+					// 深度思考实时透传(M5/C):思考阶段不再界面静默
+					out <- AgentEvent{Type: AgentEventReasoning, Content: chunk.ReasoningDelta}
 				}
 				if chunk.ToolCallDelta != nil {
 					acc, ok := toolCallAccum[chunk.ToolCallDelta.Index]

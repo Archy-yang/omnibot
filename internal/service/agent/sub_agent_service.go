@@ -42,6 +42,7 @@ type SubAgentService struct {
 	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
 	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
 	notifier     TaskNotifier                  // 任务完成主动推送(方案A:飞书主动消息)
+	publisher    TaskCompletionPublisher       // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -239,16 +240,21 @@ func (s *SubAgentService) GetTaskArtifact(taskID int64) (*domainagent.Artifact, 
 	return art, nil
 }
 
-// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:只给状态/goal 摘要/步骤数。
+// TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:
+// 只给状态/goal 摘要/步骤数 + 关键时间点(创建/开始/结束,LLM 能回答"任务何时派/何时跑完")。
 type TaskSummary struct {
-	ID        int64   `json:"id"`
-	UserID    int64   `json:"-"`
-	SubAgent  string  `json:"sub_agent"`
-	Goal      string  `json:"goal"`
-	Status    string  `json:"status"`
-	StepCount int     `json:"step_count"`
-	Reported  bool    `json:"reported"`
-	Artifact  *string `json:"artifact,omitempty"` // completed 时给摘要
+	ID        int64      `json:"id"`
+	UserID    int64      `json:"-"`
+	SubAgent  string     `json:"sub_agent"`
+	Goal      string     `json:"goal"`
+	Status    string     `json:"status"`
+	StepCount int        `json:"step_count"`
+	Reported  bool       `json:"reported"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	// FinishedAt 结束时间:completed 取 CompletedAt,cancelled 取 CancelledAt,其余 nil
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Artifact   *string    `json:"artifact,omitempty"` // completed 时给摘要
 }
 
 // QueryTask 查单个任务概要。属主校验:只能查自己的任务。
@@ -280,11 +286,17 @@ func (s *SubAgentService) ListUserTasks(userID int64, limit int) ([]*TaskSummary
 	return out, nil
 }
 
-// toSummary 把 AgentTask 转概要,含步骤数(从 stepRepo 查)。
+// toSummary 把 AgentTask 转概要,含步骤数(从 stepRepo 查)与关键时间点。
 func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, error) {
 	sm := &TaskSummary{
 		ID: task.ID, UserID: task.UserID, SubAgent: task.SubAgentType,
 		Goal: task.Goal, Status: task.Status, Reported: task.Reported, Artifact: task.Artifact,
+		CreatedAt: task.CreatedAt, StartedAt: task.StartedAt,
+	}
+	if task.Status == domainagent.TaskStatusCancelled && task.CancelledAt != nil {
+		sm.FinishedAt = task.CancelledAt
+	} else {
+		sm.FinishedAt = task.CompletedAt
 	}
 	if s.stepRepo != nil {
 		steps, err := s.stepRepo.ListByTaskID(task.ID)
@@ -425,15 +437,20 @@ func (s *SubAgentService) recordEvent(taskID int64, eventType, source string) {
 // (消息没到是异常,但重复汇报更糟;失败有日志可补救)。
 // notifier 为 nil 或 source 非 feishu 时跳过(web 任务靠前端轮询 + 前置汇报)。
 func (s *SubAgentService) notifyCompleted(taskID int64) {
-	if s.notifier == nil {
-		return
-	}
 	task, err := s.taskRepo.GetByID(taskID)
 	if err != nil || task == nil {
 		return
 	}
+	// web:实时推送事件(08 §4.8),前端收到后走 /report 链路拉取汇报。
+	// 不标 reported——reported 由 /report 处理,推送丢失时轮询兜底仍可发现。
+	if task.Source == domainagent.SourceWeb && s.publisher != nil {
+		s.publisher.PublishTaskCompleted(task.UserID, task.ID)
+	}
+	if s.notifier == nil {
+		return
+	}
 	if task.Source != domainagent.SourceFeishu || task.NotifyTarget == "" {
-		return // web 任务靠轮询 + 前置汇报;非飞书不主动推
+		return // 非飞书不主动推消息
 	}
 	// 先标记 reported:防 web 前端轮询在此期间查到 unreported 触发重复汇报
 	if err := s.taskRepo.MarkReported(task.ID); err != nil {
@@ -454,6 +471,11 @@ var ErrTaskNotOwned = errors.New("task not owned by user")
 // 飞书未配置时保持 nil(web 任务靠轮询,不主动推)。
 func (s *SubAgentService) SetNotifier(n TaskNotifier) {
 	s.notifier = n
+}
+
+// SetCompletionPublisher 注入 web 实时推送器(08 §4.8;realtime.Hub)。
+func (s *SubAgentService) SetCompletionPublisher(p TaskCompletionPublisher) {
+	s.publisher = p
 }
 
 // ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。

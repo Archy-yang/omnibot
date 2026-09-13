@@ -4,47 +4,220 @@
 @source "../index.html";
 @source "./**/*.{vue,ts,tsx,js,jsx}";
 
+/* class 驱动的暗色模式（html.dark，与 App.vue 的 applyTheme 一致） */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ========================================
-   OmniBot - ChatGPT Inspired Design
+   OmniBot - DSH (DeepSeek Harness) Inspired Design
+   设计令牌移植自 deepseek-harness ui-theme（design-platform.css），
+   别名保留本项目既有命名，值整体替换为 dsh 色板。
    ======================================== */
 
+/* ---- 静态色板（dsh static palette 节选） ---- */
 :root {
-  --sidebar-bg: #171717;
-  --sidebar-hover: #2a2b32;
-  --sidebar-active: #343541;
-  --sidebar-text: #ececf1;
-  --sidebar-text-dim: #8e8ea0;
-  --sidebar-border: #2d2d35;
+  /* deepseek 蓝阶 */
+  --ds-blue-50: #edf3fe;   /* deepseek-50：用户气泡 */
+  --ds-blue-100: #e4edfd;  /* deepseek-100 */
+  --ds-blue-200: #d3e2ff;  /* deepseek-200 */
+  --ds-blue-400: #679efe;  /* deepseek-400：暗色主蓝 */
+  --ds-blue-450: #5686fe;  /* deepseek-450 */
+  --ds-blue-500: #4176e6;  /* deepseek-500：主蓝 */
+  --ds-blue-800: #34415b;  /* deepseek-800：暗色浅蓝底 */
 
-  --main-bg: #ffffff;
-  --msg-user-bg: #f7f7f8;
-  --text-primary: #1a1a2e;
-  --text-secondary: #6e6e80;
-  --text-tertiary: #8e8ea0;
+  /* bluish 灰阶 */
+  --ds-gray-00: #ffffff;
+  --ds-gray-50: #f9fafb;
+  --ds-gray-60: #f5f6f7;
+  --ds-gray-75: #f1f3f5;
+  --ds-gray-100: #ebeef2;
+  --ds-gray-150: #e9ecf2;
+  --ds-gray-200: #e1e5ee;
+  --ds-gray-300: #cfd3d6;
+  --ds-gray-400: #adb2b8;
+  --ds-gray-500: #979da6;
+  --ds-gray-600: #81858c;
+  --ds-gray-700: #61666b;
+  --ds-gray-750: #43454a;
+  --ds-gray-800: #353638;
+  --ds-gray-850: #2c2c2e;
+  --ds-gray-875: #232324;
+  --ds-gray-900: #1b1b1c;
+  --ds-gray-950: #151517;
+  --ds-gray-1000: #0f1115;
 
-  --accent: #10a37f;
-  --accent-hover: #0d8c6d;
-  --accent-light: rgba(16, 163, 127, 0.08);
+  /* 语义色（dsh state） */
+  --ds-red-400: #f25a5a;
+  --ds-red-500: #ef4444;
+  --ds-red-600: #ec1313;
+  --ds-red-50: #fef2f2;
+  --ds-green-400: #4ed17e;
+  --ds-green-500: #22c55e;
+  --ds-green-50: #e6faed;
+  --ds-amber-400: #f7ad31;
+  --ds-amber-500: #f59e0b;
+  --ds-amber-600: #dd8629;
+  --ds-amber-50: #fef5e7;
+}
 
-  --border: #e5e5e5;
-  --input-bg: #ffffff;
-  --input-border: #d9d9e3;
+/* ---- 亮色别名 ---- */
+:root {
+  /* 背景 */
+  --bg-base: var(--ds-gray-00);
+  --bg-layer-2: var(--ds-gray-00);
+  --bg-layer-3: var(--ds-gray-00);
+  --bg-sidebar: var(--ds-gray-50);
+  --bg-hover: rgba(38, 49, 72, 0.06);
+  --bg-active: rgba(38, 49, 72, 0.1);
+  --bg-tip: var(--ds-gray-60);
+  --bg-mask: rgba(0, 0, 0, 0.24);
+
+  /* 文字（label） */
+  --label-primary: var(--ds-gray-1000);
+  --label-secondary: var(--ds-gray-700);
+  --label-tertiary: var(--ds-gray-600);
+  --label-caption: var(--ds-gray-400);
+  --label-dimmed: var(--ds-gray-200);
+  --label-foreground: var(--ds-gray-00);
+
+  /* 边框（0.5px 细线体系） */
+  --border-l1: rgba(0, 0, 0, 0.04);
+  --border-l2: rgba(0, 0, 0, 0.1);
+  --border-l3: rgba(0, 0, 0, 0.12);
+  --border-l4: rgba(0, 0, 0, 0.16);
+
+  /* 主色：dsh 仅链接/信息动作用蓝，主按钮为黑 */
+  --accent: var(--ds-blue-500);
+  --accent-hover: var(--ds-blue-450);
+  --accent-light: var(--ds-blue-50);
+  --accent-dimmed: var(--ds-gray-100);
+  --btn-primary-fill: var(--ds-gray-1000);
+  --btn-primary-hover: var(--ds-gray-750);
+  --btn-primary-foreground: var(--ds-gray-00);
+
+  /* 气泡 / 输入 / 代码 */
+  --bubble-user: var(--ds-blue-50);
+  --code-bg: var(--ds-gray-50);
+  --toast-bg: var(--ds-gray-800);
+
+  /* 语义 */
+  --success: var(--ds-green-500);
+  --success-bg: var(--ds-green-50);
+  --warning: var(--ds-amber-500);
+  --warning-label: var(--ds-amber-600);
+  --warning-bg: var(--ds-amber-50);
+  --error: var(--ds-red-600);
+  --error-bg: var(--ds-red-50);
+
+  /* ---- 兼容别名（既有组件仍在引用，值已映射到 dsh 色板） ---- */
+  --sidebar-bg: var(--ds-gray-50);
+  --sidebar-hover: var(--ds-gray-75);
+  --sidebar-active: var(--ds-gray-100);
+  --sidebar-text: var(--ds-gray-1000);
+  --sidebar-text-dim: var(--ds-gray-600);
+  --sidebar-border: var(--border-l3);
+
+  --main-bg: var(--ds-gray-00);
+  --msg-user-bg: var(--ds-blue-50);
+  --text-primary: var(--ds-gray-1000);
+  --text-secondary: var(--ds-gray-700);
+  --text-tertiary: var(--ds-gray-600);
+
+  --border: var(--border-l2);
+  --input-bg: var(--ds-gray-00);
+  --input-border: var(--border-l4);
   --input-shadow: 0 0 0 1px transparent;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, 'Helvetica Neue', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
 
-  font: 15px/1.7 var(--font-sans);
+  font: 14px/1.6 var(--font-sans);
   color: var(--text-primary);
   background: var(--main-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-autospace: normal;
+}
+
+/* ---- 暗色别名（dsh dark palette，html.dark 驱动） ---- */
+:root.dark {
+  --bg-base: var(--ds-gray-950);
+  --bg-layer-2: var(--ds-gray-850);
+  --bg-layer-3: var(--ds-gray-800);
+  --bg-sidebar: var(--ds-gray-900);
+  --bg-hover: rgba(255, 255, 255, 0.08);
+  --bg-active: rgba(255, 255, 255, 0.14);
+  --bg-tip: var(--ds-gray-800);
+  --bg-mask: rgba(0, 0, 0, 0.5);
+
+  --label-primary: var(--ds-gray-50);
+  --label-secondary: var(--ds-gray-300);
+  --label-tertiary: var(--ds-gray-400);
+  --label-caption: var(--ds-gray-600);
+  --label-dimmed: var(--ds-gray-750);
+  --label-foreground: var(--ds-gray-1000);
+
+  --border-l1: rgba(255, 255, 255, 0.06);
+  --border-l2: rgba(255, 255, 255, 0.12);
+  --border-l3: rgba(255, 255, 255, 0.16);
+  --border-l4: rgba(255, 255, 255, 0.2);
+
+  --accent: var(--ds-blue-400);
+  --accent-hover: var(--ds-blue-500);
+  --accent-light: var(--ds-blue-800);
+  --accent-dimmed: var(--ds-gray-750);
+  --btn-primary-fill: var(--ds-gray-50);
+  --btn-primary-hover: var(--ds-gray-100);
+  --btn-primary-foreground: var(--ds-gray-1000);
+
+  --bubble-user: var(--ds-gray-850);
+  --code-bg: var(--ds-gray-900);
+  --toast-bg: var(--ds-gray-750);
+
+  --success: var(--ds-green-500);
+  --success-bg: var(--ds-gray-800);
+  --warning: var(--ds-amber-500);
+  --warning-label: var(--ds-amber-400);
+  --warning-bg: var(--ds-gray-800);
+  --error: var(--ds-red-400);
+  --error-bg: var(--ds-gray-800);
+
+  --sidebar-bg: var(--ds-gray-900);
+  --sidebar-hover: var(--ds-gray-850);
+  --sidebar-active: var(--ds-gray-750);
+  --sidebar-text: var(--ds-gray-50);
+  --sidebar-text-dim: var(--ds-gray-400);
+  --sidebar-border: var(--border-l3);
+
+  --main-bg: var(--ds-gray-950);
+  --msg-user-bg: var(--ds-gray-850);
+  --text-primary: var(--ds-gray-50);
+  --text-secondary: var(--ds-gray-300);
+  --text-tertiary: var(--ds-gray-400);
+
+  --border: var(--border-l2);
+  --input-bg: var(--ds-gray-850);
+  --input-border: var(--border-l4);
 }
 
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* dsh corner-shape：超椭圆渐进增强（支持的引擎介于圆弧与方圆之间），
+   不支持的引擎自动回退普通圆角 */
+@supports (corner-shape: superellipse(1.5)) {
+  :root {
+    --corner-shape: superellipse(1.5);
+  }
+
+  *,
+  *::before,
+  *::after {
+    corner-shape: var(--corner-shape);
+  }
 }
 
 html, body {
@@ -59,17 +232,26 @@ html, body {
 }
 
 ::selection {
-  background: rgba(16, 163, 127, 0.15);
+  background: rgba(65, 118, 230, 0.15);
 }
 
-/* ---- Scrollbar ---- */
-::-webkit-scrollbar { width: 6px; }
+/* ---- 滚动条（dsh 8px 细样式，轨道透明、拇指灰色） ---- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #c5c5d2; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #a0a0b0; }
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--ds-gray-200);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ds-gray-300);
+}
+.dark ::-webkit-scrollbar-thumb { background: var(--ds-gray-700); background-clip: content-box; }
+.dark ::-webkit-scrollbar-thumb:hover { background-color: var(--ds-gray-600); background-clip: content-box; }
 
-.sidebar-scroll::-webkit-scrollbar-thumb { background: #444654; }
-.sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #565869; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: var(--ds-gray-200); background-clip: content-box; }
+.dark .sidebar-scroll::-webkit-scrollbar-thumb { background: var(--ds-gray-750); background-clip: content-box; }
 
 /* ---- Transitions ---- */
 .fade-enter-active, .fade-leave-active { transition: opacity .2s; }

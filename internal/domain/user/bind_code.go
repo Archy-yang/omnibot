@@ -12,9 +12,9 @@ import "time"
 // 旧码自然作废(PRD 4.1)。code 字段建普通索引,渠道端按 code 查。
 type BindCode struct {
 	ID        int64     `gorm:"primaryKey;autoIncrement"`
-	UserID    int64     `gorm:"not null;uniqueIndex"`             // 生成该码的 web 账号;唯一
-	Code      string    `gorm:"size:6;not null;index"`            // 6 位数字 000000~999999
-	ExpiresAt time.Time `gorm:"not null"`                         // 过期时间(创建时 +5min)
+	UserID    int64     `gorm:"not null;uniqueIndex"`  // 生成该码的 web 账号;唯一
+	Code      string    `gorm:"size:6;not null;index"` // 6 位数字 000000~999999
+	ExpiresAt time.Time `gorm:"not null"`              // 过期时间(创建时 +5min)
 	CreatedAt time.Time `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"not null"`
 }

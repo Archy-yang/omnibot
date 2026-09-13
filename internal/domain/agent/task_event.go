@@ -14,10 +14,10 @@ type TaskEvent struct {
 	ID          int64          `json:"id" gorm:"primaryKey;autoIncrement"`
 	TaskID      int64          `json:"task_id" gorm:"index;not null"`
 	EventType   string         `json:"event_type" gorm:"size:50;index"` // task.submitted/accepted/running/input_required/completed/failed/cancelled
-	Sequence    int            `json:"sequence" gorm:"not null"`         // 任务内事件序号(幂等用)
+	Sequence    int            `json:"sequence" gorm:"not null"`        // 任务内事件序号(幂等用)
 	Payload     map[string]any `json:"payload,omitempty" gorm:"serializer:json"`
 	SourceAgent string         `json:"source_agent,omitempty" gorm:"size:50"` // 事件来源(main/sub agent)
-	OccurredAt  time.Time       `json:"occurred_at" gorm:"not null"`
+	OccurredAt  time.Time      `json:"occurred_at" gorm:"not null"`
 }
 
 // TableName 指定表名
@@ -27,13 +27,13 @@ func (TaskEvent) TableName() string {
 
 // 事件类型常量(对应状态机转换)。
 const (
-	EventTaskSubmitted      = "task.submitted"      // 任务创建(pending)
-	EventTaskRunning        = "task.running"        // 开始执行
-	EventTaskInputRequired  = "task.input_required" // 子 Agent 要输入
-	EventTaskCompleted      = "task.completed"      // 完成
-	EventTaskFailed         = "task.failed"          // 失败
-	EventTaskCancelled      = "task.cancelled"      // 取消
-	EventArtifactCreated    = "artifact.created"    // 产物产生(预留,#18 artifact 落库时)
+	EventTaskSubmitted     = "task.submitted"      // 任务创建(pending)
+	EventTaskRunning       = "task.running"        // 开始执行
+	EventTaskInputRequired = "task.input_required" // 子 Agent 要输入
+	EventTaskCompleted     = "task.completed"      // 完成
+	EventTaskFailed        = "task.failed"         // 失败
+	EventTaskCancelled     = "task.cancelled"      // 取消
+	EventArtifactCreated   = "artifact.created"    // 产物产生(预留,#18 artifact 落库时)
 )
 
 // NewTaskEvent 构造一个事件。

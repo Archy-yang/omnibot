@@ -38,7 +38,7 @@ const examplePrompts = [
 <template>
   <div
     ref="containerRef"
-    class="flex-1 overflow-y-auto bg-white"
+    class="flex-1 overflow-y-auto chat-scroll"
     @scroll="handleScroll"
   >
     <!-- Empty State -->
@@ -47,7 +47,7 @@ const examplePrompts = [
       class="h-full flex flex-col items-center justify-center px-4 py-12"
     >
       <!-- Logo -->
-      <div class="w-16 h-16 mb-6 rounded-full bg-[#19c37d] flex items-center justify-center">
+      <div class="w-16 h-16 mb-6 rounded-full bg-[var(--accent)] flex items-center justify-center">
         <svg viewBox="0 0 41 41" fill="white" width="36" height="36">
           <path d="M37.5324 16.8707c.9886-2.9594.6594-6.2024-.9027-8.8945-2.348-4.0728-7.0494-6.1685-11.62-5.1791C22.6324 1.0184 19.7864.0035 16.9043.0035c-4.7113 0-8.8888 3.0182-10.3375 7.4773C3.4754 8.4661 1.0148 10.7402.0093 13.7066c-2.354 4.0712-2.1146 9.2009.5901 12.9772-.9886 2.9595-.6594 6.2024.9027 8.8946 2.348 4.0727 7.0494 6.1684 11.62 5.179 2.3792 2.5777 5.226 3.5926 8.1081 3.5926 4.7113 0 8.8888-3.0181 10.3375-7.4773 2.9508-.9852 5.4114-3.2594 6.4169-6.2258 2.3539-4.0712 2.1145-9.2009-.5902-12.9772zM22.4068 38.6485a7.704 7.704 0 01-4.9486-1.7912l.2442-.1382 8.2147-4.7457a1.3464 1.3464 0 00.6772-1.1689v-11.5853l3.4729 2.0061a.1236.1236 0 01.0673.0962v9.5933a7.7397 7.7397 0 01-7.7277 7.7337z"/>
         </svg>
@@ -73,7 +73,7 @@ const examplePrompts = [
       v-else-if="isLoading && messages.length === 0"
       class="h-full flex items-center justify-center"
     >
-      <div class="w-6 h-6 border-2 border-[#e5e5e5] border-t-[#19c37d] rounded-full animate-spin"/>
+      <div class="w-6 h-6 border-2 border-[var(--border-l2)] border-t-[var(--accent)] rounded-full animate-spin"/>
     </div>
 
     <!-- Messages -->
@@ -99,16 +99,20 @@ const examplePrompts = [
 </template>
 
 <style scoped>
+.chat-scroll {
+  background: var(--bg-base);
+}
+
 .empty-title {
   font-size: 24px;
   font-weight: 600;
-  color: #1a1a2e;
+  color: var(--label-primary);
   margin-bottom: 8px;
 }
 
 .empty-subtitle {
   font-size: 16px;
-  color: #6e6e80;
+  color: var(--text-secondary);
   margin-bottom: 54px;
 }
 
@@ -152,29 +156,29 @@ const examplePrompts = [
 .prompt-card {
   text-align: left;
   padding: 16px 20px;
-  background: #ffffff;
-  border: 1px solid #e5e5e5;
+  background: var(--bg-base);
+  border: 0.5px solid var(--border-l2);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .prompt-card:hover {
-  background: #f7f7f8;
-  border-color: #d0d0d8;
+  background: var(--bg-hover);
+  border-color: var(--border-l3);
 }
 
 .prompt-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1a1a2e;
+  color: var(--label-primary);
   margin-bottom: 6px;
   line-height: 1.4;
 }
 
 .prompt-subtitle {
   font-size: 12px;
-  color: #8e8ea0;
+  color: var(--label-tertiary);
   line-height: 1.5;
 }
 
@@ -182,7 +186,7 @@ const examplePrompts = [
   display: inline-block;
   width: 6px;
   height: 6px;
-  background: #8e8ea0;
+  background: var(--label-caption);
   border-radius: 50%;
   animation: dot 1.4s infinite ease-in-out;
 }
