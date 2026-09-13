@@ -1,4 +1,4 @@
-package agent
+package tools
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	agentpkg "omnibot/internal/service/agent"
 	"os/exec"
 	"strings"
 	"time"
@@ -68,8 +69,8 @@ func (c FeishuCLIConfig) outputLimit() int {
 }
 
 // CreateFeishuTool 飞书 CLI 桥接工具:args 逐字传给 lark-cli,stdin 走 '-' 管道免转义。
-func CreateFeishuTool(cfg FeishuCLIConfig) Tool {
-	return Tool{
+func CreateFeishuTool(cfg FeishuCLIConfig) agentpkg.Tool {
+	return agentpkg.Tool{
 		Name: "feishu",
 		Description: "以用户身份操作飞书（执行 lark-cli）。支持文档读写编辑(docs)、多维表格(base)、消息(im)、" +
 			"云盘(drive)、知识库(wiki)、表格(sheets)、日历/任务/邮件等。用法：args 传子命令与参数数组，" +
@@ -78,7 +79,7 @@ func CreateFeishuTool(cfg FeishuCLIConfig) Tool {
 			"参数不确定时先调 [\"schema\",\"<service.resource.method>\"] 或 <domain> 子命令加 --help 查看。" +
 			"高危写操作(--yes)不可用；鉴权/配置类子命令不可用。",
 		DisplayLabel: "操作了飞书",
-		Capabilities: []string{CapBasic},
+		Capabilities: []string{agentpkg.CapBasic},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

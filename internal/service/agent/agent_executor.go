@@ -104,7 +104,7 @@ func (e *LocalAgentExecutor) Submit(ctx context.Context, userID int64, spec doma
 func (e *LocalAgentExecutor) Send(ctx context.Context, taskID int64, msg AgentMessage) error {
 	// 当前实现:把消息文本作为 note 补充(update_task)。
 	// 需 userID,从 ctx 取(executeTask 注入)。主 Agent 调用时 ctx 已含 userID。
-	userID := getUserIDFromContext(ctx)
+	userID := GetUserIDFromContext(ctx)
 	if userID == 0 {
 		return fmt.Errorf("local executor: no user id in context")
 	}
@@ -124,7 +124,7 @@ func (e *LocalAgentExecutor) Send(ctx context.Context, taskID int64, msg AgentMe
 }
 
 func (e *LocalAgentExecutor) Cancel(ctx context.Context, taskID int64) error {
-	userID := getUserIDFromContext(ctx)
+	userID := GetUserIDFromContext(ctx)
 	if userID == 0 {
 		return fmt.Errorf("local executor: no user id in context")
 	}

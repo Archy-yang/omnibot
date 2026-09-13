@@ -61,7 +61,7 @@ func TestBindingService_GenerateCode_Success(t *testing.T) {
 	code, expires, err := svc.GenerateCode(1)
 	require.NoError(t, err)
 	assert.Len(t, code, 6)
-	assert.True(t, expires.After(time.Now().Add(4 * time.Minute)))
+	assert.True(t, expires.After(time.Now().Add(4*time.Minute)))
 
 	// 码应能查回
 	bound, err := svc.IsChannelBound(1, "feishu")

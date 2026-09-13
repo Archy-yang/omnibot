@@ -13,12 +13,12 @@ const (
 // 以 DB 为单一事实源(config.yaml 仅作首次启动 seed);APIKey/密钥 AES 加密落库,
 // 接口只回显掩码。密钥不入日志(安全红线)。
 type MCPServer struct {
-	ID        int64     `gorm:"primaryKey;autoIncrement"`
-	Name      string    `gorm:"uniqueIndex;size:64;not null"` // 自定义名,技能来源展示用
-	BaseURL   string    `gorm:"size:512;not null"`            // Streamable HTTP 端点
-	APIKey    string    `gorm:"size:1024"`                    // bearer: AES 密文;oauth: 空
-	Enabled   bool      `gorm:"not null"`                     // false = 不连接、不同步、技能隐藏
-	AuthType  string    `gorm:"size:16;not null;default:bearer"`
+	ID       int64  `gorm:"primaryKey;autoIncrement"`
+	Name     string `gorm:"uniqueIndex;size:64;not null"` // 自定义名,技能来源展示用
+	BaseURL  string `gorm:"size:512;not null"`            // Streamable HTTP 端点
+	APIKey   string `gorm:"size:1024"`                    // bearer: AES 密文;oauth: 空
+	Enabled  bool   `gorm:"not null"`                     // false = 不连接、不同步、技能隐藏
+	AuthType string `gorm:"size:16;not null;default:bearer"`
 
 	// OAuth 2.1(M4):ClientID/Secret 可为空——空则尝试动态客户端注册(RFC 7591)。
 	OAuthClientID     string    `gorm:"size:256"`

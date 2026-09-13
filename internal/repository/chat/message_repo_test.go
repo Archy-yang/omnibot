@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"omnibot/internal/domain/conversation"
 	"omnibot/internal/db"
+	"omnibot/internal/domain/conversation"
 )
 
 func TestMessageRepository_Create(t *testing.T) {

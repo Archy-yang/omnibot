@@ -74,12 +74,12 @@ func Recovery() gin.HandlerFunc {
 		defer func() {
 			if err := recover(); err != nil {
 				// 记录错误日志
-			zap.L().Error("Panic recovered",
-				zap.Any("error", err),
-				zap.String("method", c.Request.Method),
-				zap.String("path", c.Request.URL.Path),
-				zap.String("client_ip", c.ClientIP()),
-			)
+				zap.L().Error("Panic recovered",
+					zap.Any("error", err),
+					zap.String("method", c.Request.Method),
+					zap.String("path", c.Request.URL.Path),
+					zap.String("client_ip", c.ClientIP()),
+				)
 
 				// 返回500错误
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{

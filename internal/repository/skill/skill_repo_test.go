@@ -25,11 +25,11 @@ func TestSkillRepo_UpsertBuiltin_InsertAndKeepEnabledOnUpdate(t *testing.T) {
 
 	// 首次 upsert:插入
 	def := skilldomain.BuiltinDef{
-		Name:        "calculator",
-		DisplayName: "计算器",
-		Description: "旧描述",
+		Name:         "calculator",
+		DisplayName:  "计算器",
+		Description:  "旧描述",
 		Capabilities: []string{"basic"},
-		Parameters: map[string]interface{}{"type": "object"},
+		Parameters:   map[string]interface{}{"type": "object"},
 	}
 	require.NoError(t, repo.UpsertBuiltin(def))
 

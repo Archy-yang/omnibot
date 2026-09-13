@@ -1,4 +1,4 @@
-package agent
+package tools
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	subdomain "omnibot/internal/domain/subscription"
+	agentpkg "omnibot/internal/service/agent"
 )
 
 // manage_subscriptions 工具测试(14-订阅源管理技术方案 §8 测试清单#9):
@@ -40,7 +41,7 @@ func (f *fakeSubManager) SetStatus(userID, id int64, status string) error {
 }
 
 func newSubToolTestCtx(userID int64) context.Context {
-	return context.WithValue(context.Background(), userIDContextKey, userID)
+	return context.WithValue(context.Background(), agentpkg.UserIDContextKey, userID)
 }
 
 func TestManageSubscriptionsTool_Add_SingleFeed(t *testing.T) {

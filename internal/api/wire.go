@@ -34,6 +34,7 @@ import (
 	subscriptionRepo "omnibot/internal/repository/subscription"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
+	agenttools "omnibot/internal/service/agent/tools"
 	chatService "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
 	skillService "omnibot/internal/service/skill"
@@ -204,16 +205,16 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	skillRepoImpl := skillRepo.NewSkillRepository(dbConn.GetGormDB())
 	mcpServerRepo := skillRepo.NewMCPServerRepository(dbConn.GetGormDB())
 	skillSvc := skillService.NewSkillService(skillRepoImpl)
-	skillSvc.RegisterBuiltin(agentpkg.CreateGetCurrentTimeTool)
-	skillSvc.RegisterBuiltin(agentpkg.CreateCalculatorTool)
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateSearchMemoriesTool(memorySvc) })
+	skillSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
+	skillSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
 	// 订阅源管理(14 §6.1):主 Agent 管理订阅;子 Agent list 取清单选源(能力打标 research/memory)
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agentpkg.CreateManageSubscriptionsTool(subscriptionSvc) })
-	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateRSSReaderTool)
-	skillSvc.RegisterBuiltinSubOnly(agentpkg.CreateWebReadTool)
+	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateManageSubscriptionsTool(subscriptionSvc) })
+	skillSvc.RegisterBuiltinSubOnly(agenttools.CreateRSSReaderTool)
+	skillSvc.RegisterBuiltinSubOnly(agenttools.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
 	skillSvc.RegisterBuiltin(func() agentpkg.Tool {
-		return agentpkg.CreateFeishuTool(agentpkg.FeishuCLIConfig{
+		return agenttools.CreateFeishuTool(agenttools.FeishuCLIConfig{
 			BinPath: cfg.Feishu.CLI.BinPath,
 			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
 		})

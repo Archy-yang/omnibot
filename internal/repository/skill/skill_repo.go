@@ -33,14 +33,14 @@ func NewSkillRepository(db *gorm.DB) SkillRepository {
 // UpsertBuiltin 定义字段的 upsert。Enabled 不在更新列里——用户启停状态优先于发版。
 func (r *skillRepository) UpsertBuiltin(def skilldomain.BuiltinDef) error {
 	row := &skilldomain.Skill{
-		Name:        def.Name,
-		DisplayName: def.DisplayName,
-		Description: def.Description,
-		Source:      skilldomain.SourceBuiltin,
+		Name:         def.Name,
+		DisplayName:  def.DisplayName,
+		Description:  def.Description,
+		Source:       skilldomain.SourceBuiltin,
 		Capabilities: skilldomain.JoinCapabilities(def.Capabilities),
 		ParamsSchema: skilldomain.MarshalSchema(def.Parameters),
 		MainVisible:  def.MainVisible,
-		Enabled:     true,
+		Enabled:      true,
 	}
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "name"}},

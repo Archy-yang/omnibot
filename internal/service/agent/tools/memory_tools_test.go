@@ -1,4 +1,4 @@
-package agent
+package tools
 
 import (
 	"context"
@@ -7,13 +7,14 @@ import (
 	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
+	agentpkg "omnibot/internal/service/agent"
 )
 
 // 记忆检索工具测试(12-记忆系统技术方案 §8/M7 §10.6):
 //   - search_memories 三段式:事项(M6.2) + 近期对话原文(M7) + 长期记忆;老子串路径兜底
 
 func toolCtx(userID int64) context.Context {
-	return context.WithValue(context.Background(), userIDContextKey, userID)
+	return context.WithValue(context.Background(), agentpkg.UserIDContextKey, userID)
 }
 
 // fakeSearchableMemory 实现语义检索接口的假记忆服务。

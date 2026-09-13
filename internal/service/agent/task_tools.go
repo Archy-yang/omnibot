@@ -28,7 +28,7 @@ func CreateQueryTaskTool(svc *SubAgentService) Tool {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			userID := getUserIDFromContext(ctx)
+			userID := GetUserIDFromContext(ctx)
 			if userID == 0 {
 				return "", fmt.Errorf("query_task: no user id in context")
 			}
@@ -83,7 +83,7 @@ func CreateCancelTaskTool(svc *SubAgentService) Tool {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			userID := getUserIDFromContext(ctx)
+			userID := GetUserIDFromContext(ctx)
 			if userID == 0 {
 				return "", fmt.Errorf("cancel_task: no user id in context")
 			}
@@ -128,7 +128,7 @@ func CreateUpdateTaskTool(svc *SubAgentService) Tool {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			userID := getUserIDFromContext(ctx)
+			userID := GetUserIDFromContext(ctx)
 			if userID == 0 {
 				return "", fmt.Errorf("update_task: no user id in context")
 			}

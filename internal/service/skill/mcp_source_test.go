@@ -84,13 +84,13 @@ func mockFactory(clients ...*mockMCPClient) MCPClientFactory {
 
 func mcpRow(name, server string, enabled bool) *skilldomain.Skill {
 	return &skilldomain.Skill{
-		Name:        name,
-		DisplayName: name,
-		Description: "remote " + name,
-		Source:      skilldomain.SourceMCP,
-		Enabled:     enabled,
-		MainVisible: true,
-		MCPServer:   server,
+		Name:         name,
+		DisplayName:  name,
+		Description:  "remote " + name,
+		Source:       skilldomain.SourceMCP,
+		Enabled:      enabled,
+		MainVisible:  true,
+		MCPServer:    server,
 		ParamsSchema: `{"type":"object","properties":{}}`,
 	}
 }

@@ -54,9 +54,9 @@ type doubaoResponse struct {
 }
 
 type doubaoChoice struct {
-	Index        int             `json:"index"`
-	Message      doubaoMessage   `json:"message"`
-	FinishReason string          `json:"finish_reason"`
+	Index        int           `json:"index"`
+	Message      doubaoMessage `json:"message"`
+	FinishReason string        `json:"finish_reason"`
 }
 
 type doubaoUsage struct {

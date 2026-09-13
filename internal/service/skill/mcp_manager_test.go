@@ -99,7 +99,7 @@ func newManagerService(serverRepo *mockMCPServerRepository, skillRepo *mockSkill
 }
 
 func enabledClient(tool string) *mockMCPClient {
-	return &mockMCPClient{tools: []mcp.Tool{textTool(tool, "远端工具 " + tool)}}
+	return &mockMCPClient{tools: []mcp.Tool{textTool(tool, "远端工具 "+tool)}}
 }
 
 // ---- AddServer ----

@@ -20,8 +20,8 @@ type UserChannelService interface {
 
 // UserChannelServiceImpl 用户通道服务实现
 type UserChannelServiceImpl struct {
-	userRepo      repo.UserRepository
-	channelRepo   repo.UserChannelRepository
+	userRepo    repo.UserRepository
+	channelRepo repo.UserChannelRepository
 }
 
 // Make sure UserChannelServiceImpl implements UserChannelService

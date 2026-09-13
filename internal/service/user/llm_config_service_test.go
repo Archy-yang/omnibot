@@ -489,11 +489,13 @@ func TestLLMConfigService_UpdateFullConfig_KeepExistingAPIKeyWhenEmpty(t *testin
 // ========== v1.11 smoke 边界:加密落库不留明文 ==========
 //
 // 等价于 v1.11-end-to-end-smoke.md Phase 2.2 的 SQL 验证项:
-//   SELECT length(api_key_encrypted) FROM user_llm_configs WHERE user_id = 1;
+//
+//	SELECT length(api_key_encrypted) FROM user_llm_configs WHERE user_id = 1;
+//
 // 一次性确认三件事:
-//   1. 入库的 api_key 列 length > 0(确实写入了)
-//   2. 入库列**不**包含明文 sk- 前缀及任何明文字符片段(确实加密了,不是明文落库)
-//   3. 用同一 master key 能解回明文(加密往返正确)
+//  1. 入库的 api_key 列 length > 0(确实写入了)
+//  2. 入库列**不**包含明文 sk- 前缀及任何明文字符片段(确实加密了,不是明文落库)
+//  3. 用同一 master key 能解回明文(加密往返正确)
 //
 // 用 SetAPIKey 入口,因为它是 Web 设置面板「保存」最短路径的最后一步。
 func TestLLMConfigService_SetAPIKey_PersistsEncryptedNotPlaintext(t *testing.T) {

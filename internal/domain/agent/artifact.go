@@ -15,10 +15,10 @@ import (
 type Artifact struct {
 	ID          int64           `json:"id" gorm:"primaryKey;autoIncrement"`
 	TaskID      int64           `json:"task_id" gorm:"index;not null"`
-	Name        string          `json:"name" gorm:"size:100"`             // 产物名,如 "research_report"
-	ContentType string          `json:"content_type" gorm:"size:100"`     // "text/markdown" / "application/json"
+	Name        string          `json:"name" gorm:"size:100"`                  // 产物名,如 "research_report"
+	ContentType string          `json:"content_type" gorm:"size:100"`          // "text/markdown" / "application/json"
 	SchemaName  string          `json:"schema_name,omitempty" gorm:"size:100"` // 如 "agent.research-report.v1"
-	Content     json.RawMessage `json:"content" gorm:"type:text"`         // 结构化内容(JSON)
+	Content     json.RawMessage `json:"content" gorm:"type:text"`              // 结构化内容(JSON)
 	CreatedAt   time.Time       `json:"created_at" gorm:"not null"`
 }
 

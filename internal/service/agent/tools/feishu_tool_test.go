@@ -1,7 +1,8 @@
-package agent
+package tools
 
 import (
 	"context"
+	agentpkg "omnibot/internal/service/agent"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func TestFeishuTool_Definition(t *testing.T) {
 	require.Equal(t, "feishu", tool.Name)
 	require.NotEmpty(t, tool.Description)
 	require.NotEmpty(t, tool.DisplayLabel)
-	require.Contains(t, tool.Capabilities, CapBasic)
+	require.Contains(t, tool.Capabilities, agentpkg.CapBasic)
 	// 参数 schema:args 必填数组,stdin 可选
 	props, ok := tool.Parameters["properties"].(map[string]interface{})
 	require.True(t, ok)
