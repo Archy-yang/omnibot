@@ -136,7 +136,7 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 	}
 
 	// 构造汇报上下文(汇报锚定,§3.4 修订):
-	// system(回执+汇报指令,含验收自查) + 最近对话历史(锚定"用户当初为什么派这个活") + 虚拟触发 user。
+	// system(回执+汇报指令) + 最近对话历史(锚定"用户当初为什么派这个活") + 虚拟触发 user。
 	// 历史经 BuildContextMessages(含长期记忆注入),原始问题通常在窗口内,汇报口吻也能延续对话。
 	instruction := agentpkg.BuildReportInstruction([]*domainagent.AgentTask{task}, true)
 	reportConversation := []map[string]interface{}{

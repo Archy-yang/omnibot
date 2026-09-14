@@ -125,15 +125,17 @@ func TestBuildTaskReceipt_MinimalSpecOmitsContract(t *testing.T) {
 	assert.NotContains(t, receipt, "完成标准:")
 }
 
-// TestBuildReportInstruction_SelfCheck 汇报指令要求对照完成标准自查,如实汇报不粉饰。
-func TestBuildReportInstruction_SelfCheck(t *testing.T) {
+// TestBuildReportInstruction_ReportResultDirectly 汇报指令要求直接汇报结果本身,
+// 不展示对照完成标准的自查过程/达标表格(task#19 汇报开头出现"✅ 完成标准自查"表,
+// 内部验收脚手架漏进用户措辞);未完成/失败仍要如实说明,不粉饰。
+func TestBuildReportInstruction_ReportResultDirectly(t *testing.T) {
 	spec := domainagent.NewTaskSpec("查天气")
 	spec.CompletionCriteria = []string{"输出完整可读结论"}
 	task := domainagent.NewAgentTask(42, spec, "web", "")
 	task.Status = domainagent.TaskStatusCompleted
 
 	instruction := BuildReportInstruction([]*domainagent.AgentTask{task}, true)
-	for _, want := range []string{"完成标准", "如实", "未达标"} {
-		assert.Contains(t, instruction, want, "汇报指令缺 %q:\n%s", want, instruction)
-	}
+	assert.Contains(t, instruction, "如实", "未完成仍须如实")
+	assert.NotContains(t, instruction, "自查", "汇报指令不得引导展示自查过程")
+	assert.NotContains(t, instruction, "对照", "汇报指令不得引导对照完成标准")
 }
