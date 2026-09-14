@@ -51,6 +51,23 @@ func TestTurnSink_NotifyOnAssistantSave(t *testing.T) {
 	}
 }
 
+// TestTurnSink_MultipleSinksAllNotified 注入多个 TurnSink(沉淀管线+消息嵌入器,M7 起)
+// 必须全部收到通知。回归背景:turnSink 曾是单字段,后注入的 msgEmbedder 覆盖了
+// digestPipeline,导致 M7 上线(2026-09-11)后沉淀管线完全静默、记忆停止总结。
+func TestTurnSink_MultipleSinksAllNotified(t *testing.T) {
+	sinkA := &fakeTurnSink{}
+	sinkB := &fakeTurnSink{}
+	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))
+	svc := NewMessageService(msgRepo, sinkA, sinkB)
+
+	if err := svc.SaveAssistantMessage(context.Background(), 42, "回复"); err != nil {
+		t.Fatalf("SaveAssistantMessage: %v", err)
+	}
+	if len(sinkA.called) != 1 || len(sinkB.called) != 1 {
+		t.Fatalf("两个 sink 都应收到通知, A=%v B=%v", sinkA.called, sinkB.called)
+	}
+}
+
 // TestTurnSink_NilSinkNoPanic 未注入 sink(管线禁用) → 无副作用。
 func TestTurnSink_NilSinkNoPanic(t *testing.T) {
 	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))

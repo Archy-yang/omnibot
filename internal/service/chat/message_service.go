@@ -73,7 +73,9 @@ type messageService struct {
 	msgRepo   chatrepo.MessageRepository
 	memorySvc MemoryInjectionProvider
 	stepRepo  chatrepo.AgentStepRepository
-	turnSink  TurnSink
+	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
+	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
+	turnSinks []TurnSink
 }
 
 // NewMessageService 创建消息服务
@@ -86,7 +88,7 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 		case chatrepo.AgentStepRepository:
 			service.stepRepo = s
 		case TurnSink:
-			service.turnSink = s
+			service.turnSinks = append(service.turnSinks, s)
 		}
 	}
 	return service
@@ -316,10 +318,10 @@ func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID i
 	return nil
 }
 
-// notifyTurn 轮次收尾通知沉淀管线(nil 安全)。
+// notifyTurn 轮次收尾广播给所有观察者(nil 安全;各 sink 自行异步、不阻塞)。
 func (s *messageService) notifyTurn(userID int64) {
-	if s.turnSink != nil {
-		s.turnSink.NotifyTurn(userID)
+	for _, sink := range s.turnSinks {
+		sink.NotifyTurn(userID)
 	}
 }
 
