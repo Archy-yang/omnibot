@@ -24,6 +24,9 @@ const props = defineProps<{
   title: string;
   /** 面板宽度：无导航默认 560px；设置类导航布局传 800px */
   width?: string;
+  /** 面板固定高度：内容撑高会让面板在加载/切视图时高度跳变（视觉闪烁），
+   *  内容两级视图的弹窗（如任务中心）传固定高度锁住外框 */
+  height?: string;
   /** 分类导航项：提供即启用左侧导航布局 */
   navItems?: readonly { key: string; label: string }[];
   /** 当前选中分类（配合 navItems 使用） */
@@ -69,7 +72,7 @@ onBeforeUnmount(() => {
         <div
           class="dialog-panel"
           :class="{ 'has-nav': navItems && navItems.length > 0 }"
-          :style="{ width: width ?? '560px' }"
+          :style="{ width: width ?? '560px', height: height }"
           role="dialog"
           :aria-label="title"
         >

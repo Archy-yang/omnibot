@@ -51,6 +51,9 @@ const loadList = async () => {
   }
 };
 
+// 有旧数据时原地静默刷新(不闪加载态);只有首开无数据才显示加载中
+const hasListData = computed(() => tasks.value.length > 0);
+
 watch(
   () => props.visible,
   (v) => {
@@ -176,17 +179,17 @@ const stepStatusClass = (s: string) =>
 </script>
 
 <template>
-  <DialogShell :visible="visible" title="任务" width="760px" @close="emit('close')">
+  <DialogShell :visible="visible" title="任务" width="760px" height="min(640px, calc(100vh - 48px))" @close="emit('close')">
     <!-- ===== 列表页 ===== -->
     <template v-if="view === 'list'">
-      <div v-if="isLoadingList" class="task-loading">加载中…</div>
+      <div v-if="isLoadingList && !hasListData" class="task-loading">加载中…</div>
 
       <div v-else-if="tasks.length === 0" class="task-empty">
         <p class="task-empty-title">还没有派过任务</p>
         <p class="task-empty-hint">在对话里让我「查查某领域的最新动态」，我就会派后台任务去办；完成后自动汇报，这里能看到每次的执行流水。</p>
       </div>
 
-      <div v-else class="task-list">
+      <div v-else class="task-list" :class="{ 'is-refreshing': isLoadingList }">
         <button
           v-for="t in tasks"
           :key="t.id"
@@ -194,20 +197,18 @@ const stepStatusClass = (s: string) =>
           class="task-row"
           @click="openDetail(t.id)"
         >
-          <span class="task-status" :class="`st-${t.status}`">
+          <span class="task-dot" :class="`dot-${t.status}`">
             <svg v-if="isActive(t.status)" class="task-spin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
               <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
             </svg>
-            {{ statusLabel(t.status) }}
           </span>
           <span class="task-row-main">
             <span class="task-row-name">{{ displayName(t) }}</span>
             <span class="task-row-goal">{{ t.goal }}</span>
           </span>
-          <span class="task-row-meta">
-            <span class="task-row-id">#{{ t.id }}</span>
-            <span class="task-row-time">{{ t.finished_at || t.created_at }}</span>
-          </span>
+          <span class="task-row-status" :class="`stx-${t.status}`">{{ statusLabel(t.status) }}</span>
+          <span class="task-row-time">{{ t.finished_at || t.created_at }}</span>
+          <span class="task-row-id">#{{ t.id }}</span>
           <svg class="task-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="m9 18 6-6-6-6"/>
           </svg>
@@ -365,30 +366,81 @@ const stepStatusClass = (s: string) =>
   to { transform: rotate(360deg); }
 }
 
-/* ===== 列表 ===== */
+/* ===== 列表:dsh 式清单——无框盒,发丝线分隔,状态圆点+轻文字 ===== */
 .task-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  transition: opacity 150ms ease;
+}
+
+.task-list.is-refreshing {
+  opacity: 0.6; /* 原地刷新:数据未到不闪加载态,整列轻微降不透明度示意 */
 }
 
 .task-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  padding: 10px 12px;
-  border: 0.5px solid var(--border-l2);
-  border-radius: 12px;
+  padding: 12px 10px;
+  border: none;
+  border-bottom: 0.5px solid var(--border-l1);
+  border-radius: 10px;
   background: transparent;
   text-align: left;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
+  transition: background 150ms ease;
+}
+
+.task-row:last-child {
+  border-bottom: none;
 }
 
 .task-row:hover {
   background: var(--bg-hover);
+}
+
+/* 状态圆点:执行中=主题蓝转圈,完成=绿,失败=红,取消/排队=灰 */
+.task-dot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.task-dot::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--label-caption);
+}
+
+.task-dot.dot-completed::before {
+  background: #10a34a;
+}
+
+.task-dot.dot-failed::before {
+  background: var(--error);
+}
+
+.task-dot.dot-running::before,
+.task-dot.dot-pending::before,
+.task-dot.dot-input_required::before {
+  content: none; /* 运行态不画圆点,位置让给旋转图标 */
+}
+
+.task-dot.dot-running,
+.task-dot.dot-pending,
+.task-dot.dot-input_required {
+  color: var(--accent);
+}
+
+.task-dot .task-spin {
+  display: block;
 }
 
 .task-row-main {
@@ -416,28 +468,49 @@ const stepStatusClass = (s: string) =>
   white-space: nowrap;
 }
 
-.task-row-meta {
+.task-row-status {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-}
-
-.task-row-id {
   font-size: 12px;
   color: var(--label-tertiary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.task-row-status.stx-running,
+.task-row-status.stx-pending,
+.task-row-status.stx-input_required {
+  color: var(--accent);
+}
+
+.task-row-status.stx-completed {
+  color: #0a7d33;
+}
+
+.task-row-status.stx-failed {
+  color: var(--error);
 }
 
 .task-row-time {
-  font-size: 11px;
+  flex: none;
+  font-size: 12px;
   color: var(--label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-row-id {
+  flex: none;
+  font-size: 12px;
+  color: var(--label-caption);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .task-row-chevron {
   flex: none;
   color: var(--label-caption);
+  opacity: 0;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.task-row:hover .task-row-chevron {
+  opacity: 1;
 }
 
 /* ===== 详情 ===== */
