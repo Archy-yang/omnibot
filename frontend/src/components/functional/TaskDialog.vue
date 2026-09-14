@@ -254,35 +254,40 @@ const stepStatusClass = (s: string) =>
           {{ isActive(detail.status) ? '还没有执行记录，等运行起来再来看。' : '没有执行记录。' }}
         </div>
         <div v-else class="steps">
-          <div v-for="s in steps" :key="s.seq" class="step" :class="{ 'is-open': expandedSeqs.has(s.seq) }">
-            <button type="button" class="step-header" :aria-expanded="expandedSeqs.has(s.seq) ? 'true' : 'false'" @click="toggleStep(s.seq)">
-              <span class="step-badge" :class="s.kind === 'llm_call' ? 'badge-llm' : 'badge-tool'">
-                {{ s.kind === 'llm_call' ? '模型' : '工具' }}
-              </span>
-              <span class="step-name">{{ s.kind === 'llm_call' ? (s.model || 'LLM') : s.tool }}</span>
-              <span v-if="s.kind === 'llm_call'" class="step-preview">第 {{ s.seq + 1 }} 轮推理</span>
-              <span v-else class="step-preview">{{ s.request }}</span>
-              <span class="step-status" :class="stepStatusClass(s.status)">
-                {{ s.status === 'success' ? '成功' : s.status === 'not_found' ? '不存在' : '失败' }}
-              </span>
-              <span class="step-duration">{{ s.duration_ms }}ms</span>
-              <svg class="step-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 9 6 6 6-6"/>
-              </svg>
-            </button>
-            <div v-show="expandedSeqs.has(s.seq)" class="step-body">
-              <template v-if="s.kind === 'tool_call'">
-                <div class="step-section-label">参数</div>
-                <pre class="step-raw">{{ prettyJSON(s.request) }}</pre>
-                <div class="step-section-label">结果</div>
-                <pre class="step-raw step-result">{{ s.response }}</pre>
-              </template>
-              <template v-else>
-                <div class="step-section-label">请求（截断预览）</div>
-                <pre class="step-raw">{{ llmRequestPreview(prettyJSON(s.request)) }}</pre>
-                <div class="step-section-label">响应</div>
-                <pre class="step-raw step-result">{{ prettyJSON(s.response) }}</pre>
-              </template>
+          <div
+            v-for="s in steps"
+            :key="s.seq"
+            class="step"
+            :class="{ 'is-open': expandedSeqs.has(s.seq), 'is-err': s.status !== 'success' }"
+          >
+            <span class="step-node" :class="s.kind === 'llm_call' ? 'node-llm' : 'node-tool'"></span>
+            <div class="step-main">
+              <button type="button" class="step-header" :aria-expanded="expandedSeqs.has(s.seq) ? 'true' : 'false'" @click="toggleStep(s.seq)">
+                <span class="step-name">{{ s.kind === 'llm_call' ? (s.model || 'LLM') : s.tool }}</span>
+                <span v-if="s.kind === 'llm_call'" class="step-kind-hint">推理</span>
+                <span v-else class="step-preview">{{ s.request }}</span>
+                <span class="step-status" :class="stepStatusClass(s.status)">
+                  {{ s.status === 'success' ? '成功' : s.status === 'not_found' ? '不存在' : '失败' }}
+                </span>
+                <span class="step-duration">{{ s.duration_ms }}ms</span>
+                <svg class="step-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </button>
+              <div v-show="expandedSeqs.has(s.seq)" class="step-body">
+                <template v-if="s.kind === 'tool_call'">
+                  <div class="step-section-label">参数</div>
+                  <pre class="step-raw">{{ prettyJSON(s.request) }}</pre>
+                  <div class="step-section-label">结果</div>
+                  <pre class="step-raw step-result">{{ s.response }}</pre>
+                </template>
+                <template v-else>
+                  <div class="step-section-label">请求（截断预览）</div>
+                  <pre class="step-raw">{{ llmRequestPreview(prettyJSON(s.request)) }}</pre>
+                  <div class="step-section-label">响应</div>
+                  <pre class="step-raw step-result">{{ prettyJSON(s.response) }}</pre>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -583,21 +588,63 @@ const stepStatusClass = (s: string) =>
   padding: 8px 0 4px 0;
 }
 
+/* ===== 执行流水:时间线——竖向发丝线 + 状态节点,无框盒 ===== */
 .steps {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
   margin-bottom: 16px;
 }
 
+/* 每步:左侧 20px 轨道列,节点绝对定位,连线由轨道背景画出 */
 .step {
-  border: 0.5px solid var(--border-l2);
-  border-radius: 10px;
-  overflow: hidden;
+  position: relative;
+  padding-left: 22px;
 }
 
-.step.is-open {
-  background: var(--bg-tip);
+/* 竖向连线:从本步节点下方延伸到下一步节点(最后一步不留尾巴) */
+.step::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 22px;
+  bottom: -2px;
+  width: 0.5px;
+  background: var(--border-l2);
+}
+
+.step:last-child::before {
+  content: none;
+}
+
+.step-node {
+  position: absolute;
+  left: 0;
+  top: 13px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--bg-layer-2);
+  border: 2px solid var(--label-caption);
+}
+
+.step-node.node-tool {
+  border-color: var(--accent);
+}
+
+.step.is-err .step-node {
+  border-color: var(--error);
+}
+
+.step-main {
+  min-width: 0;
+  border-radius: 10px;
+  transition: background 150ms ease;
+}
+
+.step-main:hover {
+  background: var(--bg-hover);
 }
 
 .step-header {
@@ -605,42 +652,30 @@ const stepStatusClass = (s: string) =>
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 10px 9px 6px;
   border: none;
   background: transparent;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 150ms ease;
-}
-
-.step-header:hover {
-  background: var(--bg-hover);
-}
-
-.step-badge {
-  flex: none;
-  padding: 1px 6px;
-  font-size: 11px;
-  border-radius: 4px;
-}
-
-.badge-tool {
-  color: var(--accent);
-  background: rgba(65, 118, 230, 0.1);
-}
-
-.badge-llm {
-  color: var(--label-tertiary);
-  background: var(--bg-active);
 }
 
 .step-name {
   flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 500;
   color: var(--label-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.step-kind-hint {
+  flex: none;
+  font-size: 12px;
+  color: var(--label-caption);
 }
 
 .step-preview {
@@ -655,7 +690,7 @@ const stepStatusClass = (s: string) =>
 
 .step-status {
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--label-tertiary);
 }
 
@@ -672,12 +707,19 @@ const stepStatusClass = (s: string) =>
   font-size: 11px;
   color: var(--label-caption);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .step-chevron {
   flex: none;
   color: var(--label-caption);
-  transition: transform 0.15s ease;
+  opacity: 0;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.step-header:hover .step-chevron,
+.step.is-open .step-chevron {
+  opacity: 1;
 }
 
 .step.is-open .step-chevron {
@@ -685,8 +727,7 @@ const stepStatusClass = (s: string) =>
 }
 
 .step-body {
-  padding: 4px 12px 10px 12px;
-  border-top: 1px solid var(--border-l1);
+  padding: 2px 10px 10px 6px;
 }
 
 .step-section-label {
