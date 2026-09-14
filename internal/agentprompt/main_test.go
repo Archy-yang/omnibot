@@ -82,3 +82,14 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 	require.NotEqual(t, -1, second)
 	assert.Less(t, first, second, "铁律段必须位于「什么时候派」之前")
 }
+
+// TestMainDelegationRulesPrompt_ConciseHumanReply 派活后的回复必须是一句口语人话
+// (task#20 反馈:模型把给子 Agent 的合同复述成三大节标题排版文,机械化没人味)。
+func TestMainDelegationRulesPrompt_ConciseHumanReply(t *testing.T) {
+	for _, want := range []string{
+		"一句话",
+		"不要复述",
+	} {
+		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少简洁回复关键句 %q", want)
+	}
+}
