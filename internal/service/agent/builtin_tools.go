@@ -85,7 +85,8 @@ func CreateDelegateTool(svc *SubAgentService) Tool {
 		DisplayLabel: "安排了子任务",
 		Description: "把耗时任务委派给后台执行器异步执行(不阻塞当前对话,通用不绑角色)。" +
 			"委派 = goal(必) + deliverables(交付物) + completion_criteria(完成标准),可选 background/persona_hint。" +
-			"派活后立即返回,执行器后台跑,完成后向用户汇报。适合需要多步检索/研究/汇总的耗时任务。",
+			"派活后立即返回,执行器后台跑,完成后向用户汇报。适合需要多步检索/研究/汇总的耗时任务。" +
+			"注意:本工具是创建后台任务的唯一方式,返回的 task_id 是唯一合法的任务编号——向用户提及任务编号时必须原样引用本工具的返回值。",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

@@ -1,6 +1,7 @@
 package agentprompt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,4 +60,25 @@ func sectionHas(sections []PromptSection, scope ScopeKey, name string) bool {
 		}
 	}
 	return false
+}
+
+// TestMainDelegationRulesPrompt_AntiHallucination 反幻觉铁律守护(2026-09-14 事故):
+// 未调 delegate 却说"已安排(任务 #N)"的编造编号事故——铁律关键句不得在后续编辑中丢失。
+func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
+	for _, want := range []string{
+		"铁律",
+		"只有当你本轮真实调用了 delegate 工具",
+		"严禁编造",
+		"推算",
+		"沿用历史编号",
+		"当场穿帮",
+	} {
+		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少反幻觉关键句 %q", want)
+	}
+	// 铁律必须是规则体的第一段(优先级最高,不允许被其他段落稀释)
+	first := strings.Index(MainDelegationRulesPrompt, "【铁律")
+	second := strings.Index(MainDelegationRulesPrompt, "【什么时候派】")
+	require.NotEqual(t, -1, first)
+	require.NotEqual(t, -1, second)
+	assert.Less(t, first, second, "铁律段必须位于「什么时候派」之前")
 }
