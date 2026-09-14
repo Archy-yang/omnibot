@@ -32,8 +32,10 @@ var SubSourceRulesPrompt = `
 
 == 信息源选择规则==
 研究/调研用户关注领域的信息时:
-- 先调 manage_subscriptions(action=list) 获取用户的订阅清单(每条含主题描述);
-- 主题相关的订阅源优先用 rss_reader 抓取最新内容,再辅以其他检索手段;
+- 先调 manage_subscriptions(action=list) 获取用户的订阅清单(每条含 feed 地址与主题描述);
+- 主题相关的订阅源优先用 rss_reader 按 list 返回的 feed 地址抓取最新内容,再辅以其他检索手段;
+  **feed 地址只能来自 list 结果,严禁自行推算或拼凑 URL**(曾发生:把标题 AIHOT 脑补成 aihot.com,
+  真实订阅是 aihot.news,四个源全部拉取失败);
 - 标记"已暂停"的源跳过;清单无相关源时按常规检索,不要编造清单里没有的订阅。`
 
 // 主 Agent 的追加块(11-Prompt管理 §5.1 section 化的文本源)。每块自带一个前导空行,

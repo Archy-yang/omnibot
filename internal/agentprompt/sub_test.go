@@ -27,6 +27,7 @@ func TestSubAgentPromptSections_NoRole(t *testing.T) {
 	assert.NotContains(t, s[1].Text, "研究员", "通用执行器 persona 不得含角色卡文案")
 	assert.Contains(t, s[1].Text, "后台任务执行器")
 	assert.Contains(t, s[2].Text, "manage_subscriptions", "信息源选择规则必须引导先看订阅清单")
+	assert.Contains(t, s[2].Text, "严禁自行推算", "必须禁推算 feed URL(task#18:标题 AIHOT 被脑补成 aihot.com,全部拉取失败)")
 }
 
 // TestSubAgentPromptSections_PersonaHint 有 persona_hint:注入【本次任务角色】;空白 hint 不注册该段。

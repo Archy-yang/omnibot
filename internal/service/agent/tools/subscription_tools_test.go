@@ -93,8 +93,8 @@ func TestManageSubscriptionsTool_List_EmptyAndItems(t *testing.T) {
 
 	fake := &fakeSubManager{listResult: map[int64][]*subdomain.Subscription{
 		42: {
-			{ID: 1, Title: "A", TopicDesc: "科技", Status: subdomain.StatusActive},
-			{ID: 2, Title: "B", TopicDesc: "设计", Status: subdomain.StatusPaused},
+			{ID: 1, Title: "A", FeedURL: "https://a.test/feed", TopicDesc: "科技", Status: subdomain.StatusActive},
+			{ID: 2, Title: "B", FeedURL: "https://b.test/rss", TopicDesc: "设计", Status: subdomain.StatusPaused},
 		},
 	}}
 	tool = CreateManageSubscriptionsTool(fake)
@@ -103,7 +103,9 @@ func TestManageSubscriptionsTool_List_EmptyAndItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !containsAll(out, "共 2 个订阅源", "[#1] A", "科技", "[#2] B", "已暂停") {
+	// feed 地址必须在输出里:子 Agent 选源后要靠它调 rss_reader,
+	// 缺地址会逼模型自行推算 URL(task#18:标题 AIHOT 被脑补成 aihot.com,全部 DNS 失败)
+	if !containsAll(out, "共 2 个订阅源", "[#1] A", "https://a.test/feed", "科技", "[#2] B", "https://b.test/rss", "已暂停") {
 		t.Fatalf("list output wrong: %s", out)
 	}
 }

@@ -23,7 +23,9 @@ type Skill struct {
 	Enabled      bool   `gorm:"not null"`  // 插入时显式赋值:builtin=true,mcp=false(勿加 default 标签——GORM 会省略零值,默认值会覆盖 false)
 	// MainVisible 是否对主 Agent 可见。false = 子 Agent 专属技能(如抓取类 rss/web_read,
 	// 方向 B:主 Agent 是管家,联网抓取必须 delegate 派活)。false 技能仍进子 Agent 全局池。
-	MainVisible bool      `gorm:"not null;default:true"`
+	// 勿加 default 标签(同 Enabled):GORM 对零值+default 字段 INSERT 时省略该列,
+	// ON CONFLICT 的 excluded 会取 DB 默认值 true,false 永远写不进去。
+	MainVisible bool      `gorm:"not null"`
 	MCPServer   string    `gorm:"size:64;index"` // source=mcp 时所属 server 名(config.yaml 内的 name)
 	CreatedAt   time.Time `gorm:"not null"`
 	UpdatedAt   time.Time `gorm:"not null"`

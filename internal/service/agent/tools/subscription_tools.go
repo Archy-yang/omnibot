@@ -93,7 +93,9 @@ func CreateManageSubscriptionsTool(svc SubscriptionManager) agentpkg.Tool {
 					if s.Status == subdomain.StatusPaused {
 						status = "(已暂停,选源时跳过)"
 					}
-					b.WriteString(fmt.Sprintf("- [#%d] %s — %s %s\n", s.ID, displayTitle(s.Title), orEmpty(s.TopicDesc), status))
+					// feed 地址必须给出:子 Agent 选源后要靠它调 rss_reader,
+					// 缺地址会逼模型自行推算 URL(task#18 事故:标题 AIHOT 被脑补成 aihot.com)
+					b.WriteString(fmt.Sprintf("- [#%d] %s — %s — %s %s\n", s.ID, displayTitle(s.Title), s.FeedURL, orEmpty(s.TopicDesc), status))
 				}
 				return b.String(), nil
 
