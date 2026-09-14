@@ -19,6 +19,7 @@ export interface ReportStreamCallbacks {
   onToolResult?: (event: { tool: string; result: string }) => void;
   onFinal?: (content: string) => void;
   onThought?: (content: string) => void;
+  onReasoning?: (chunk: string) => void;
   onDone: (fullContent: string) => void;
   onError: (error: Error) => void;
 }
@@ -48,7 +49,7 @@ export const agentTaskService = {
    * 前端把汇报作为流式助手消息实时渲染。
    */
   async reportTask(taskId: number, callbacks: ReportStreamCallbacks): Promise<void> {
-    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onDone, onError } = callbacks;
+    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onReasoning, onDone, onError } = callbacks;
 
     try {
       const token = localStorage.getItem('token');
@@ -128,6 +129,14 @@ export const agentTaskService = {
             }
             if (currentEvent === 'thought') {
               onThought?.(parsed.content);
+              currentEvent = 'message';
+              continue;
+            }
+            if (currentEvent === 'reasoning') {
+              // 深度思考增量(M5/C):与 chat.sendMessageStream 同款。必须落在下方
+              // content 兜底之前,否则思考内容会被当正文 token 拼进主气泡
+              // (曾致汇报消息的 thinking 渲染在正文,刷新后才恢复正确)。
+              onReasoning?.(parsed.content);
               currentEvent = 'message';
               continue;
             }

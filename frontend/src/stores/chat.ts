@@ -236,6 +236,17 @@ export const useChatStore = defineStore(
               if (seg.type === 'text') { seg.role = 'thought'; break; }
             }
           },
+          onReasoning: (chunk: string) => {
+            // 深度思考增量(M5/C):与 sendMessage 同款——累积进 reasoning 段,
+            // 渲染在思考块内;后续 token 到达时 onChunk 的封口逻辑自然新建 final 段。
+            const segs = reportMessage.segments!;
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'reasoning') {
+              last.content += chunk;
+            } else {
+              segs.push({ type: 'reasoning', content: chunk });
+            }
+          },
           onDone: () => {
             const segs = reportMessage.segments;
             if (segs && segs.length > 0) {
