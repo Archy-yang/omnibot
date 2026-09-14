@@ -93,6 +93,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	agentTaskGroup.Use(middleware.AuthRequired(d.jwtSvc))
 	{
 		agentTaskGroup.GET("/tasks", d.agentTaskHandler.HandleListTasks)
+		agentTaskGroup.GET("/tasks/:id", d.agentTaskHandler.HandleGetTaskDetail)
 		agentTaskGroup.GET("/tasks/:id/steps", d.agentTaskHandler.HandleListTaskSteps)
 		agentTaskGroup.POST("/tasks/:id/report", d.agentTaskHandler.HandleReportTask)
 	}

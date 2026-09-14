@@ -17,6 +17,7 @@ type AgentTask struct {
 	ID           int64     `gorm:"primaryKey;autoIncrement"`
 	UserID       int64     `gorm:"index;not null"`         // 归属用户(任务按用户隔离)
 	SubAgentType string    `gorm:"size:50;not null"`       // 溯源标签(可空,来自 taskSpec.Type;去角色后非角色,不 gate 机制)
+	Name         string    `gorm:"size:64"`                // 任务短名(可空,来自 taskSpec.Name;人读展示用,空则展示层回落 goal 摘要)
 	Goal         string    `gorm:"type:text;not null"`     // 委托目标(冗余存,task_spec.Goal 的快捷访问;兼容老代码)
 	Status       string    `gorm:"size:20;not null;index"` // pending / running / completed / failed / cancelled
 	Artifact     *string   `gorm:"type:text"`              // 子 Agent 最终产出,completed 时填
@@ -80,6 +81,7 @@ func NewAgentTask(userID int64, taskSpec TaskSpec, source, notifyTarget string) 
 	return &AgentTask{
 		UserID:       userID,
 		SubAgentType: taskSpec.Type, // 溯源标签(非角色,不 gate 机制)
+		Name:         taskSpec.Name, // 任务短名(人读展示)
 		Goal:         taskSpec.Goal, // 冗余快捷访问
 		TaskSpec:     taskSpec,
 		Status:       TaskStatusPending,

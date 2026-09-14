@@ -95,6 +95,23 @@ func TestCreateDelegateTool_PassesPersonaHintAndType(t *testing.T) {
 	assert.Equal(t, "research", task.SubAgentType)
 }
 
+// TestCreateDelegateTool_PassesName name 参数落 task.Name/TaskSpec.Name(人读任务短名,#id 仍是引用锚点)。
+func TestCreateDelegateTool_PassesName(t *testing.T) {
+	tool, svc := setupDelegateToolTest(t)
+	ctx := withUserID(context.Background(), 7)
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"goal": "调研三个部署方案并给出推荐",
+		"name": "查部署方案",
+	})
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
+	task, err := svc.taskRepo.GetByID(int64(parsed["task_id"].(float64)))
+	require.NoError(t, err)
+	assert.Equal(t, "查部署方案", task.Name)
+	assert.Equal(t, "查部署方案", task.TaskSpec.Name)
+}
+
 func TestCreateDelegateTool_ExecuteNoUserID(t *testing.T) {
 	tool, _ := setupDelegateToolTest(t)
 	_, err := tool.Execute(context.Background(), map[string]interface{}{

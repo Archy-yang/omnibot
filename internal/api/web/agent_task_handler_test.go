@@ -80,6 +80,108 @@ func TestHandleListTasks_CompletedUnreported(t *testing.T) {
 	assert.Equal(t, float64(t1.ID), resp.Data.Tasks[0]["id"])
 }
 
+// TestHandleListTasks_AllTasks 无 status 参数:返回该用户全部任务(倒序,含各状态/已汇报),
+// 任务中心列表用;name 字段随行返回(无名字时为空,前端回落 goal)。
+func TestHandleListTasks_AllTasks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, repo := setupAgentTaskHandlerTest(t)
+
+	art := "result"
+	t1 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g1"), "web", "")
+	t1.Name = "旧任务"
+	require.NoError(t, repo.Create(t1))
+	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	require.NoError(t, repo.MarkReported(t1.ID)) // 已汇报也要出现在全量列表
+	t2 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g2"), "web", "")
+	t2.Name = "查AIHOT今日动态"
+	require.NoError(t, repo.Create(t2))
+	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusRunning, nil, nil))
+
+	router := gin.New()
+	router.Use(injectUserID(42))
+	router.GET("/api/v1/agent/tasks", handler.HandleListTasks)
+	req, _ := http.NewRequest("GET", "/api/v1/agent/tasks", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Tasks []map[string]interface{} `json:"tasks"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Tasks, 2, "全量列表应含已汇报任务")
+	// 倒序:最新的 t2 在前
+	assert.Equal(t, float64(t2.ID), resp.Data.Tasks[0]["id"])
+	assert.Equal(t, "查AIHOT今日动态", resp.Data.Tasks[0]["name"])
+	assert.Equal(t, "旧任务", resp.Data.Tasks[1]["name"])
+	assert.Equal(t, "running", resp.Data.Tasks[0]["status"])
+}
+
+// TestHandleGetTaskDetail_Success 任务详情:goal/name/status/时间戳/合同/artifact 全文。
+func TestHandleGetTaskDetail_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, repo := setupAgentTaskHandlerTest(t)
+
+	spec := domainagent.NewTaskSpec("调研 AIHOT 四源最新动态")
+	spec.Name = "查AIHOT今日动态"
+	spec.CompletionCriteria = []string{"至少10条动态"}
+	t1 := domainagent.NewAgentTask(42, spec, "web", "")
+	require.NoError(t, repo.Create(t1))
+	art := "# 报告全文"
+	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+
+	router := gin.New()
+	router.Use(injectUserID(42))
+	router.GET("/api/v1/agent/tasks/:id", handler.HandleGetTaskDetail)
+	req, _ := http.NewRequest("GET", "/api/v1/agent/tasks/"+strconv.FormatInt(t1.ID, 10), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Task struct {
+				ID       int64                `json:"id"`
+				Name     string               `json:"name"`
+				Goal     string               `json:"goal"`
+				Status   string               `json:"status"`
+				Artifact string               `json:"artifact"`
+				Spec     domainagent.TaskSpec `json:"spec"`
+			} `json:"task"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "查AIHOT今日动态", resp.Data.Task.Name)
+	assert.Equal(t, "completed", resp.Data.Task.Status)
+	assert.Equal(t, "# 报告全文", resp.Data.Task.Artifact)
+	assert.Equal(t, []string{"至少10条动态"}, resp.Data.Task.Spec.CompletionCriteria)
+}
+
+func TestHandleGetTaskDetail_NotFoundAndForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, repo := setupAgentTaskHandlerTest(t)
+	t1 := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
+	require.NoError(t, repo.Create(t1))
+
+	router := gin.New()
+	router.Use(injectUserID(2))
+	router.GET("/api/v1/agent/tasks/:id", handler.HandleGetTaskDetail)
+
+	// 非属主 → 403
+	req, _ := http.NewRequest("GET", "/api/v1/agent/tasks/"+strconv.FormatInt(t1.ID, 10), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+
+	// 不存在 → 404
+	req2, _ := http.NewRequest("GET", "/api/v1/agent/tasks/9999", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusNotFound, w2.Code)
+}
+
 func TestHandleListTasks_UserIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, repo := setupAgentTaskHandlerTest(t)

@@ -89,7 +89,8 @@ func TestMainDelegationRulesPrompt_ConciseHumanReply(t *testing.T) {
 	for _, want := range []string{
 		"一句话",
 		"不要复述",
+		"短名",
 	} {
-		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少简洁回复关键句 %q", want)
+		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少关键句 %q", want)
 	}
 }

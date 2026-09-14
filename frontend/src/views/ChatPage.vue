@@ -8,6 +8,7 @@ import ChatAvatar from '@/components/chat/ChatAvatar.vue';
 import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
 import SubscriptionDialog from '@/components/functional/SubscriptionDialog.vue';
+import TaskDialog from '@/components/functional/TaskDialog.vue';
 import SkillDrawer from '@/components/functional/SkillDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
@@ -20,10 +21,11 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
-// 记忆/订阅/技能弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
+// 记忆/订阅/技能/任务弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
 const showSubscriptionDialog = ref(false);
 const showSkillDrawer = ref(false);
+const showTaskDialog = ref(false);
 
 const isEmpty = computed(() => messages.value.length === 0);
 const inputPlaceholder = computed(() =>
@@ -31,10 +33,11 @@ const inputPlaceholder = computed(() =>
 );
 
 // 侧栏导航高亮:弹窗打开时高亮对应项,都没开时高亮「对话」
-const navCurrent = computed<'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings'>(() => {
+const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
   if (showSubscriptionDialog.value) return 'subscriptions';
   if (showSkillDrawer.value) return 'skills';
+  if (showTaskDialog.value) return 'tasks';
   if (showSettingsPanel.value) return 'settings';
   return 'chat';
 });
@@ -44,6 +47,7 @@ const closeAllDrawers = () => {
   showMemoryDrawer.value = false;
   showSubscriptionDialog.value = false;
   showSkillDrawer.value = false;
+  showTaskDialog.value = false;
   if (showSettingsPanel.value) toggleSettingsPanel();
 };
 
@@ -80,6 +84,7 @@ const handleSend = async (content: string) => {
     <Sidebar
       :current="navCurrent"
       @open-chat="closeAllDrawers"
+      @open-tasks="showTaskDialog = true"
       @open-memory="showMemoryDrawer = true"
       @open-subscriptions="showSubscriptionDialog = true"
       @open-skills="showSkillDrawer = true"
@@ -144,6 +149,11 @@ const handleSend = async (content: string) => {
     <SubscriptionDialog
       :visible="showSubscriptionDialog"
       @close="showSubscriptionDialog = false"
+    />
+
+    <TaskDialog
+      :visible="showTaskDialog"
+      @close="showTaskDialog = false"
     />
 
     <SkillDrawer

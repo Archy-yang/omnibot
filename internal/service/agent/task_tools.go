@@ -196,8 +196,13 @@ func formatTaskSummary(s *TaskSummary) string {
 	} else if s.StartedAt != nil {
 		timeHint += fmt.Sprintf(",开始于 %s", s.StartedAt.Format("2006-01-02 15:04"))
 	}
-	return fmt.Sprintf("任务 #%d [%s] %s\n  %s · 已执行 %d 步%s",
-		s.ID, s.Status, truncateGoal(s.Goal, 50), timeHint, s.StepCount, artifactHint)
+	// 有短名时「短名」缀在编号后(人读优先);无则保持原格式,不出现空「」
+	namePart := ""
+	if s.Name != "" {
+		namePart = fmt.Sprintf("「%s」", s.Name)
+	}
+	return fmt.Sprintf("任务 #%d%s [%s] %s\n  %s · 已执行 %d 步%s",
+		s.ID, namePart, s.Status, truncateGoal(s.Goal, 50), timeHint, s.StepCount, artifactHint)
 }
 
 // CreateRequestInputTool 创建 request_input 工具:子 Agent 主动向用户/主 Agent 要输入(#19)。

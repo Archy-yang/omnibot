@@ -16,6 +16,7 @@ import "time"
 // 注入子 Agent prompt 的【本次任务角色】段;空则省略。不再是框架枚举的角色卡。
 type TaskSpec struct {
 	Goal               string         `json:"goal"`                          // 目标是什么(必填,原 delegate 的 goal)
+	Name               string         `json:"name,omitempty"`                // 任务短名(可空,主 Agent 派活时起,如"查AIHOT今日动态";列表/详情人读展示,#id 仍是引用锚点)
 	Type               string         `json:"type,omitempty"`                // 溯源标签(可空)
 	PersonaHint        string         `json:"persona_hint,omitempty"`        // 任务角色 hint(可空)
 	Background         map[string]any `json:"background,omitempty"`          // 背景(项目/技术栈/当前架构等)

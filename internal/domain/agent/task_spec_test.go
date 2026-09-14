@@ -34,3 +34,20 @@ func TestTaskSpec_HasDetail(t *testing.T) {
 		t.Error("有 Constraints 应有 detail")
 	}
 }
+
+// TestNewAgentTask_Name 任务短名链路:spec.Name 落 AgentTask.Name(列表/详情展示用)。
+// 编号 #N 只作引用锚点(反幻觉铁律依赖),人看的是短名;缺省留空由展示层回落 goal 摘要。
+func TestNewAgentTask_Name(t *testing.T) {
+	spec := NewTaskSpec("用 aihot.news 完整 feed 地址重新拉取 AIHOT 四个源的最新内容并汇总")
+	spec.Name = "查AIHOT今日动态"
+	task := NewAgentTask(42, spec, "web", "")
+	if task.Name != "查AIHOT今日动态" {
+		t.Errorf("Name = %q, want %q", task.Name, "查AIHOT今日动态")
+	}
+
+	// 缺省:Name 留空,不自行截断派生(展示层回落 goal)
+	task2 := NewAgentTask(42, NewTaskSpec("查天气"), "web", "")
+	if task2.Name != "" {
+		t.Errorf("未起名时 Name 应为空, got %q", task2.Name)
+	}
+}

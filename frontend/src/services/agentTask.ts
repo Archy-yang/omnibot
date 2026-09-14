@@ -1,5 +1,5 @@
 import { request } from '../utils/request';
-import type { ApiResponse } from '../types/api';
+import type { ApiResponse, AgentTaskItem, AgentTaskDetail, AgentTaskStep } from '../types/api';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
@@ -40,6 +40,34 @@ export const agentTaskService = {
       console.error('Failed to list unreported agent tasks:', error);
       return [];
     }
+  },
+
+  /**
+   * 全量任务列表(任务中心):各状态含已汇报,倒序。
+   */
+  async listAll(): Promise<AgentTaskItem[]> {
+    const response = await request.get<ApiResponse<{ tasks: AgentTaskItem[] }>>('/agent/tasks');
+    return response.data.data.tasks;
+  },
+
+  /**
+   * 任务详情(目标/合同/artifact 结果全文/时间戳)。
+   */
+  async getDetail(taskId: number): Promise<AgentTaskDetail> {
+    const response = await request.get<ApiResponse<{ task: AgentTaskDetail }>>(
+      `/agent/tasks/${taskId}`,
+    );
+    return response.data.data.task;
+  },
+
+  /**
+   * 执行流水(llm_call/tool_call 按 seq 正序)。
+   */
+  async listSteps(taskId: number): Promise<AgentTaskStep[]> {
+    const response = await request.get<ApiResponse<{ steps: AgentTaskStep[] }>>(
+      `/agent/tasks/${taskId}/steps`,
+    );
+    return response.data.data.steps;
   },
 
   /**

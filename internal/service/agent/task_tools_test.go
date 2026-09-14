@@ -187,6 +187,18 @@ func TestFormatTaskSummary_Times(t *testing.T) {
 	assert.NotContains(t, out, "完成于")
 }
 
+// TestFormatTaskSummary_Name 任务短名渲染:有名字带「短名」,无名字不出现空引号。
+func TestFormatTaskSummary_Name(t *testing.T) {
+	named := &TaskSummary{ID: 1, Status: "running", Goal: "g", Name: "查AIHOT今日动态", CreatedAt: time.Now()}
+	out := formatTaskSummary(named)
+	assert.Contains(t, out, "任务 #1「查AIHOT今日动态」")
+	assert.Contains(t, out, "[running]")
+
+	unnamed := &TaskSummary{ID: 2, Status: "running", Goal: "g", CreatedAt: time.Now()}
+	out = formatTaskSummary(unnamed)
+	assert.Contains(t, out, "任务 #2 [running]", "无名字时格式退回原样,不出现空「」")
+}
+
 // TestParseTaskID 各类型 task_id 解析。
 func TestParseTaskID(t *testing.T) {
 	cases := []struct {

@@ -246,6 +246,7 @@ type TaskSummary struct {
 	ID        int64      `json:"id"`
 	UserID    int64      `json:"-"`
 	SubAgent  string     `json:"sub_agent"`
+	Name      string     `json:"name,omitempty"` // 任务短名(可空,空则展示层回落 goal 摘要)
 	Goal      string     `json:"goal"`
 	Status    string     `json:"status"`
 	StepCount int        `json:"step_count"`
@@ -290,6 +291,7 @@ func (s *SubAgentService) ListUserTasks(userID int64, limit int) ([]*TaskSummary
 func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, error) {
 	sm := &TaskSummary{
 		ID: task.ID, UserID: task.UserID, SubAgent: task.SubAgentType,
+		Name: task.Name,
 		Goal: task.Goal, Status: task.Status, Reported: task.Reported, Artifact: task.Artifact,
 		CreatedAt: task.CreatedAt, StartedAt: task.StartedAt,
 	}

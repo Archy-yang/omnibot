@@ -341,3 +341,68 @@ export interface AddSubscriptionResponse {
   subscription?: SubscriptionItem;
   candidates?: SubscriptionFeedCandidate[];
 }
+
+/**
+ * 后台任务列表行(任务中心,#N 编号是引用锚点,人看的是 name 短名)
+ */
+export interface AgentTaskItem {
+  id: number;
+  /** 任务短名(可空,展示层回落 goal 摘要) */
+  name: string;
+  sub_agent_type: string;
+  goal: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'input_required';
+  reported: boolean;
+  created_at: string;
+  finished_at?: string;
+}
+
+/**
+ * 任务合同(派活时主 Agent 下给执行器的,详情页展示"当初怎么交办的")
+ */
+export interface AgentTaskSpec {
+  goal: string;
+  name?: string;
+  type?: string;
+  persona_hint?: string;
+  background?: Record<string, unknown>;
+  deliverables?: { name: string; description: string }[];
+  completion_criteria?: string[];
+}
+
+/**
+ * 任务详情(任务中心详情页)
+ */
+export interface AgentTaskDetail {
+  id: number;
+  name: string;
+  sub_agent_type: string;
+  goal: string;
+  status: string;
+  reported: boolean;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  /** 结果全文(completed 时) */
+  artifact?: string;
+  /** 失败原因(failed 时) */
+  error_msg?: string;
+  spec: AgentTaskSpec;
+}
+
+/**
+ * 执行流水步骤(llm_call / tool_call)
+ */
+export interface AgentTaskStep {
+  seq: number;
+  kind: 'llm_call' | 'tool_call';
+  tool?: string;
+  model?: string;
+  status: string;
+  duration_ms: number;
+  /** llm:messages JSON;tool:arguments JSON */
+  request: string;
+  /** llm:{content,tool_calls} JSON;tool:原始结果 */
+  response: string;
+  created_at: string;
+}

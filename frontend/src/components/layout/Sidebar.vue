@@ -17,11 +17,12 @@ import { useSettingsStore } from '@/stores/settings';
 
 const props = defineProps<{
   /** 当前高亮的导航项：弹窗打开时对应高亮，都没开时为 chat */
-  current?: 'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings';
+  current?: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings';
 }>();
 
 const emit = defineEmits<{
   'open-chat': [];
+  'open-tasks': [];
   'open-memory': [];
   'open-subscriptions': [];
   'open-skills': [];
@@ -35,15 +36,17 @@ const collapsed = ref(false);
 
 const navItems = [
   { key: 'chat', label: '对话' },
+  { key: 'tasks', label: '任务' },
   { key: 'memory', label: '记忆' },
   { key: 'subscriptions', label: '订阅' },
   { key: 'skills', label: '技能' },
   { key: 'settings', label: '设置' },
 ] as const;
 
-const handleNav = (key: 'chat' | 'memory' | 'subscriptions' | 'skills' | 'settings') => {
+const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings') => {
   switch (key) {
     case 'chat': emit('open-chat'); break;
+    case 'tasks': emit('open-tasks'); break;
     case 'memory': emit('open-memory'); break;
     case 'subscriptions': emit('open-subscriptions'); break;
     case 'skills': emit('open-skills'); break;

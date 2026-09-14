@@ -43,55 +43,129 @@ func NewAgentTaskHandler(
 	}
 }
 
-// taskDTO 任务展示结构。
+// taskDTO 任务列表行展示结构。
 type taskDTO struct {
-	ID           int64  `json:"id"`
-	SubAgentType string `json:"sub_agent_type"`
-	Goal         string `json:"goal"`
-	Status       string `json:"status"`
-	Reported     bool   `json:"reported"`
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`            // 任务短名(可空,前端回落 goal 摘要)
+	SubAgentType string     `json:"sub_agent_type"`  // 溯源标签
+	Goal         string     `json:"goal"`
+	Status       string     `json:"status"`
+	Reported     bool       `json:"reported"`
+	CreatedAt    string     `json:"created_at"`
+	FinishedAt   string     `json:"finished_at,omitempty"` // completed/cancelled 的结束时间
 }
 
-// HandleListTasks GET /api/v1/agent/tasks?status=completed_unreported
-// 第一版仅支持 status=completed_unreported(前端轮询用)。无 status 返回全部任务。
+// taskDetailDTO 任务详情展示结构(任务中心详情页)。
+type taskDetailDTO struct {
+	ID           int64                  `json:"id"`
+	Name         string                 `json:"name"`
+	SubAgentType string                 `json:"sub_agent_type"`
+	Goal         string                 `json:"goal"`
+	Status       string                 `json:"status"`
+	Reported     bool                   `json:"reported"`
+	CreatedAt    string                 `json:"created_at"`
+	StartedAt    string                 `json:"started_at,omitempty"`
+	CompletedAt  string                 `json:"completed_at,omitempty"`
+	Artifact     string                 `json:"artifact,omitempty"` // 结果全文(completed 时)
+	ErrorMsg     string                 `json:"error_msg,omitempty"` // failed 时
+	Spec         domainagent.TaskSpec   `json:"spec"`               // 任务合同(背景/交付物/完成标准)
+}
+
+// HandleListTasks GET /api/v1/agent/tasks
+//   - status=completed_unreported:前端轮询未汇报任务(汇报链路,保持兼容)
+//   - 无 status:返回该用户全部任务(倒序),任务中心列表用
 func (h *AgentTaskHandler) HandleListTasks(c *gin.Context) {
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
 	status := c.Query("status")
-	var tasks []*domainagent.AgentTask
-	var err error
+	var dtos []taskDTO
 	if status == "completed_unreported" {
-		domainTasks, e := h.subAgentSvc.GetCompletedUnreported(userID)
+		tasks, e := h.subAgentSvc.GetCompletedUnreported(userID)
 		if e != nil {
 			logger.ErrorWithFields("list completed unreported failed", zap.Int64("user_id", userID), zap.Error(e))
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "查询任务失败"})
 			return
 		}
-		tasks = domainTasks
-		err = nil
+		for _, t := range tasks {
+			dtos = append(dtos, newTaskDTO(t))
+		}
 	} else {
-		// 第一版:无 status 参数不返回全部(任务面板留后续),统一按未汇报返回
-		domainTasks, e := h.subAgentSvc.GetCompletedUnreported(userID)
+		// 任务中心全量列表:各状态含已汇报,倒序
+		summaries, e := h.subAgentSvc.ListUserTasks(userID, 100)
 		if e != nil {
+			logger.ErrorWithFields("list tasks failed", zap.Int64("user_id", userID), zap.Error(e))
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "查询任务失败"})
 			return
 		}
-		tasks = domainTasks
-		err = nil
+		for _, s := range summaries {
+			dto := taskDTO{
+				ID: s.ID, Name: s.Name, SubAgentType: s.SubAgent, Goal: s.Goal,
+				Status: s.Status, Reported: s.Reported,
+				CreatedAt:  s.CreatedAt.Format("2006-01-02 15:04"),
+			}
+			if s.FinishedAt != nil {
+				dto.FinishedAt = s.FinishedAt.Format("2006-01-02 15:04")
+			}
+			dtos = append(dtos, dto)
+		}
 	}
-	_ = err
+	if dtos == nil {
+		dtos = make([]taskDTO, 0)
+	}
 
-	dtos := make([]taskDTO, 0, len(tasks))
-	for _, t := range tasks {
-		dtos = append(dtos, taskDTO{
-			ID:           t.ID,
-			SubAgentType: t.SubAgentType,
-			Goal:         t.Goal,
-			Status:       t.Status,
-			Reported:     t.Reported,
-		})
-	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"tasks": dtos}})
+}
+
+// newTaskDTO 从 domain 任务构造列表行(completed_unreported 轮询路径)。
+func newTaskDTO(t *domainagent.AgentTask) taskDTO {
+	return taskDTO{
+		ID: t.ID, Name: t.Name, SubAgentType: t.SubAgentType, Goal: t.Goal,
+		Status: t.Status, Reported: t.Reported,
+		CreatedAt: t.CreatedAt.Format("2006-01-02 15:04"),
+	}
+}
+
+// HandleGetTaskDetail GET /api/v1/agent/tasks/:id
+// 任务中心详情页:任务合同 + artifact 结果全文 + 关键时间戳。属主校验(安全红线)。
+func (h *AgentTaskHandler) HandleGetTaskDetail(c *gin.Context) {
+	userID := c.GetInt64(middleware.AuthUserIDKey)
+
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || taskID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "无效的任务 ID"})
+		return
+	}
+
+	task, err := h.subAgentSvc.GetTask(taskID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "任务不存在"})
+		return
+	}
+	if task.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "无权操作此任务"})
+		return
+	}
+
+	detail := taskDetailDTO{
+		ID: task.ID, Name: task.Name, SubAgentType: task.SubAgentType,
+		Goal: task.Goal, Status: task.Status, Reported: task.Reported,
+		CreatedAt: task.CreatedAt.Format("2006-01-02 15:04:05"),
+		Spec:      task.TaskSpec,
+	}
+	if task.StartedAt != nil {
+		detail.StartedAt = task.StartedAt.Format("2006-01-02 15:04:05")
+	}
+	if task.CompletedAt != nil {
+		detail.CompletedAt = task.CompletedAt.Format("2006-01-02 15:04:05")
+	}
+	if task.Artifact != nil {
+		detail.Artifact = *task.Artifact
+	}
+	if task.ErrorMsg != nil {
+		detail.ErrorMsg = *task.ErrorMsg
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"task": detail}})
 }
 
 // HandleReportTask POST /api/v1/agent/tasks/:id/report (SSE)
