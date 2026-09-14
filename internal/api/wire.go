@@ -68,6 +68,10 @@ type appDeps struct {
 	agentSvc     *agentpkg.AgentService
 	llmConfigSvc userService.LLMConfigService
 	subAgentSvc  *agentpkg.SubAgentService
+
+	// 沉淀管线(可空:extraction.enabled=false 未启用)。
+	// 暴露给手动触发工具(digest_manual_test.go,env 门控)复用同一装配。
+	digestPipeline *memoryService.DigestPipeline
 }
 
 // buildAppDeps 构造全部依赖(原 SetupRouter 前半段,行为零变化)。
@@ -347,6 +351,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		agentSvc:            agentSvc,
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
+		digestPipeline:      digestPipeline,
 	}
 }
 
