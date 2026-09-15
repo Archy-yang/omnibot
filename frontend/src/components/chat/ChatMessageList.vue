@@ -7,6 +7,11 @@ const props = withDefaults(defineProps<ChatMessageListProps>(), {
   isLoading: false,
 });
 
+// 冒泡消息内部事件(任务卡片 → 页面打开任务中心)
+const emit = defineEmits<{
+  'open-task': [taskId: number];
+}>();
+
 const containerRef = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 
@@ -82,6 +87,7 @@ const examplePrompts = [
         v-for="message in messages"
         :key="message.id"
         :message="message"
+        @open-task="(tid: number) => emit('open-task', tid)"
       />
 
       <!-- Typing indicator -->

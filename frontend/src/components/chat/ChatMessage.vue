@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ChatMessageProps } from '@/types';
 import { useToast } from '@/composables/useToast';
+import TaskChip from './TaskChip.vue';
 
 // 配置marked为同步解析
 marked.use({
@@ -124,6 +125,15 @@ function toggleExpand(seg: { expanded?: boolean }) {
 const { success, error: toastError } = useToast();
 const justCopied = ref(false);
 
+// 消息底部任务卡片:本轮 delegate 派生的任务(task_ids)+ 汇报消息关联的任务(task_id)
+const chipTaskIds = computed<number[]>(() => {
+  const ids = new Set<number>(props.message.task_ids ?? []);
+  if (props.message.kind === 'report' && props.message.task_id) {
+    ids.add(props.message.task_id);
+  }
+  return [...ids];
+});
+
 // v2.0:助手消息反馈(纯前端 UI 演示,不入库)。
 // up / down 状态在本组件内 toggle:再点同一个图标取消,点另一个互斥切换。
 // 后端持久化留 backlog(v2.x+ 反馈表设计)。
@@ -170,9 +180,10 @@ async function handleCopy() {
   }
 }
 
-defineEmits<{
+const emit = defineEmits<{
   copy: [content: string];
   resend: [message: typeof props.message];
+  'open-task': [taskId: number];
 }>();
 </script>
 
@@ -318,6 +329,16 @@ defineEmits<{
             v-html="renderMarkdown(finalText)"
           ></div>
           <div v-else class="assistant-content markdown-body" v-html="renderedContent"></div>
+
+          <!-- 任务卡片:本轮派生的后台任务(点开任务中心看执行链) -->
+          <div v-if="chipTaskIds.length > 0" class="task-chips">
+            <TaskChip
+              v-for="id in chipTaskIds"
+              :key="id"
+              :task-id="id"
+              @open-task="(tid: number) => emit('open-task', tid)"
+            />
+          </div>
 
           <!-- 操作栏:流式结束后(message.streaming 非 true)且内容非空时显示,
                避免回复未完成时出现复制/点赞按钮(复制到半截内容、对不完整回复反馈都无意义)。
@@ -468,6 +489,13 @@ defineEmits<{
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 消息底部任务卡片行 */
+.task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 /* 操作栏：复制等按钮，hover 时整条消息行才会浮现，平时保持低存在感 */

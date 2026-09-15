@@ -21,10 +21,13 @@ marked.use({ async: false });
 
 const props = defineProps<{
   visible: boolean;
+  /** 直达指定任务的详情(聊天任务卡片点击进来);消费后 emit clear-initial 回吐置空 */
+  initialTaskId?: number | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  'clear-initial': [];
 }>();
 
 const { error: toastError } = useToast();
@@ -58,6 +61,12 @@ watch(
   () => props.visible,
   (v) => {
     if (v) {
+      // 带着任务卡片点进来:直达该任务详情,不落在列表页
+      if (props.initialTaskId) {
+        openDetail(props.initialTaskId);
+        emit('clear-initial');
+        return;
+      }
       view.value = 'list';
       detail.value = null;
       steps.value = [];

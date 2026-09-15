@@ -50,6 +50,12 @@ export interface Message {
   kind?: string;
   /** 汇报消息关联的后台任务 ID(kind==="report" 时有,可点开看对应子任务) */
   task_id?: number;
+  /**
+   * 本轮回复派生的后台任务 ID 列表(后端 task_created 事件,delegate 真实返回,
+   * LLM 篡改不了)。渲染为消息底部可点击的任务卡片,点开任务中心看执行链。
+   * 仅流式本轮有;历史消息未持久化此字段。
+   */
+  task_ids?: number[];
 }
 
 /**

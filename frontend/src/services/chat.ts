@@ -13,6 +13,8 @@ interface StreamCallbacks {
   /** 方案5:思考轮标记,把当前 text 段从主气泡迁移到思考块 */
   onThought?: (content: string) => void;
   onReasoning?: (content: string) => void;
+  /** 方向B:本轮 delegate 真实创建的后台任务 ID 列表,渲染消息底部任务卡片 */
+  onTaskCreated?: (taskIds: number[]) => void;
   onDone: (fullContent: string) => void;
   onError: (error: Error) => void;
 }
@@ -55,7 +57,7 @@ export const chatService = {
     content: string,
     callbacks: StreamCallbacks
   ): Promise<void> {
-    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onReasoning, onDone, onError } = callbacks;
+    const { onChunk, onToolCall, onToolResult, onFinal, onThought, onReasoning, onTaskCreated, onDone, onError } = callbacks;
 
     try {
       const token = localStorage.getItem('token');
@@ -146,6 +148,12 @@ export const chatService = {
             if (currentEvent === 'reasoning') {
               // 深度思考增量(M5/C):模型 reasoning_content 实时流。
               onReasoning?.(parsed.content);
+              currentEvent = 'message';
+              continue;
+            }
+            if (currentEvent === 'task_created') {
+              // 方向B:delegate 真实创建的 task_id 列表(不拼进回复文本,独立事件)。
+              onTaskCreated?.(parsed.task_ids ?? []);
               currentEvent = 'message';
               continue;
             }

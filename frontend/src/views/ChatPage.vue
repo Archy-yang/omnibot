@@ -26,6 +26,12 @@ const showMemoryDrawer = ref(false);
 const showSubscriptionDialog = ref(false);
 const showSkillDrawer = ref(false);
 const showTaskDialog = ref(false);
+// 任务卡片点击 → 打开任务中心并直达该任务详情;TaskDialog 消费后回吐置空
+const pendingTaskId = ref<number | null>(null);
+const openTaskDetail = (taskId: number) => {
+  pendingTaskId.value = taskId;
+  showTaskDialog.value = true;
+};
 
 const isEmpty = computed(() => messages.value.length === 0);
 const inputPlaceholder = computed(() =>
@@ -119,6 +125,7 @@ const handleSend = async (content: string) => {
         <ChatMessageList
           :messages="messages as Message[]"
           :is-loading="isInitializing || isLoading"
+          @open-task="openTaskDetail"
         >
           <template #avatar="{ message }">
             <ChatAvatar :role="message.role === 'user' ? 'user' : 'assistant'" />
@@ -153,7 +160,9 @@ const handleSend = async (content: string) => {
 
     <TaskDialog
       :visible="showTaskDialog"
+      :initial-task-id="pendingTaskId"
       @close="showTaskDialog = false"
+      @clear-initial="pendingTaskId = null"
     />
 
     <SkillDrawer

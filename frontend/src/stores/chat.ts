@@ -128,6 +128,11 @@ export const useChatStore = defineStore(
               segs.push({ type: 'reasoning', content: chunk });
             }
           },
+          onTaskCreated: (taskIds: number[]) => {
+            // 方向B:本轮 delegate 创建的任务 ID → 消息底部渲染可点击任务卡片。
+            if (taskIds.length === 0) return;
+            assistantMessage.task_ids = [...(assistantMessage.task_ids ?? []), ...taskIds];
+          },
           onDone: () => {
             // 流式结束。若未收到 onFinal(异常兜底),把最后一个 text 段标 final +
             // content 取它,保证总有最终回复展示。
