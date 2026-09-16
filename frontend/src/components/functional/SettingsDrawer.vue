@@ -7,7 +7,7 @@
  *
  * 关键变化:
  *   - 形态:NaiveUI Modal 640px → 右侧 400px 抽屉
- *   - 结构:Tabs(模型/关于)→ 竖排两个 section,无 Tab
+ *   - 结构:Tabs(模型/关于)→ 左侧分类导航(对话模型/向量模型/关于)三个 section
  *   - 控件:NSelect/NInput/NSlider/NInputNumber 全部换为原生
  *     <select>/<input>/<input type="range">,匹配设计稿的轻量风格
  *
@@ -38,12 +38,14 @@ const authStore = useAuthStore();
 const router = useRouter();
 const { success, error } = useToast();
 
-// dsh 设置弹窗:左侧分类导航(模型配置 / 关于)
+// dsh 设置弹窗:左侧分类导航(对话模型 / 向量模型 / 关于)
+// 语言模型与向量模型分页管理,避免两类配置混在一页
 const navItems = [
-  { key: 'model', label: '模型配置' },
+  { key: 'chat-model', label: '对话模型' },
+  { key: 'embedding-model', label: '向量模型' },
   { key: 'about', label: '关于' },
 ] as const;
-const activeSection = ref<string>('model');
+const activeSection = ref<string>('chat-model');
 
 // Local form state — 编辑时不直接改 store,取消时恢复
 const localConfig = ref<LLMConfig>({
@@ -160,7 +162,12 @@ const isNativeProviderSelected = computed<boolean>(
   () => selectedProvider.value?.mode === 'native'
 );
 
-const handleProviderSelect = (option: LLMProviderOption) => {
+const providerHelpText = computed<string>(() => selectedProvider.value?.description ?? '');
+
+const handleProviderChange = (e: Event) => {
+  const value = (e.target as HTMLSelectElement).value;
+  const option = settingsStore.providerOptions.find((p) => p.value === value);
+  if (!option) return;
   localConfig.value.provider = option.value;
   localConfig.value.baseUrl = option.default_base_url;
   localConfig.value.model = option.default_model;
@@ -287,9 +294,9 @@ const showEmbeddingApiKey = ref(false);
     @update:active-nav="activeSection = $event"
     @close="emit('close')"
   >
-    <!-- ===== 模型配置 section ===== -->
-    <div v-show="activeSection === 'model'" class="section-pane">
-    <div class="section-title">模型配置</div>
+    <!-- ===== 对话模型 section ===== -->
+    <div v-show="activeSection === 'chat-model'" class="section-pane">
+    <div class="section-title">对话模型</div>
 
     <!-- 配置状态提示条 -->
     <div class="config-hint">
@@ -312,49 +319,25 @@ const showEmbeddingApiKey = ref(false);
       </button>
     </div>
 
-    <!-- ===== 对话模型区块 ===== -->
-    <div class="model-block">
-      <div class="block-head">
-        <span class="block-title">对话模型</span>
-        <span class="block-sub">用于对话、任务与后台执行</span>
-      </div>
-
-      <!-- 服务商:行卡片单选(仅可用 OpenAI 兼容服务商) -->
-      <div class="form-field">
-        <label class="form-label">服务商</label>
-        <div class="provider-list" role="radiogroup" aria-label="服务商">
-          <button
-            v-for="p in availableProviders"
-            :key="p.value"
-            type="button"
-            class="provider-card"
-            :class="{ active: localConfig.provider === p.value }"
-            role="radio"
-            :aria-checked="localConfig.provider === p.value"
-            @click="handleProviderSelect(p)"
-          >
-            <span class="provider-info">
-              <span class="provider-name">{{ p.label }}</span>
-              <span class="provider-desc">{{ p.description }}</span>
-            </span>
-            <svg
-              v-if="localConfig.provider === p.value"
-              class="provider-check"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          </button>
-        </div>
-      </div>
+    <!-- 服务商:下拉选择(仅可用 OpenAI 兼容服务商,禁用专用接口不入列) -->
+    <div class="form-field">
+      <label class="form-label" for="settings-provider">服务商</label>
+      <select
+        id="settings-provider"
+        class="form-select"
+        :value="localConfig.provider"
+        @change="handleProviderChange"
+      >
+        <option
+          v-for="p in availableProviders"
+          :key="p.value"
+          :value="p.value"
+        >
+          {{ p.label }}
+        </option>
+      </select>
+      <div v-if="providerHelpText" class="form-hint">{{ providerHelpText }}</div>
+    </div>
 
     <!-- 模型名称 -->
     <div class="form-field">
@@ -456,14 +439,34 @@ const showEmbeddingApiKey = ref(false);
       </label>
       <div class="form-hint">对 DeepSeek 思考类模型生效（如 deepseek-v4-flash）；开启后跳过思考阶段，对话延迟显著降低。</div>
     </div>
-    </div><!-- /.model-block 对话模型 -->
 
-    <!-- ===== 向量模型区块(可选,用户级覆盖系统默认) ===== -->
-    <div class="model-block">
-      <div class="block-head">
-        <span class="block-title">向量模型</span>
-        <span class="block-sub">记忆语义检索，可选</span>
-      </div>
+    <!-- 对话模型 section 底部按钮 -->
+    <div class="form-actions">
+      <button type="button" class="btn btn-cancel" @click="handleCancel">取消</button>
+      <button
+        type="button"
+        class="btn btn-save"
+        :disabled="isSaving || isNativeProviderSelected"
+        @click="handleSave"
+      >
+        {{ isSaving ? '保存中...' : '保存' }}
+      </button>
+    </div>
+
+    </div><!-- /.section-pane 对话模型 -->
+
+    <!-- ===== 向量模型 section ===== -->
+    <div v-show="activeSection === 'embedding-model'" class="section-pane">
+    <div class="section-title">向量模型</div>
+
+    <!-- 向量配置状态提示条 -->
+    <div class="config-hint">
+      <span
+        class="config-hint-dot"
+        :class="{ 'is-custom': !!localConfig.embeddingProvider }"
+      ></span>
+      <span class="config-hint-text">{{ localConfig.embeddingProvider ? '已自定义向量模型' : '使用系统默认向量模型' }}</span>
+    </div>
       <div class="form-field">
         <label class="form-label" for="settings-embedding-provider">Embedding 服务</label>
         <select
@@ -543,22 +546,21 @@ const showEmbeddingApiKey = ref(false);
           </div>
         </div>
       </template>
-    </div>
 
-    <!-- 模型 section 底部按钮 -->
+    <!-- 向量模型 section 底部按钮 -->
     <div class="form-actions">
       <button type="button" class="btn btn-cancel" @click="handleCancel">取消</button>
       <button
         type="button"
         class="btn btn-save"
-        :disabled="isSaving || isNativeProviderSelected"
+        :disabled="isSaving"
         @click="handleSave"
       >
         {{ isSaving ? '保存中...' : '保存' }}
       </button>
     </div>
 
-    </div><!-- /.section-pane 模型配置 -->
+    </div><!-- /.section-pane 向量模型 -->
 
     <!-- ===== 关于 section ===== -->
     <div v-show="activeSection === 'about'" class="section-about">
@@ -858,93 +860,7 @@ const showEmbeddingApiKey = ref(false);
   font-variant-numeric: tabular-nums;
 }
 
-/* ===== 模型配置子区块(对话模型 / 向量模型) ===== */
-.model-block {
-  margin-top: 4px;
-}
-.model-block + .model-block {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-l1);
-}
-.block-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.block-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--label-primary);
-}
-.block-sub {
-  font-size: 12px;
-  color: var(--label-tertiary);
-}
-
-/* ===== 服务商行卡片单选 ===== */
-.provider-list {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border-l2);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.provider-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  background: var(--bg-base);
-  border: none;
-  border-bottom: 1px solid var(--border-l2);
-  border-left: 2px solid transparent;
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-  transition: background 120ms ease;
-}
-.provider-card:last-child {
-  border-bottom: none;
-}
-.provider-card:hover {
-  background: var(--bg-hover);
-}
-.provider-card.active {
-  border-left-color: var(--accent);
-  background: var(--bg-tip);
-}
-.provider-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.provider-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--label-primary);
-  line-height: 1.3;
-}
-.provider-card.active .provider-name {
-  color: var(--accent);
-}
-.provider-desc {
-  font-size: 12px;
-  color: var(--label-tertiary);
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.provider-check {
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
+/* ===== 向量模型双列表单行 ===== */
 .embedding-row {
   display: flex;
   gap: 12px;
