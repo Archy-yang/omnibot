@@ -144,11 +144,12 @@ watch(
 );
 
 // ===== Provider 预设 =====
-const compatibleProviders = computed(() =>
-  settingsStore.providerOptions.filter((p) => p.mode === 'openai_compatible')
-);
-const nativeProviders = computed(() =>
-  settingsStore.providerOptions.filter((p) => p.mode === 'native')
+// 服务商卡片只展示可用的 OpenAI 兼容项;禁用的"专用接口"预设不入 UI
+// (后端 preset 数据保留,兼容历史配置值,仅展示层过滤)
+const availableProviders = computed(() =>
+  settingsStore.providerOptions.filter(
+    (p) => p.mode === 'openai_compatible' && p.status === 'available'
+  )
 );
 
 const selectedProvider = computed<LLMProviderOption | undefined>(() =>
@@ -159,16 +160,7 @@ const isNativeProviderSelected = computed<boolean>(
   () => selectedProvider.value?.mode === 'native'
 );
 
-const providerHelpText = computed<string>(() => selectedProvider.value?.description ?? '');
-
-const handleProviderChange = (e: Event) => {
-  const value = (e.target as HTMLSelectElement).value;
-  const option = settingsStore.providerOptions.find((p) => p.value === value);
-  if (!option) return;
-  if (option.status === 'disabled') {
-    error(option.disabled_reason || '该服务商暂不可用');
-    return;
-  }
+const handleProviderSelect = (option: LLMProviderOption) => {
   localConfig.value.provider = option.value;
   localConfig.value.baseUrl = option.default_base_url;
   localConfig.value.model = option.default_model;
@@ -320,38 +312,49 @@ const showEmbeddingApiKey = ref(false);
       </button>
     </div>
 
-    <!-- 服务商 -->
-    <div class="form-field">
-      <label class="form-label" for="settings-provider">服务商</label>
-      <select
-        id="settings-provider"
-        class="form-select"
-        :value="localConfig.provider"
-        @change="handleProviderChange"
-      >
-        <optgroup v-if="compatibleProviders.length > 0" label="OpenAI 兼容模式">
-          <option
-            v-for="p in compatibleProviders"
+    <!-- ===== 对话模型区块 ===== -->
+    <div class="model-block">
+      <div class="block-head">
+        <span class="block-title">对话模型</span>
+        <span class="block-sub">用于对话、任务与后台执行</span>
+      </div>
+
+      <!-- 服务商:行卡片单选(仅可用 OpenAI 兼容服务商) -->
+      <div class="form-field">
+        <label class="form-label">服务商</label>
+        <div class="provider-list" role="radiogroup" aria-label="服务商">
+          <button
+            v-for="p in availableProviders"
             :key="p.value"
-            :value="p.value"
-            :disabled="p.status === 'disabled'"
+            type="button"
+            class="provider-card"
+            :class="{ active: localConfig.provider === p.value }"
+            role="radio"
+            :aria-checked="localConfig.provider === p.value"
+            @click="handleProviderSelect(p)"
           >
-            {{ p.label }}
-          </option>
-        </optgroup>
-        <optgroup v-if="nativeProviders.length > 0" label="专用接口">
-          <option
-            v-for="p in nativeProviders"
-            :key="p.value"
-            :value="p.value"
-            :disabled="p.status === 'disabled'"
-          >
-            {{ p.label }}
-          </option>
-        </optgroup>
-      </select>
-      <div v-if="providerHelpText" class="form-hint">{{ providerHelpText }}</div>
-    </div>
+            <span class="provider-info">
+              <span class="provider-name">{{ p.label }}</span>
+              <span class="provider-desc">{{ p.description }}</span>
+            </span>
+            <svg
+              v-if="localConfig.provider === p.value"
+              class="provider-check"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
 
     <!-- 模型名称 -->
     <div class="form-field">
@@ -453,10 +456,14 @@ const showEmbeddingApiKey = ref(false);
       </label>
       <div class="form-hint">对 DeepSeek 思考类模型生效（如 deepseek-v4-flash）；开启后跳过思考阶段，对话延迟显著降低。</div>
     </div>
+    </div><!-- /.model-block 对话模型 -->
 
-    <!-- ===== 向量模型(可选,用户级覆盖系统默认) ===== -->
-    <div class="embedding-block">
-      <div class="entry-label">向量模型（可选）</div>
+    <!-- ===== 向量模型区块(可选,用户级覆盖系统默认) ===== -->
+    <div class="model-block">
+      <div class="block-head">
+        <span class="block-title">向量模型</span>
+        <span class="block-sub">记忆语义检索，可选</span>
+      </div>
       <div class="form-field">
         <label class="form-label" for="settings-embedding-provider">Embedding 服务</label>
         <select
@@ -851,12 +858,93 @@ const showEmbeddingApiKey = ref(false);
   font-variant-numeric: tabular-nums;
 }
 
-/* ===== 向量模型区块 ===== */
-.embedding-block {
+/* ===== 模型配置子区块(对话模型 / 向量模型) ===== */
+.model-block {
+  margin-top: 4px;
+}
+.model-block + .model-block {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--border-l1);
 }
+.block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--label-primary);
+}
+.block-sub {
+  font-size: 12px;
+  color: var(--label-tertiary);
+}
+
+/* ===== 服务商行卡片单选 ===== */
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-l2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.provider-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border: none;
+  border-bottom: 1px solid var(--border-l2);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 120ms ease;
+}
+.provider-card:last-child {
+  border-bottom: none;
+}
+.provider-card:hover {
+  background: var(--bg-hover);
+}
+.provider-card.active {
+  border-left-color: var(--accent);
+  background: var(--bg-tip);
+}
+.provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.provider-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--label-primary);
+  line-height: 1.3;
+}
+.provider-card.active .provider-name {
+  color: var(--accent);
+}
+.provider-desc {
+  font-size: 12px;
+  color: var(--label-tertiary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-check {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
 .embedding-row {
   display: flex;
   gap: 12px;
