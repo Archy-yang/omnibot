@@ -5,15 +5,20 @@ import ChatMessage from './ChatMessage.vue';
 
 const props = withDefaults(defineProps<ChatMessageListProps>(), {
   isLoading: false,
+  hasMoreHistory: false,
+  isLoadingOlder: false,
 });
 
-// 冒泡消息内部事件(任务卡片 → 页面打开任务中心)
+// 冒泡消息内部事件(任务卡片 → 页面打开任务中心)+ 历史向前分页
 const emit = defineEmits<{
   'open-task': [taskId: number];
+  'load-older': [];
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
+// 向前分页:前插更早消息后按 scrollHeight 差值回补视口,避免列表跳动
+const pendingRestore = ref<number | null>(null);
 
 const scrollToBottom = async () => {
   if (!shouldAutoScroll.value) return;
@@ -27,9 +32,29 @@ const handleScroll = () => {
   if (!containerRef.value) return;
   const { scrollTop, scrollHeight, clientHeight } = containerRef.value;
   shouldAutoScroll.value = scrollHeight - scrollTop - clientHeight < 50;
+  // 滚近顶部时加载更早的历史(持续对话不一次性全载)
+  if (scrollTop < 60 && props.hasMoreHistory && !props.isLoadingOlder) {
+    pendingRestore.value = scrollHeight;
+    emit('load-older');
+  }
 };
 
-watch(() => props.messages, scrollToBottom, { deep: true });
+watch(
+  () => props.messages.length,
+  async (newLen, oldLen) => {
+    if (pendingRestore.value !== null && newLen > oldLen) {
+      // 前插更早消息:保持视口停在原来看到的位置
+      const prevHeight = pendingRestore.value;
+      pendingRestore.value = null;
+      await nextTick();
+      if (containerRef.value) {
+        containerRef.value.scrollTop = containerRef.value.scrollHeight - prevHeight;
+      }
+      return;
+    }
+    scrollToBottom();
+  }
+);
 onMounted(scrollToBottom);
 
 const examplePrompts = [
@@ -83,6 +108,14 @@ const examplePrompts = [
 
     <!-- Messages -->
     <div v-else class="messages-area">
+      <!-- 历史向前分页指示:顶部加载中 / 已全部加载 -->
+      <div v-if="isLoadingOlder" class="history-status">
+        <span class="history-status-spinner"></span>加载更早的消息...
+      </div>
+      <div v-else-if="!hasMoreHistory && messages.length > 0" class="history-status history-status-end">
+        以上是全部历史
+      </div>
+
       <ChatMessage
         v-for="message in messages"
         :key="message.id"
@@ -124,6 +157,30 @@ const examplePrompts = [
 
 .messages-area {
   padding: 16px 0 24px;
+}
+
+/* 历史向前分页:顶部状态条 */
+.history-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 0 16px;
+  font-size: 12px;
+  color: var(--label-tertiary);
+}
+
+.history-status-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--border-l2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: history-spin 0.8s linear infinite;
+}
+
+@keyframes history-spin {
+  to { transform: rotate(360deg); }
 }
 
 .typing-row {

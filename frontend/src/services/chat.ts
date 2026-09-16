@@ -175,7 +175,8 @@ export const chatService = {
     }
   },
 
-  async getHistory(params?: PaginationParams): Promise<Message[]> {
+  // 历史分页:返回 messages + hasMore(游标 before=当前最旧一条的 id)
+  async getHistory(params?: PaginationParams): Promise<{ messages: Message[]; hasMore: boolean }> {
     try {
       const response = await request.get<ApiResponse<GetHistoryResponse>>('/chat/messages', {
         params: {
@@ -183,7 +184,10 @@ export const chatService = {
           before: params?.before,
         },
       });
-      return response.data.data.messages;
+      return {
+        messages: response.data.data.messages,
+        hasMore: response.data.data.has_more,
+      };
     } catch (error) {
       console.error('Failed to get chat history:', error);
       throw error;

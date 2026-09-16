@@ -13,6 +13,9 @@ export const useChatStore = defineStore(
     // State
     const messages = ref<Message[]>([]);
     const isLoading = ref<boolean>(false);
+    // 历史向前分页状态:是否还有更早消息 / 是否正在加载更早一批
+    const hasMoreHistory = ref<boolean>(true);
+    const isLoadingOlder = ref<boolean>(false);
     // 后台 Agent 任务轮询(08 §4.5):定时查未汇报任务,有则触发主 Agent 流式汇报
     let pollingTimer: ReturnType<typeof setInterval> | null = null;
     const isReporting = ref<boolean>(false); // 正在汇报某任务时暂停轮询避免并发
@@ -173,13 +176,35 @@ export const useChatStore = defineStore(
     const loadHistory = async (): Promise<void> => {
       isLoading.value = true;
       try {
-        const history = await chatService.getHistory();
+        const { messages: history, hasMore } = await chatService.getHistory();
         messages.value = history;
+        hasMoreHistory.value = hasMore;
       } catch (error) {
         console.error('Failed to load chat history:', error);
         throw error;
       } finally {
         isLoading.value = false;
+      }
+    };
+
+    // 历史向前分页:滚到顶部时按游标(当前最旧一条 id)取更早一批并前插,去重防重放
+    const loadOlder = async (): Promise<void> => {
+      if (isLoadingOlder.value || !hasMoreHistory.value || messages.value.length === 0) return;
+      const oldestId = messages.value[0].id;
+      isLoadingOlder.value = true;
+      try {
+        const { messages: older, hasMore } = await chatService.getHistory({
+          limit: 50,
+          before: oldestId,
+        });
+        const existing = new Set(messages.value.map((m) => m.id));
+        const deduped = older.filter((m) => !existing.has(m.id));
+        messages.value = [...deduped, ...messages.value];
+        hasMoreHistory.value = hasMore;
+      } catch (err) {
+        console.error('Failed to load older messages:', err);
+      } finally {
+        isLoadingOlder.value = false;
       }
     };
 
@@ -334,23 +359,21 @@ export const useChatStore = defineStore(
       // State
       messages,
       isLoading,
+      hasMoreHistory,
+      isLoadingOlder,
       // Getters
       messageCount,
       lastMessage,
       // Actions
       sendMessage,
       loadHistory,
+      loadOlder,
       addMessage,
       clearMessages,
       startPollingUnreported,
       stopPollingUnreported,
     };
-  },
-  {
-    persist: {
-      key: 'chat-store',
-      storage: localStorage,
-      pick: ['messages'],
-    },
   }
+  // 不再持久化 messages:持续对话下本地副本无限膨胀,会话正本在 DB,
+  // 历史加载走 /chat/messages 游标分页(见 loadHistory / loadOlder)
 );

@@ -14,7 +14,7 @@ import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
 // v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId(单一长期对话模型)
-const { messages, isLoading, sendMessage, loadHistory, startPollingUnreported, stopPollingUnreported } = useChat();
+const { messages, isLoading, hasMoreHistory, isLoadingOlder, sendMessage, loadHistory, loadOlder, startPollingUnreported, stopPollingUnreported } = useChat();
 const { showSettingsPanel, toggleSettingsPanel, loadConfig } = useSettings();
 const { toasts, error } = useToast();
 
@@ -125,6 +125,9 @@ const handleSend = async (content: string) => {
         <ChatMessageList
           :messages="messages as Message[]"
           :is-loading="isInitializing || isLoading"
+          :has-more-history="hasMoreHistory"
+          :is-loading-older="isLoadingOlder"
+          @load-older="loadOlder"
           @open-task="openTaskDetail"
         >
           <template #avatar="{ message }">

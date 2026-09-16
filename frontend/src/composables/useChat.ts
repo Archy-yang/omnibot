@@ -1,4 +1,5 @@
 import { computed } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useChatStore } from '../stores/chat';
 import type { Message } from '../types/chat';
 
@@ -39,6 +40,11 @@ export function useChat() {
     }
   };
 
+  /** 历史向前分页:滚到顶部时加载更早一批消息 */
+  const loadOlder = async (): Promise<void> => {
+    await chatStore.loadOlder();
+  };
+
   /**
    * 清空所有消息
    */
@@ -60,10 +66,13 @@ export function useChat() {
     // State
     messages,
     isLoading,
+    hasMoreHistory: storeToRefs(chatStore).hasMoreHistory,
+    isLoadingOlder: storeToRefs(chatStore).isLoadingOlder,
     lastMessage,
     // Methods
     sendMessage,
     loadHistory,
+    loadOlder,
     clearMessages,
     startPollingUnreported,
     stopPollingUnreported,

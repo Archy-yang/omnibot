@@ -17,6 +17,10 @@ export type ChatMessageProps = {
 export type ChatMessageListProps = {
   messages: import('./chat').Message[];
   isLoading?: boolean;
+  /** 历史向前分页:是否还有更早消息 */
+  hasMoreHistory?: boolean;
+  /** 历史向前分页:是否正在加载更早一批 */
+  isLoadingOlder?: boolean;
 };
 
 // ChatInput types
