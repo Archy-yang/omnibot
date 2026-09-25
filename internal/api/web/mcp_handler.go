@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"omnibot/internal/middleware"
 	skilldomain "omnibot/internal/domain/skill"
 	skillsvc "omnibot/internal/service/skill"
 
@@ -13,11 +14,11 @@ import (
 
 // MCPManager MCP server 在线管理窄接口(web 层声明,service 层实现)。
 type MCPManager interface {
-	ListServers() ([]skilldomain.ServerView, error)
-	AddServer(in skillsvc.MCPServerInput) (*skilldomain.ServerView, error)
-	UpdateServer(id int64, in skillsvc.MCPServerInput) (*skilldomain.ServerView, error)
+	ListServers(userID int64) ([]skilldomain.ServerView, error)
+	AddServer(in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error)
+	UpdateServer(id int64, in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error)
 	DeleteServer(id int64) error
-	SyncServer(id int64) (*skillsvc.SyncResult, error)
+	SyncServer(id int64, userID int64) (*skillsvc.SyncResult, error)
 	// BeginOAuth 生成授权 URL(M4;state 挂起服务端等回调)。
 	BeginOAuth(ctx context.Context, id int64) (*skillsvc.OAuthBeginResult, error)
 	// HandleOAuthCallback 处理服务商重定向回调(state 校验+换 token 落库)。
@@ -40,6 +41,7 @@ type upsertMCPServerRequest struct {
 	OAuthClientSecret string `json:"oauth_client_secret"`
 	OAuthScopes       string `json:"oauth_scopes"`
 	Enabled           *bool  `json:"enabled" binding:"required"`
+	Shared            bool   `json:"shared"` // true = 共享(所有用户可调用);默认私有
 }
 
 // toInput 请求体 → service 入参。
@@ -48,7 +50,7 @@ func (r *upsertMCPServerRequest) toInput() skillsvc.MCPServerInput {
 		Name: r.Name, BaseURL: r.BaseURL, APIKey: r.APIKey,
 		AuthType: r.AuthType, Transport: r.Transport, OAuthClientID: r.OAuthClientID,
 		OAuthClientSecret: r.OAuthClientSecret, OAuthScopes: r.OAuthScopes,
-		Enabled: *r.Enabled,
+		Enabled: *r.Enabled, Shared: r.Shared,
 	}
 }
 
@@ -58,7 +60,7 @@ func (h *Handler) HandleListMCPServers(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "MCP 管理未启用"})
 		return
 	}
-	views, err := h.mcpManager.ListServers()
+	views, err := h.mcpManager.ListServers(c.GetInt64(middleware.AuthUserIDKey))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "获取服务清单失败"})
 		return
@@ -78,7 +80,7 @@ func (h *Handler) HandleCreateMCPServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请填写服务名称和地址"})
 		return
 	}
-	view, err := h.mcpManager.AddServer(req.toInput())
+	view, err := h.mcpManager.AddServer(req.toInput(), c.GetInt64(middleware.AuthUserIDKey))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -102,7 +104,7 @@ func (h *Handler) HandleUpdateMCPServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请填写服务名称和地址"})
 		return
 	}
-	view, err := h.mcpManager.UpdateServer(id, req.toInput())
+	view, err := h.mcpManager.UpdateServer(id, req.toInput(), c.GetInt64(middleware.AuthUserIDKey))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -139,7 +141,7 @@ func (h *Handler) HandleSyncMCPServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "无效的服务 ID"})
 		return
 	}
-	result, err := h.mcpManager.SyncServer(id)
+	result, err := h.mcpManager.SyncServer(id, c.GetInt64(middleware.AuthUserIDKey))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return

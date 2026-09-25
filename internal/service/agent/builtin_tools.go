@@ -69,6 +69,23 @@ func getTaskIDFromContext(ctx context.Context) int64 {
 	return 0
 }
 
+// mcpSearchAttemptKey 每回合 mcp_search 调用计数(ReActAgent 每轮执行开始注入,
+// mcp_search 工具读取并自增;运行时强制上限,非 prompt 约束)。
+type mcpSearchAttemptKey struct{}
+
+// WithMCPSearchCounter 初始化本回合的 MCP 搜索计数器。
+func WithMCPSearchCounter(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mcpSearchAttemptKey{}, new(int32))
+}
+
+// MCPSearchCounter 取计数器(未注入返回 nil,工具侧跳过限流)。
+func MCPSearchCounter(ctx context.Context) *int32 {
+	if c, ok := ctx.Value(mcpSearchAttemptKey{}).(*int32); ok {
+		return c
+	}
+	return nil
+}
+
 func GetUserIDFromContext(ctx context.Context) int64 {
 	if id, ok := ctx.Value(UserIDContextKey).(int64); ok {
 		return id

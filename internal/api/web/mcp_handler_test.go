@@ -37,14 +37,15 @@ type mockMCPManager struct {
 	callbackState string
 }
 
-func (m *mockMCPManager) ListServers() ([]skilldomain.ServerView, error) {
+func (m *mockMCPManager) ListServers(userID int64) ([]skilldomain.ServerView, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	return m.views, nil
 }
 
-func (m *mockMCPManager) AddServer(in skillsvc.MCPServerInput) (*skilldomain.ServerView, error) {
+func (m *mockMCPManager) AddServer(in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+	_ = userID
 	m.addName, m.addURL, m.addKey, m.addEnabled = in.Name, in.BaseURL, in.APIKey, in.Enabled
 	if m.addErr != nil {
 		return nil, m.addErr
@@ -52,7 +53,8 @@ func (m *mockMCPManager) AddServer(in skillsvc.MCPServerInput) (*skilldomain.Ser
 	return &skilldomain.ServerView{ID: 1, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled, HasAPIKey: in.APIKey != "", ToolCount: 2}, nil
 }
 
-func (m *mockMCPManager) UpdateServer(id int64, in skillsvc.MCPServerInput) (*skilldomain.ServerView, error) {
+func (m *mockMCPManager) UpdateServer(id int64, in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+	_ = userID
 	m.updatedID = id
 	if m.updateErr != nil {
 		return nil, m.updateErr
@@ -81,7 +83,8 @@ func (m *mockMCPManager) DeleteServer(id int64) error {
 	return nil
 }
 
-func (m *mockMCPManager) SyncServer(id int64) (*skillsvc.SyncResult, error) {
+func (m *mockMCPManager) SyncServer(id int64, userID int64) (*skillsvc.SyncResult, error) {
+	_ = userID
 	m.syncedID = id
 	if m.syncErr != nil {
 		return nil, m.syncErr

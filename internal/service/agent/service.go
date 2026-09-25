@@ -3,7 +3,12 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+
+	"omnibot/pkg/logger"
+
+	"go.uber.org/zap"
 )
 
 // AgentServiceConfig 配置 Agent 服务。
@@ -31,6 +36,8 @@ type AgentService struct {
 	defaultLLMClient    LLMClient
 	defaultStreamClient StreamingLLMClient
 	toolRegistry        *ToolRegistry
+	// mcpContext B2:按当前问题语义匹配 MCP 工具,返回晚置注入的 system 文本(可空)。
+	mcpContext          func(ctx context.Context, userID int64, query string) (string, error)
 	maxSteps            int
 	systemPrompt        string
 	hooks               []RoundHook
@@ -70,6 +77,46 @@ func (s *AgentService) DefaultStreamingLLMClient() StreamingLLMClient {
 //   - 返回 AgentResult{FinalResponse, Records},Records 顺序与流式事件时序一致
 //
 // 与 RunStream 行为差异:同步 Run 不向调用方暴露 token / tool_call 中间事件,只给最终
+// 回复。
+//
+// SetMCPContextProvider 注入 MCP 语义匹配晚置上下文(B2;可空 = 不注入)。
+func (s *AgentService) SetMCPContextProvider(p func(ctx context.Context, userID int64, query string) (string, error)) {
+	s.mcpContext = p
+}
+
+// injectMCPContext 在最后一条 user 消息前插入匹配到的 MCP 工具块(Recent Raw 后/问题前,
+// 缓存边界之后零损失)。无命中/无 provider 时原样返回。
+func (s *AgentService) injectMCPContext(ctx context.Context, userID int64, conversation []map[string]interface{}) []map[string]interface{} {
+	if s.mcpContext == nil || len(conversation) == 0 {
+		return conversation
+	}
+	query := ""
+	lastUserIdx := -1
+	for i := len(conversation) - 1; i >= 0; i-- {
+		if conversation[i]["role"] == "user" {
+			query, _ = conversation[i]["content"].(string)
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx < 0 {
+		return conversation
+	}
+	block, err := s.mcpContext(ctx, userID, query)
+	if err != nil {
+		logger.WarnWithFields("mcp: 语义匹配失败,本轮不注入", zap.Int64("user_id", userID), zap.Error(err))
+		return conversation
+	}
+	if strings.TrimSpace(block) == "" {
+		return conversation
+	}
+	out := make([]map[string]interface{}, 0, len(conversation)+1)
+	out = append(out, conversation[:lastUserIdx]...)
+	out = append(out, map[string]interface{}{"role": "system", "content": block})
+	out = append(out, conversation[lastUserIdx:]...)
+	return out
+}
+
 // 文本 + 运行链路。适合微信、飞书等 IM 场景(无 SSE,但仍需复盘记录)。
 //
 // customLLMClient 是 variadic 可选:传 nil 或不传 → 用 default streaming client;
@@ -87,6 +134,8 @@ func (s *AgentService) Run(
 			streamClient = sc
 		}
 	}
+	ctx = WithMCPSearchCounter(ctx)
+	conversation = s.injectMCPContext(ctx, userID, conversation)
 
 	eventCh, err := s.runStreamWithClient(ctx, userID, conversation, streamClient)
 	if err != nil {
@@ -164,6 +213,8 @@ func (s *AgentService) RunStream(
 	if len(customStreamClient) > 0 && customStreamClient[0] != nil {
 		streamClient = customStreamClient[0]
 	}
+	ctx = WithMCPSearchCounter(ctx)
+	conversation = s.injectMCPContext(ctx, userID, conversation)
 	return s.runStreamWithClient(ctx, userID, conversation, streamClient)
 }
 

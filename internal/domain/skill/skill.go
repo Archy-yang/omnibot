@@ -25,10 +25,18 @@ type Skill struct {
 	// 方向 B:主 Agent 是管家,联网抓取必须 delegate 派活)。false 技能仍进子 Agent 全局池。
 	// 勿加 default 标签(同 Enabled):GORM 对零值+default 字段 INSERT 时省略该列,
 	// ON CONFLICT 的 excluded 会取 DB 默认值 true,false 永远写不进去。
-	MainVisible bool      `gorm:"not null"`
-	MCPServer   string    `gorm:"size:64;index"` // source=mcp 时所属 server 名(config.yaml 内的 name)
-	CreatedAt   time.Time `gorm:"not null"`
-	UpdatedAt   time.Time `gorm:"not null"`
+	MainVisible bool   `gorm:"not null"`
+	MCPServer   string `gorm:"size:64;index"` // source=mcp 时所属 server 名(config.yaml 内的 name)
+	// UserID 归属用户(MCP 按人隔离):0 = 共享/内置;>0 = 私有(server 归属继承)。
+	UserID int64 `gorm:"index;not null;default:0"`
+	// ToolName 原始工具名(source=mcp 时填;Name 做目录主键可带 server 前缀,
+	// mcp_call 按本列 + 用户作用域解析)。builtin 为空。
+	ToolName string `gorm:"size:64;index"`
+	// Embedding 工具描述向量(B2 语义匹配用;同步时生成,重同步覆盖)。
+	Embedding      []float32 `gorm:"serializer:json"`
+	EmbeddingModel string    `gorm:"size:100"`
+	CreatedAt      time.Time `gorm:"not null"`
+	UpdatedAt      time.Time `gorm:"not null"`
 }
 
 func (Skill) TableName() string {
@@ -48,11 +56,16 @@ type BuiltinDef struct {
 
 // MCPToolDef MCP server 发现的远端工具定义(source=mcp,启动同步时 upsert)。
 type MCPToolDef struct {
-	Name         string
+	Name         string // 目录主键(mcp:<serverID>:<toolName>,全局唯一)
+	ToolName     string // 原始工具名(LLM/mcp_call 使用)
 	DisplayName  string
 	Description  string
-	MCPServer    string // 所属 server 名(config.yaml)
+	MCPServer    string // 所属 server 名
 	ParamsSchema string // InputSchema JSON
 	MainVisible  bool
 	Enabled      bool // 仅插入时生效(默认停用);upsert 不覆盖用户启停
+	// 按人隔离 + 语义匹配
+	UserID         int64     // server 归属(0=共享)
+	Embedding      []float32 // 描述向量(B2 匹配;空=未向量化)
+	EmbeddingModel string
 }

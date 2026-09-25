@@ -286,10 +286,19 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
 		logger.Error("技能应用到工具池失败: " + err.Error())
 	}
+	// B2:MCP 元工具恒定注入主 Agent tools 参数(mcp_call/mcp_search);
+	// 具体 MCP 工具走语义匹配晚置注入,不再全量进 registry。
+	agentToolRegistry.Register(skillSvc.CreateMCPCallTool())
+	agentToolRegistry.Register(skillSvc.CreateMCPSearchTool())
 
 	// M3:MCP server 在线配置(DB 为单一事实源,config.yaml 仅首次启动 seed)。
 	skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
 	skillSvc.SetMCPServerRepository(mcpServerRepo)
+	// B2:工具描述向量化 provider(用户级解析,与沉淀/召回同模式)
+	skillSvc.SetEmbeddingProvider(memoryEmbedding)
+	skillSvc.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
+		return embeddingResolver.ResolveEmbeddingProvider(userID)
+	})
 	// M4:OAuth 回调基址(redirect_uri 须与服务商登记一致)
 	oauthRedirectBase := cfg.App.ExternalURL
 	if oauthRedirectBase == "" {
@@ -367,6 +376,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			agentpkg.NewForceSummaryHook(agentLLMClient),
 		},
 	})
+	// B2:每轮按问题语义匹配 MCP 工具,以 system 消息晚置注入(Recent Raw 后/当前问题前)。
+	agentSvc.SetMCPContextProvider(skillSvc.BuildMCPContextBlock)
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)

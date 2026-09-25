@@ -66,6 +66,14 @@ const skillSourceLabel = (source: string): string =>
 
 // ===== MCP 服务管理 =====
 const servers = ref<MCPServerItem[]>([]);
+// 抽屉双 tab:工具(内置 function call)/连接器(MCP server 及其工具能力)
+const activeTab = ref<'tools' | 'connectors'>('tools');
+const expandedServers = ref<Set<number>>(new Set());
+const toggleServerExpand = (id: number) => {
+  const next = new Set(expandedServers.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  expandedServers.value = next;
+};
 const serversLoading = ref(false);
 const busyServerId = ref<number | null>(null);
 
@@ -234,9 +242,18 @@ watch(
 </script>
 
 <template>
-  <DialogShell :visible="visible" title="技能" width="640px" @close="emit('close')">
-    <!-- ===== MCP 服务 section ===== -->
-    <div class="section-title">外部能力服务</div>
+  <DialogShell :visible="visible" title="扩展能力" width="640px" @close="emit('close')">
+    <!-- ===== tab 栏:工具 / 连接器 ===== -->
+    <div class="cap-tabs">
+      <button type="button" class="cap-tab" :class="{ active: activeTab === 'tools' }" @click="activeTab = 'tools'">工具</button>
+      <button type="button" class="cap-tab" :class="{ active: activeTab === 'connectors' }" @click="activeTab = 'connectors'">
+        连接器<span v-if="servers.length > 0" class="cap-tab-count">{{ servers.length }}</span>
+      </button>
+    </div>
+
+    <!-- ===== 连接器 tab(MCP) ===== -->
+    <div v-show="activeTab === 'connectors'">
+    <div class="section-title">连接器</div>
     <p class="section-hint">接入 MCP 服务后,它提供的技能会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
 
     <div v-if="serversLoading" class="hint-text">加载中...</div>
@@ -245,7 +262,7 @@ watch(
     </div>
     <ul v-else class="server-list">
       <li v-for="server in servers" :key="server.id" class="server-item">
-        <div class="server-info">
+        <div class="server-info" role="button" @click="toggleServerExpand(server.id)">
           <div class="server-name-row">
             <span class="server-name">{{ server.name }}</span>
             <span v-if="server.auth_type === 'oauth'" class="server-badge" :class="server.authorized ? '' : 'is-off'">
@@ -285,6 +302,14 @@ watch(
             @click="handleDeleteServer(server)"
           >删除</button>
         </div>
+        <!-- 工具能力折叠区(点击 server 行展开) -->
+        <ul v-if="expandedServers.has(server.id) && server.tools && server.tools.length > 0" class="server-tools">
+          <li v-for="t in server.tools" :key="t.name" class="server-tool">
+            <span class="server-tool-name">{{ t.name }}</span>
+            <span class="server-tool-desc">{{ t.description }}</span>
+          </li>
+        </ul>
+        <div v-else-if="expandedServers.has(server.id)" class="hint-text">该连接器暂未同步到工具</div>
       </li>
     </ul>
 
@@ -390,10 +415,11 @@ watch(
       class="add-server-btn"
       @click="openCreateForm"
     >+ 接入新服务</button>
+    </div><!-- /连接器 tab -->
 
-    <!-- ===== 技能清单 section ===== -->
-    <div class="section-skills">
-      <div class="section-title">技能</div>
+    <!-- ===== 工具 tab(内置 function call 技能) ===== -->
+    <div v-show="activeTab === 'tools'" class="section-skills">
+      <div class="section-title">工具</div>
 
       <div v-if="skillsLoading" class="hint-text">加载中...</div>
       <div v-else-if="skills.length === 0" class="hint-text">暂无可用技能</div>
@@ -433,6 +459,71 @@ watch(
 </template>
 
 <style scoped>
+/* ===== tab 栏(工具/连接器) ===== */
+.cap-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 3px;
+  background: var(--bg-tip);
+  border-radius: 8px;
+}
+.cap-tab {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--label-tertiary);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.cap-tab.active {
+  background: var(--bg-base);
+  color: var(--label-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.cap-tab-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--label-tertiary);
+}
+
+/* ===== 连接器工具折叠区 ===== */
+.server-tools {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--bg-tip);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.server-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.server-tool-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--label-primary);
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+.server-tool-desc {
+  font-size: 11px;
+  color: var(--label-tertiary);
+  line-height: 1.4;
+}
+
 .section-title {
   font-size: 15px;
   font-weight: 600;

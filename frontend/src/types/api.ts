@@ -274,6 +274,8 @@ export interface MCPServerItem {
   transport: string;
   /** 上次同步发现的工具数(-1=从未同步成功) */
   tool_count: number;
+  /** 目录中的工具能力(连接器折叠展示) */
+  tools?: { name: string; description: string }[];
 }
 
 /**

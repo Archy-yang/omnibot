@@ -110,17 +110,20 @@ func TestAddServer_EncryptsAndSyncs(t *testing.T) {
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
 
-	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "sk-secret-1", Enabled: true})
+	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "sk-secret-1", Enabled: true}, 42)
 	require.NoError(t, err)
 	assert.True(t, view.HasAPIKey)
 	assert.Equal(t, 1, view.ToolCount)
 	assert.NotContains(t, serverRepo.servers[0].APIKey, "sk-secret-1", "落库必须是密文")
 	assert.True(t, strings.HasPrefix(serverRepo.servers[0].APIKey, "enc:"), "密文带前缀标识")
 
-	// 技能已落库(默认停用)
-	require.Len(t, skillRepo.upsertedMCP, 1)
-	assert.Equal(t, "gh_search", skillRepo.upsertedMCP[0].Name)
-	assert.False(t, skillRepo.upsertedMCP[0].Enabled)
+	// B2:工具进内存目录(默认可用),不再落 skills 库
+	svc.catalog.mu.RLock()
+	tools := svc.catalog.byServer[serverRepo.servers[0].ID]
+	svc.catalog.mu.RUnlock()
+	require.Len(t, tools, 1)
+	assert.Equal(t, "gh_search", tools[0].Name)
+	assert.Equal(t, int64(42), tools[0].OwnerUserID, "私有 server 归属创建者")
 }
 
 // 测试 19:AddServer 校验:名称/地址必填,地址必须 http(s),重名拒绝。
@@ -128,16 +131,16 @@ func TestAddServer_Validation(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, &mockSkillRepository{}, enabledClient("t"))
 
-	_, err := svc.AddServer(MCPServerInput{Name: "", BaseURL: "https://x.com", APIKey: "", Enabled: true})
+	_, err := svc.AddServer(MCPServerInput{Name: "", BaseURL: "https://x.com", APIKey: "", Enabled: true}, 42)
 	require.Error(t, err)
 
-	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "ftp://x.com", APIKey: "", Enabled: true})
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "ftp://x.com", APIKey: "", Enabled: true}, 42)
 	require.Error(t, err)
 
-	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://x.com", APIKey: "", Enabled: true})
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://x.com", APIKey: "", Enabled: true}, 42)
 	require.NoError(t, err)
 
-	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://y.com", APIKey: "", Enabled: true}) // 重名
+	_, err = svc.AddServer(MCPServerInput{Name: "a", BaseURL: "https://y.com", APIKey: "", Enabled: true}, 42) // 重名
 	require.Error(t, err)
 }
 
@@ -149,7 +152,7 @@ func TestAddServer_DisabledNoConnect(t *testing.T) {
 	client := &mockMCPClient{}
 	svc.SetMCPClientFactory(mockFactory(client))
 
-	_, err := svc.AddServer(MCPServerInput{Name: "off", BaseURL: "https://x.com", APIKey: "", Enabled: false})
+	_, err := svc.AddServer(MCPServerInput{Name: "off", BaseURL: "https://x.com", APIKey: "", Enabled: false}, 42)
 	require.NoError(t, err)
 	assert.False(t, client.started, "停用的 server 不得发起连接")
 	assert.Empty(t, skillRepo.upsertedMCP)
@@ -162,74 +165,74 @@ func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true})
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 	cipherKey := serverRepo.servers[0].APIKey
 
 	// 空 key 更新 → 保留
-	view, err := svc.UpdateServer(serverRepo.servers[0].ID, MCPServerInput{Name: "github", BaseURL: "https://new.com", Enabled: true})
+	view, err := svc.UpdateServer(serverRepo.servers[0].ID, MCPServerInput{Name: "github", BaseURL: "https://new.com", Enabled: true}, 42)
 	require.NoError(t, err)
 	assert.Equal(t, cipherKey, serverRepo.servers[0].APIKey, "空 key 不得清掉原密钥")
 	assert.Equal(t, "https://new.com", view.BaseURL)
 }
 
-// 测试 22:UpdateServer 改为 disabled → 移除其执行体(技能隐藏)。
+// 测试 22:UpdateServer 改为 disabled → 目录即时失效(工具不可调用、不参与匹配)。
 func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true})
+	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 
-	svc.mu.RLock()
-	_, had := svc.mcpExecutors["gh_search"]
-	svc.mu.RUnlock()
-	require.True(t, had)
+	svc.catalog.mu.RLock()
+	_, had := svc.catalog.byServer[view.ID]
+	svc.catalog.mu.RUnlock()
+	require.True(t, had, "启用同步后目录应有该 server 的工具")
 
-	_, err = svc.UpdateServer(view.ID, MCPServerInput{Name: "github", BaseURL: "https://old.com", Enabled: false})
+	_, err = svc.UpdateServer(view.ID, MCPServerInput{Name: "github", BaseURL: "https://old.com", Enabled: false}, 42)
 	require.NoError(t, err)
-	svc.mu.RLock()
-	_, had = svc.mcpExecutors["gh_search"]
-	svc.mu.RUnlock()
-	assert.False(t, had, "停用后执行体应移除,技能隐藏")
+	svc.catalog.mu.RLock()
+	_, had = svc.catalog.byServer[view.ID]
+	svc.catalog.mu.RUnlock()
+	assert.False(t, had, "停用后目录应即时失效")
 }
 
 // ---- DeleteServer ----
 
-// 测试 23:DeleteServer 级联删技能行+移除执行体。
+// 测试 23:DeleteServer → 目录即时失效(内存缓存,无库表残留)。
 func TestDeleteServer_CascadesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true})
+	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)
 
 	err := svc.DeleteServer(view.ID)
 	require.NoError(t, err)
 	assert.True(t, serverRepo.deleted)
-	assert.Equal(t, []string{"github"}, skillRepo.deletedServers, "级联删除该 server 的技能行")
-	svc.mu.RLock()
-	_, had := svc.mcpExecutors["gh_search"]
-	svc.mu.RUnlock()
-	assert.False(t, had)
+	svc.catalog.mu.RLock()
+	_, had := svc.catalog.byServer[view.ID]
+	svc.catalog.mu.RUnlock()
+	assert.False(t, had, "删除后目录应即时失效")
 }
-
-// ---- SyncServer(手动同步) ----
-
 // 测试 24:手动同步发现新工具落库;失败的 server 返回可读错误不 panic。
 func TestSyncServer_Manual(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{startErr: assert.AnError})
-	view, _ := svc.AddServer(MCPServerInput{Name: "broken", BaseURL: "https://x.com", APIKey: "", Enabled: true}) // 同步失败但落库成功
+	// 永远失败的工厂(回退链的每次尝试都失败,而非靠下一个 mock 意外成功)
+	svc.SetMCPClientFactory(func(spec MCPServerSpec) (MCPClient, error) {
+		return &mockMCPClient{startErr: assert.AnError}, nil
+	})
+	view, _ := svc.AddServer(MCPServerInput{Name: "broken", BaseURL: "https://x.com", APIKey: "", Enabled: true}, 42) // 同步失败但落库成功
 
-	res, err := svc.SyncServer(view.ID)
+	res, err := svc.SyncServer(view.ID, 42)
 	require.NoError(t, err, "同步失败以结果字段表达,不作为调用错误")
 	assert.NotEmpty(t, res.Err)
 	assert.Equal(t, 0, res.ToolCount)
 
 	// 换成好的 client 再同步
 	svc.SetMCPClientFactory(mockFactory(enabledClient("gh_search")))
-	res, err = svc.SyncServer(view.ID)
+	res, err = svc.SyncServer(view.ID, 42)
 	require.NoError(t, err)
 	assert.Empty(t, res.Err)
 	assert.Equal(t, 1, res.ToolCount)
@@ -246,15 +249,19 @@ func TestListServers_MaskedView(t *testing.T) {
 		mcpRow("t3", "github", false),
 	}}
 	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{}) // 空工具列表,不干扰预置计数
-	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-abc", Enabled: true})
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-abc", Enabled: true}, 42)
 	require.NoError(t, err)
 
-	views, err := svc.ListServers()
+	views, err := svc.ListServers(42)
 	require.NoError(t, err)
-	require.Len(t, views, 1)
+	require.Len(t, views, 1, "本人私有 server 可见")
 	assert.True(t, views[0].HasAPIKey)
-	assert.Equal(t, 3, views[0].ToolCount)
+	assert.Equal(t, 0, views[0].ToolCount, "工具数来自目录(空工具清单=0),不再统计技能行")
 	assert.NotContains(t, views[0].Name, "sk-abc")
+	// 他人视角:私有 server 不可见
+	viewsOther, err := svc.ListServers(43)
+	require.NoError(t, err)
+	assert.Empty(t, viewsOther, "其他用户看不到私有 server")
 }
 
 // ---- 启动同步 ----
@@ -264,7 +271,7 @@ func TestSyncAllServers_FromDB(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	skillRepo := &mockSkillRepository{}
 	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
-	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true})
+	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 
 	// 新 service 实例模拟重启:执行体为空,SyncAllServers 重建
@@ -274,12 +281,13 @@ func TestSyncAllServers_FromDB(t *testing.T) {
 	svc2.SetMCPClientFactory(mockFactory(client))
 
 	require.NoError(t, svc2.SyncAllServers(context.Background()))
-	// AddServer 同步一次 + SyncAllServers 再同步一次 → 两次 upsert(每次同步都会 upsert)
-	require.Len(t, skillRepo.upsertedMCP, 2)
-	svc2.mu.RLock()
-	_, had := svc2.mcpExecutors["gh_search"]
-	svc2.mu.RUnlock()
-	assert.True(t, had)
+	// 重启后目录从 DB 配置重建(内存缓存,无需持久层恢复)
+	svc2.catalog.mu.RLock()
+	tools := svc2.catalog.byServer[1]
+	svc2.catalog.mu.RUnlock()
+	require.Len(t, tools, 1)
+	assert.Equal(t, "gh_search", tools[0].Name)
+	assert.Equal(t, int64(42), tools[0].OwnerUserID, "私有行归属创建者")
 }
 
 // 测试 27:SeedServersFromConfig 仅当库为空时导入 yaml 配置,返回导入数。

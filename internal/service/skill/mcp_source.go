@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -13,7 +12,6 @@ import (
 	mcp "github.com/mark3labs/mcp-go/mcp"
 
 	skilldomain "omnibot/internal/domain/skill"
-	agentpkg "omnibot/internal/service/agent"
 )
 
 // MCPClient MCP 客户端窄接口(service 层声明;mark3labs/mcp-go 的 *client.Client 实现)。
@@ -115,136 +113,6 @@ func newSSEMCPClient(spec MCPServerSpec) (MCPClient, error) {
 }
 
 // mcpExecutorName 技能名 → CallTool 工具名(M2 中两者一致;预留映射位)。
-type mcpExecutor func(ctx context.Context, args map[string]interface{}) (string, error)
-
-// SetMCPClientFactory 注入客户端工厂(装配/测试用)。
-func (s *SkillService) SetMCPClientFactory(f MCPClientFactory) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mcpFactory = f
-}
-
-// SyncMCPServers 与配置的 MCP server 同步:发现工具 → upsert 技能(默认停用)→ 注册执行体。
-// 单个 server 失败不阻塞整体(13-技术方案 §6.2):该 server 技能隐藏,助手口径"没有这个技能"。
-// 从 spec 列表移除的 server,其技能行被清理。
-func (s *SkillService) SyncMCPServers(ctx context.Context, specs []MCPServerSpec) error {
-	// 收集所有配置内 server 名,清理已移除 server 的技能行
-	names := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		names = append(names, spec.Name)
-	}
-	if _, err := s.repo.DeleteMCPSkillsNotIn(names); err != nil {
-		return fmt.Errorf("skill: cleanup removed mcp servers: %w", err)
-	}
-
-	for _, spec := range specs {
-		if !spec.Enabled {
-			continue // 停用的 server 不发起任何连接(未开启技能不外发数据,PRD 4.4)
-		}
-		s.syncOneServer(ctx, spec)
-	}
-	return nil
-}
-
-// syncOneServer 同步单个 server;失败记日志并返回(不阻塞其他 server)。
-func (s *SkillService) syncOneServer(ctx context.Context, spec MCPServerSpec) {
-	s.mu.RLock()
-	factory := s.mcpFactory
-	s.mu.RUnlock()
-	if factory == nil {
-		return
-	}
-
-	mcpClient, err := factory(spec)
-	if err != nil {
-		fmt.Printf("[skill] mcp server %q client create failed: %v\n", spec.Name, err)
-		return
-	}
-	if err := mcpClient.Start(ctx); err != nil {
-		fmt.Printf("[skill] mcp server %q start failed: %v\n", spec.Name, err)
-		return
-	}
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "omnibot", Version: "1.0"}
-	if _, err := mcpClient.Initialize(ctx, initReq); err != nil {
-		fmt.Printf("[skill] mcp server %q initialize failed: %v\n", spec.Name, err)
-		return
-	}
-	result, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{})
-	if err != nil {
-		fmt.Printf("[skill] mcp server %q list tools failed: %v\n", spec.Name, err)
-		return
-	}
-
-	s.ingestServerTools(spec.Name, mcpClient, result.Tools)
-}
-
-// registerMCPExecutor 注册 mcp 技能执行体(技能名 → CallTool 闭包)。
-func (s *SkillService) registerMCPExecutor(name string, exec mcpExecutor) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mcpExecutors[name] = exec
-}
-
-// makeMCPToolExecutor 构造单工具执行闭包:CallTool + 文本内容抽取 + 30s 超时。
-func makeMCPToolExecutor(mcpClient MCPClient, toolName string) mcpExecutor {
-	return func(ctx context.Context, args map[string]interface{}) (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, MCPToolTimeout)
-		defer cancel()
-
-		req := mcp.CallToolRequest{}
-		req.Params.Name = toolName
-		if args != nil {
-			req.Params.Arguments = args
-		}
-		result, err := mcpClient.CallTool(callCtx, req)
-		if err != nil {
-			return "", fmt.Errorf("技能暂时不可用(%s): %w", toolName, err)
-		}
-		if result.IsError {
-			return "", fmt.Errorf("技能调用失败(%s): %s", toolName, mcpContentText(result))
-		}
-		return mcpContentText(result), nil
-	}
-}
-
-// mcpContentText 抽取 CallToolResult 的文本内容(多个 TextContent 换行拼接)。
-func mcpContentText(result *mcp.CallToolResult) string {
-	var texts []string
-	for _, c := range result.Content {
-		if tc, ok := c.(mcp.TextContent); ok {
-			texts = append(texts, tc.Text)
-		}
-	}
-	if len(texts) == 0 {
-		return "(无文本内容)"
-	}
-	return strings.Join(texts, "\n")
-}
-
-// buildMCPTool 由 skill 行 + mcp 执行体构造运行时 Tool。
-// 远端定义以库内行为准(同步时来自 ListTools);执行体缺失或 schema 非法 → false(隐藏)。
-func (s *SkillService) buildMCPTool(row *skilldomain.Skill) (agentpkg.Tool, bool) {
-	s.mu.RLock()
-	exec, ok := s.mcpExecutors[row.Name]
-	s.mu.RUnlock()
-	if !ok {
-		return agentpkg.Tool{}, false
-	}
-	schema, ok := skilldomain.UnmarshalSchema(row.ParamsSchema)
-	if !ok {
-		return agentpkg.Tool{}, false
-	}
-	return agentpkg.Tool{
-		Name:         row.Name,
-		Description:  row.Description,
-		DisplayLabel: row.DisplayName,
-		Capabilities: skilldomain.SplitCapabilities(row.Capabilities),
-		Parameters:   schema,
-		Execute:      exec,
-	}, true
-}
 
 // MCPToolTimeout MCP 工具调用超时。
 const MCPToolTimeout = 30 * time.Second

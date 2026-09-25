@@ -1,12 +1,15 @@
 package skill
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	skilldomain "omnibot/internal/domain/skill"
 	agentpkg "omnibot/internal/service/agent"
+	memoryservice "omnibot/internal/service/memory"
 )
 
 // ToolBuilder 技能执行体的构造器(builtin):返回带 Execute 闭包的工具。
@@ -28,12 +31,8 @@ type SkillView struct {
 // SkillRepository 技能持久化窄接口(service 层声明,repository 层实现)。
 type SkillRepository interface {
 	UpsertBuiltin(def skilldomain.BuiltinDef) error
-	// UpsertMCPTool upsert MCP 发现的远端工具:插入默认停用,更新定义字段不碰 Enabled。
-	UpsertMCPTool(def skilldomain.MCPToolDef) error
-	// DeleteMCPSkillsNotIn 清理不在配置内的 MCP server 的技能行(配置移除后)。
-	DeleteMCPSkillsNotIn(serverNames []string) (int64, error)
-	// DeleteMCPSkillsByServer 删除指定 server 的全部技能行(server 删除级联/重新同步)。
-	DeleteMCPSkillsByServer(serverName string) (int64, error)
+	// DeleteAllMCPSkills 清理全部 source=mcp 技能行(目录化后的一次性清废)。
+	DeleteAllMCPSkills() (int64, error)
 	List() ([]*skilldomain.Skill, error)
 	GetByName(name string) (*skilldomain.Skill, error)
 	SetEnabled(name string, enabled bool) error
@@ -55,7 +54,6 @@ type SkillService struct {
 	builders     map[string]ToolBuilder
 	mainVisible  map[string]bool
 	mcpFactory   MCPClientFactory
-	mcpExecutors map[string]mcpExecutor
 	main         *agentpkg.ToolRegistry
 	global       *agentpkg.ToolRegistry
 
@@ -63,6 +61,50 @@ type SkillService struct {
 	oauthRedirectBase string // 回调基址(装配点注入 app.external_url)
 	pendingMu         sync.RWMutex
 	pendingOAuth      map[string]*pendingOAuth // state → 进行中的授权流程
+
+	// B2 语义匹配:embedding provider(系统默认 + 用户级解析,与沉淀/召回同模式)
+	embedding         memoryservice.EmbeddingProvider
+	embeddingResolver func(userID int64) memoryservice.EmbeddingProvider
+	// MCP 工具目录(内存缓存,不入库;见 mcp_catalog.go)
+	catalog *MCPToolCatalog
+}
+
+// SetMCPClientFactory 注入客户端工厂(装配/测试用)。
+func (s *SkillService) SetMCPClientFactory(f MCPClientFactory) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mcpFactory = f
+}
+
+// SetEmbeddingProvider 注入系统默认向量 provider(可空)。
+func (s *SkillService) SetEmbeddingProvider(p memoryservice.EmbeddingProvider) { s.embedding = p }
+
+// SetEmbeddingResolver 注入用户级向量解析(非 nil 且返回非 nil 时优先)。
+func (s *SkillService) SetEmbeddingResolver(r func(userID int64) memoryservice.EmbeddingProvider) {
+	s.embeddingResolver = r
+}
+
+// providerFor 取生效 provider(匹配同模型向量)。
+func (s *SkillService) providerFor(userID int64) memoryservice.EmbeddingProvider {
+	if s.embeddingResolver != nil {
+		if p := s.embeddingResolver(userID); p != nil {
+			return p
+		}
+	}
+	return s.embedding
+}
+
+// embedToolDesc 描述向量化;失败返回空(不参与匹配,重同步重试)。
+func (s *SkillService) embedToolDesc(provider memoryservice.EmbeddingProvider, toolName, desc, serverName string) ([]float32, string) {
+	if provider == nil || strings.TrimSpace(desc) == "" {
+		return nil, ""
+	}
+	vecs, err := provider.Embed(context.Background(), []string{toolName + "\n" + desc})
+	if err != nil || len(vecs) != 1 {
+		fmt.Printf("[skill] mcp tool %q (server %s) 向量化失败,不参与语义匹配: %v\n", toolName, serverName, err)
+		return nil, ""
+	}
+	return vecs[0], provider.Name()
 }
 
 func NewSkillService(repo SkillRepository) *SkillService {
@@ -70,8 +112,8 @@ func NewSkillService(repo SkillRepository) *SkillService {
 		repo:         repo,
 		builders:     make(map[string]ToolBuilder),
 		mainVisible:  make(map[string]bool),
-		mcpExecutors: make(map[string]mcpExecutor),
 		pendingOAuth: make(map[string]*pendingOAuth),
+		catalog:      newMCPToolCatalog(),
 	}
 }
 
@@ -182,6 +224,11 @@ func (s *SkillService) ApplyTo(main, global *agentpkg.ToolRegistry) error {
 		main.Remove(row.Name)
 		global.Remove(row.Name)
 
+		// B2:MCP 工具不再进 registry——调用统一走 mcp_call 元工具(按用户作用域解析),
+		// 目录行仅作为能力清单参与语义匹配。
+		if row.Source == skilldomain.SourceMCP {
+			continue
+		}
 		if !row.Enabled {
 			continue
 		}
@@ -201,10 +248,8 @@ func (s *SkillService) ApplyTo(main, global *agentpkg.ToolRegistry) error {
 	return nil
 }
 
-// buildTool 由 skill 行构造运行时 Tool。
-// builtin:定义以代码 builder 为准(与执行体同源,发版即更新);
-// mcp:定义以库内行为准(同步自 ListTools),执行体来自 CallTool 闭包;
-// 执行体缺失 → false,技能隐藏(13-技术方案 §3 原则 3)。
+// buildTool 由 skill 行构造运行时 Tool(builtin:定义以代码 builder 为准)。
+// MCP 行不再走此路径:工具目录在内存,调用统一走 mcp_call(B2)。
 func (s *SkillService) buildTool(row *skilldomain.Skill) (agentpkg.Tool, bool) {
 	s.mu.RLock()
 	builder, ok := s.builders[row.Name]
@@ -212,5 +257,5 @@ func (s *SkillService) buildTool(row *skilldomain.Skill) (agentpkg.Tool, bool) {
 	if ok {
 		return builder(), true
 	}
-	return s.buildMCPTool(row)
+	return agentpkg.Tool{}, false
 }

@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -87,6 +86,7 @@ type MCPServerInput struct {
 	OAuthClientSecret string
 	OAuthScopes       string
 	Enabled           bool
+	Shared            bool // true = 共享服务(所有用户可调用);默认私有(归属创建者)
 }
 
 // normalizeAuthType 鉴权方式校验与归一。
@@ -112,8 +112,8 @@ func normalizeTransport(t string) (string, error) {
 	}
 }
 
-// AddServer 新增 MCP server:加密落库 → enabled 则立即同步(失败不回滚,可手动重试)。
-func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, error) {
+// AddServer 新增 MCP server:加密落库(归属创建者,NULL=共享)→ enabled 则立即同步。
+func (s *SkillService) AddServer(in MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
 	name := strings.TrimSpace(in.Name)
 	if err := validateServerInput(name, in.BaseURL); err != nil {
 		return nil, err
@@ -143,10 +143,15 @@ func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, er
 	if err != nil {
 		return nil, err
 	}
+	var owner *int64
+	if !in.Shared {
+		owner = &userID
+	}
 	row := &skilldomain.MCPServer{
 		Name: name, BaseURL: in.BaseURL, APIKey: cipher, Enabled: in.Enabled,
 		AuthType:          authType,
 		Transport:         transport,
+		UserID:            owner,
 		OAuthClientID:     strings.TrimSpace(in.OAuthClientID),
 		OAuthClientSecret: cipherSecret,
 		OAuthScopes:       strings.TrimSpace(in.OAuthScopes),
@@ -160,8 +165,8 @@ func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, er
 	return s.serverToView(row)
 }
 
-// UpdateServer 更新配置并按需重新同步(enabled 切换会装卸执行体;apiKey/client_secret 空 = 保留原值)。
-func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.ServerView, error) {
+// UpdateServer 更新配置并按需重新同步(仅归属人可改;apiKey/client_secret 空 = 保留原值)。
+func (s *SkillService) UpdateServer(id int64, in MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
 	name := strings.TrimSpace(in.Name)
 	if err := validateServerInput(name, in.BaseURL); err != nil {
 		return nil, err
@@ -183,6 +188,9 @@ func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.S
 	row, err := repo.GetByID(id)
 	if err != nil || row == nil {
 		return nil, fmt.Errorf("服务不存在")
+	}
+	if row.UserID != nil && *row.UserID != userID {
+		return nil, fmt.Errorf("服务不存在") // 私有服务不外泄存在性
 	}
 	if other, _ := repo.GetByName(name); other != nil && other.ID != id {
 		return nil, fmt.Errorf("已存在同名服务 %q", name)
@@ -216,16 +224,16 @@ func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.S
 		return nil, fmt.Errorf("保存服务失败: %w", err)
 	}
 
-	// 开关变化 → 重新装卸
+	// 开关变化:停用 → 目录即时失效(工具不可调用、不参与匹配);开启 → 重新同步
 	if wasEnabled && !row.Enabled {
-		s.dropServerRuntime(row.Name) // 停用:移除执行体,技能隐藏
+		s.catalog.remove(row.ID)
 	} else if row.Enabled {
 		s.syncServerRow(row)
 	}
 	return s.serverToView(row)
 }
 
-// DeleteServer 删除 server 并级联删除其技能行、移除执行体。
+// DeleteServer 删除 server:目录即时失效(内存缓存,无库表残留)。
 func (s *SkillService) DeleteServer(id int64) error {
 	s.mu.RLock()
 	repo := s.serverRepo
@@ -240,17 +248,13 @@ func (s *SkillService) DeleteServer(id int64) error {
 	if err := repo.Delete(id); err != nil {
 		return fmt.Errorf("删除服务失败: %w", err)
 	}
-	s.dropServerRuntime(row.Name)
-	if s.skillRepo() != nil {
-		if _, err := s.skillRepo().DeleteMCPSkillsByServer(row.Name); err != nil {
-			return fmt.Errorf("级联删除技能失败: %w", err)
-		}
-	}
+	// 目录随连接器删除即时失效(内存缓存,无库表残留)
+	s.catalog.remove(row.ID)
 	return nil
 }
 
-// SyncServer 手动同步单个 server。失败以 SyncResult.Err 表达(调用无错)。
-func (s *SkillService) SyncServer(id int64) (*SyncResult, error) {
+// SyncServer 手动同步单个 server(共享可同步;私有仅归属人)。失败以 SyncResult.Err 表达。
+func (s *SkillService) SyncServer(id int64, userID int64) (*SyncResult, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -261,14 +265,17 @@ func (s *SkillService) SyncServer(id int64) (*SyncResult, error) {
 	if err != nil || row == nil {
 		return nil, fmt.Errorf("服务不存在")
 	}
+	if row.UserID != nil && *row.UserID != userID {
+		return nil, fmt.Errorf("服务不存在")
+	}
 	if !row.Enabled {
 		return nil, fmt.Errorf("服务已停用,请先开启")
 	}
 	return s.syncServerRow(row), nil
 }
 
-// ListServers 掩码视图列表(按 id 升序)。
-func (s *SkillService) ListServers() ([]skilldomain.ServerView, error) {
+// ListServers 掩码视图列表(共享 + 本人私有,按 id 升序)。
+func (s *SkillService) ListServers(userID int64) ([]skilldomain.ServerView, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -279,6 +286,13 @@ func (s *SkillService) ListServers() ([]skilldomain.ServerView, error) {
 	if err != nil {
 		return nil, err
 	}
+	filtered := make([]*skilldomain.MCPServer, 0, len(rows))
+	for _, r := range rows {
+		if r.UserID == nil || *r.UserID == userID {
+			filtered = append(filtered, r)
+		}
+	}
+	rows = filtered
 	views := make([]skilldomain.ServerView, 0, len(rows))
 	for _, row := range rows {
 		view, err := s.serverToView(row)
@@ -303,16 +317,16 @@ func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.Se
 		Authorized: row.Authorized(),
 		ToolCount:  -1,
 	}
-	if skillRepo := s.skillRepo(); skillRepo != nil {
-		if rows, err := skillRepo.List(); err == nil {
-			n := 0
-			for _, r := range rows {
-				if r.Source == skilldomain.SourceMCP && r.MCPServer == row.Name {
-					n++
-				}
+	if s.catalog != nil {
+		s.catalog.mu.RLock()
+		if tools, ok := s.catalog.byServer[row.ID]; ok {
+			view.ToolCount = len(tools) // 目录现实;未同步过仍为 -1
+			view.Tools = make([]skilldomain.MCPToolCard, 0, len(tools))
+			for _, t := range tools {
+				view.Tools = append(view.Tools, skilldomain.MCPToolCard{Name: t.Name, Description: t.Description})
 			}
-			view.ToolCount = n
 		}
+		s.catalog.mu.RUnlock()
 	}
 	return view, nil
 }
@@ -349,9 +363,14 @@ func (s *SkillService) SeedServersFromConfig(specs []MCPServerSpec) (int, error)
 	return imported, nil
 }
 
-// SyncAllServers 启动同步:从 DB 读全部 enabled server(解密 key)逐个同步。
-// 单个失败不阻塞(结果进日志);全部完成后由装配点 ApplyTo。
+// SyncAllServers 启动同步:清废历史 mcp 技能行(目录化)→ 全部 enabled server 逐个同步。
+// 单个失败不阻塞(结果进日志)。
 func (s *SkillService) SyncAllServers(ctx context.Context) error {
+	if skillRepo := s.skillRepo(); skillRepo != nil {
+		if n, err := skillRepo.DeleteAllMCPSkills(); err == nil && n > 0 {
+			fmt.Printf("[skill] 已清废 %d 行历史 mcp 技能行(工具目录移入内存缓存)\n", n)
+		}
+	}
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -369,25 +388,6 @@ func (s *SkillService) SyncAllServers(ctx context.Context) error {
 		s.syncServerRow(row)
 	}
 	return nil
-}
-
-// dropServerRuntime 移除某 server 全部技能的执行体(技能隐藏)。
-func (s *SkillService) dropServerRuntime(serverName string) {
-	skillRepo := s.skillRepo()
-	if skillRepo == nil {
-		return
-	}
-	rows, err := skillRepo.List()
-	if err != nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range rows {
-		if r.Source == skilldomain.SourceMCP && r.MCPServer == serverName {
-			delete(s.mcpExecutors, r.Name)
-		}
-	}
 }
 
 // syncServerRow 同步单个 server 行(解密 key → 连接 → 发现 → 落库/注册执行体)。
@@ -443,7 +443,7 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 		if err != nil {
 			resErr = fmt.Sprintf("获取工具列表失败: %v", err)
 		} else {
-			res.ToolCount = s.ingestServerTools(row.Name, mcpClient, result.Tools)
+			res.ToolCount = s.replaceServerCatalog(row, result.Tools)
 		}
 	}
 
@@ -476,7 +476,7 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 				resErr = fmt.Sprintf("获取工具列表失败: %v", err)
 				continue
 			}
-			res.ToolCount = s.ingestServerTools(row.Name, mcpClient2, result.Tools)
+			res.ToolCount = s.replaceServerCatalog(row, result.Tools)
 			resErr = ""
 			// 回退组合生效:持久化到 server 行,下次同步直连,不再重复探测
 			if trial.AuthType != row.AuthType || trial.Transport != row.Transport {
@@ -530,38 +530,10 @@ func mcpListToolsRequest() mcp.ListToolsRequest {
 	return mcp.ListToolsRequest{}
 }
 
-// ingestServerTools 把发现的远端工具落库(默认停用,重名跳过)+ 注册执行体。
-// 返回成功入库的工具数。共享:SyncAllServers(syncServerRow)与 SyncMCPServers(装配旧路径)。
-func (s *SkillService) ingestServerTools(serverName string, mcpClient MCPClient, tools []mcp.Tool) int {
-	skillRepo := s.skillRepo()
-	count := 0
-	for _, tool := range tools {
-		s.mu.RLock()
-		_, conflict := s.builders[tool.Name]
-		s.mu.RUnlock()
-		if conflict {
-			fmt.Printf("[skill] mcp tool %q (server %s) conflicts with builtin, skipped\n", tool.Name, serverName)
-			continue
-		}
-
-		schemaJSON, _ := json.Marshal(tool.InputSchema)
-		def := skilldomain.MCPToolDef{
-			Name:         tool.Name,
-			DisplayName:  tool.Name,
-			Description:  tool.Description,
-			MCPServer:    serverName,
-			ParamsSchema: string(schemaJSON),
-			MainVisible:  true, // 远端技能默认主 Agent 也可用(抓取类限制只针对内置)
-			Enabled:      false,
-		}
-		if skillRepo != nil {
-			if err := skillRepo.UpsertMCPTool(def); err != nil {
-				fmt.Printf("[skill] mcp tool %q upsert failed: %v\n", tool.Name, err)
-				continue
-			}
-		}
-		s.registerMCPExecutor(tool.Name, makeMCPToolExecutor(mcpClient, tool.Name))
-		count++
+// derefOrZero nil 安全取值。
+func derefOrZero(p *int64) int64 {
+	if p == nil {
+		return 0
 	}
-	return count
+	return *p
 }

@@ -32,6 +32,10 @@ type MCPServer struct {
 	// streamable 客户端连 SSE 端点会报 "response should contain RPC id"。
 	Transport string `gorm:"size:16"`
 
+	// UserID 归属用户(MCP 按人隔离):NULL = 共享服务(所有用户可调用);
+	// 非 NULL = 私有服务(仅本人可调用/可见/可管理)。私有与共享同名工具时私有遮蔽共享。
+	UserID     *int64    `gorm:"index"`
+
 	// OAuth 2.1(M4):ClientID/Secret 可为空——空则尝试动态客户端注册(RFC 7591)。
 	OAuthClientID     string    `gorm:"size:256"`
 	OAuthClientSecret string    `gorm:"size:1024"` // AES 密文,可空(公共客户端)
@@ -66,4 +70,14 @@ type ServerView struct {
 	Transport string `json:"transport"`
 	// ToolCount 上次同步发现的工具数(-1=从未同步成功)
 	ToolCount int `json:"tool_count"`
+	// UserID 归属(NULL=共享)
+	UserID *int64 `json:"user_id"`
+	// Tools 目录中的工具能力(连接器 UI 折叠展示用;未同步为空)
+	Tools []MCPToolCard `json:"tools,omitempty"`
+}
+
+// MCPToolCard 连接器工具卡片(UI 展示)。
+type MCPToolCard struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
