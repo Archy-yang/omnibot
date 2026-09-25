@@ -82,7 +82,7 @@ func TestTurnSink_UserMessageNoNotify(t *testing.T) {
 	sink := &fakeTurnSink{}
 	svc := turnSinkSetup(t, sink)
 
-	if err := svc.SaveUserMessage(context.Background(), 42, "你好", ""); err != nil {
+	if _, err := svc.SaveUserMessage(context.Background(), 42, "你好", ""); err != nil {
 		t.Fatalf("SaveUserMessage: %v", err)
 	}
 	if len(sink.called) != 0 {

@@ -224,6 +224,41 @@ func TestAutoMigration_MessagesTable(t *testing.T) {
 	}
 }
 
+// TestAutoMigration_TurnModel Phase 1(16-架构迭代路线图 §5):Turn 数据模型落地。
+// agents(种子 main) / conversations / conversation_turns 三张新表 + messages/agent_tasks 新列。
+func TestAutoMigration_TurnModel(t *testing.T) {
+	gormDB := NewTestDB(t)
+
+	// 三张新表存在
+	for _, table := range []string{"agents", "conversations", "conversation_turns"} {
+		var count int64
+		err := gormDB.Raw("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count).Error
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), count, "table %s was not created by AutoMigration", table)
+	}
+
+	// agents 表种子数据:内置 main agent(全场景预留,目前唯一对话方)
+	type agentRow struct {
+		ID   int64
+		Code string
+		Name string
+	}
+	var ag agentRow
+	err := gormDB.Raw("SELECT id, code, name FROM agents WHERE code='main'").Scan(&ag).Error
+	require.NoError(t, err)
+	assert.Equal(t, "main", ag.Code)
+	assert.NotEmpty(t, ag.Name)
+	assert.NotZero(t, ag.ID)
+
+	// messages 新列存在且可写入(nullable,存量兼容)
+	err = gormDB.Exec("SELECT conversation_id, turn_id FROM messages LIMIT 1").Error
+	assert.NoError(t, err)
+
+	// agent_tasks 新列存在
+	err = gormDB.Exec("SELECT origin_turn_id FROM agent_tasks LIMIT 1").Error
+	assert.NoError(t, err)
+}
+
 func TestAutoMigration_MemoriesTable(t *testing.T) {
 	cfg := &config.DatabaseConfig{Driver: "sqlite", DSN: ":memory:"}
 

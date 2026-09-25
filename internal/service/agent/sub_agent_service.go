@@ -79,8 +79,12 @@ func NewSubAgentService(
 // StartTask 建任务 + 起 goroutine 后台执行,立即返回 task_id(异步,不阻塞调用方)。
 // taskSpec 为任务包(含 goal+背景+交付物+完成标准+persona_hint),其 Type 作溯源标签。
 // 去角色后不校验任何注册:任何任务都交给通用执行器。source 来源渠道(web/feishu);notifyTarget 主动推送目标。
-func (s *SubAgentService) StartTask(ctx context.Context, userID int64, taskSpec domainagent.TaskSpec, source, notifyTarget string) (int64, error) {
+// originTurnID 是触发本任务的用户意图 Turn(Phase 1,16-架构迭代路线图 §5.3),0 表示无。
+func (s *SubAgentService) StartTask(ctx context.Context, userID int64, taskSpec domainagent.TaskSpec, source, notifyTarget string, originTurnID int64) (int64, error) {
 	task := domainagent.NewAgentTask(userID, taskSpec, source, notifyTarget)
+	if originTurnID > 0 {
+		task.OriginTurnID = &originTurnID
+	}
 	if err := s.taskRepo.Create(task); err != nil {
 		return 0, fmt.Errorf("create agent task: %w", err)
 	}

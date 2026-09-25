@@ -17,6 +17,7 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/domain/conversation"
+	agentdomain "omnibot/internal/domain/agent"
 	memorydomain "omnibot/internal/domain/memory"
 	chat "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
@@ -333,10 +334,14 @@ func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, e
 		if reply, handled := h.handleConfigCommand(userID, in.Content); handled {
 			// 配置命令的回复也保存到上下文
 			if h.msgService != nil && userID > 0 {
-				// 先保存用户的命令消息
-				h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
+				// 先保存用户的命令消息(开启逻辑 Turn),回复挂同一 Turn(§5.4)
+				turnID, _ := h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
+				replyCtx := context.Background()
+				if turnID > 0 {
+					replyCtx = agentdomain.WithTurnID(replyCtx, turnID)
+				}
 				// 再保存机器人的回复
-				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
+				h.msgService.SaveAssistantMessage(replyCtx, userID, reply)
 			}
 			return reply, nil
 		}
@@ -346,16 +351,21 @@ func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, e
 	if h.memoryService != nil {
 		if reply, handled := h.handleMemoryCommand(userID, in.Content); handled {
 			if h.msgService != nil && userID > 0 {
-				h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
-				h.msgService.SaveAssistantMessage(context.Background(), userID, reply)
+				turnID, _ := h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
+				replyCtx := context.Background()
+				if turnID > 0 {
+					replyCtx = agentdomain.WithTurnID(replyCtx, turnID)
+				}
+				h.msgService.SaveAssistantMessage(replyCtx, userID, reply)
 			}
 			return reply, nil
 		}
 	}
 
-	// 保存用户消息（去重）
+	// 保存用户消息（去重），并开启逻辑 Turn(Phase 1,§5.4)
+	replyCtx := context.Background()
 	if h.msgService != nil && userID > 0 {
-		err := h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
+		turnID, err := h.msgService.SaveUserMessage(context.Background(), userID, in.Content, in.MsgID)
 		if err == chat.ErrDuplicateMessage {
 			// 重复消息，记录日志但继续执行
 			logger.InfoWithFields("Duplicate message ignored",
@@ -364,6 +374,9 @@ func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, e
 			)
 		}
 		// 其他错误忽略，继续执行
+		if turnID > 0 {
+			replyCtx = agentdomain.WithTurnID(replyCtx, turnID)
+		}
 	}
 
 	// 调用 LLM（带上下文）
@@ -371,7 +384,7 @@ func (h *Handler) handleTextMessage(in *channelwechat.InboundMessage) (string, e
 
 	// 保存机器人回复
 	if h.msgService != nil && userID > 0 {
-		h.msgService.SaveAssistantMessage(context.Background(), userID, content)
+		h.msgService.SaveAssistantMessage(replyCtx, userID, content)
 	}
 
 	return content, nil

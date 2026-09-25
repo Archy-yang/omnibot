@@ -64,9 +64,9 @@ type mockMessageService struct {
 	savedReportSteps    []*conversation.AgentStep
 }
 
-func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
+func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) (int64, error) {
 	m.savedUserContent = content
-	return nil
+	return 0, nil
 }
 
 func (m *mockMessageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
@@ -88,7 +88,7 @@ func (m *mockMessageService) SaveAssistantMessageWithToolCalls(ctx context.Conte
 	return nil
 }
 
-func (m *mockMessageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+func (m *mockMessageService) SaveReportMessage(ctx context.Context, userID, taskID, turnID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
 	m.reportSaved = true
 	m.savedReportTaskID = taskID
 	m.savedReportContent = content

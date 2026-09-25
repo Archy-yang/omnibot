@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"omnibot/internal/client/llm"
+	agentdomain "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	chatrepo "omnibot/internal/repository/chat"
 	"omnibot/pkg/logger"
@@ -33,8 +34,11 @@ type MessageService interface {
 	// BuildContextMessages 构建上下文消息列表（历史消息 + 当前消息）
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 
-	// SaveUserMessage 保存用户消息
-	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
+	// SaveUserMessage 保存用户消息,并开启新逻辑 Turn(Phase 1,16-架构迭代路线图 §5.2):
+	// ensureConversation + createTurn,消息带 turn_id/conversation_id 落库。
+	// 返回 TurnID(handler 据此 WithTurnID 注入 ctx,供 assistant 回复/delegate 关联)。
+	// Turn 创建失败不阻塞消息落库,返回 0。
+	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) (int64, error)
 
 	// SaveAssistantMessage 保存助手消息
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
@@ -50,7 +54,8 @@ type MessageService interface {
 
 	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask
 	// 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报。
-	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	// turnID 取 task.OriginTurnID(汇报可晚于后续 Turn,逻辑归属原始请求,§5.5);0 表示无 Turn。
+	SaveReportMessage(ctx context.Context, userID, taskID, turnID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 
 	// ListByUser 获取用户的历史消息（按时间正序，旧的在前）。
 	// before 为 0 时返回最近 limit 条；before > 0 时返回 ID 小于 before 的最近 limit 条，用于翻页。
@@ -73,6 +78,7 @@ type messageService struct {
 	msgRepo   chatrepo.MessageRepository
 	memorySvc MemoryInjectionProvider
 	stepRepo  chatrepo.AgentStepRepository
+	convRepo  chatrepo.ConversationRepository
 	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
 	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
 	turnSinks []TurnSink
@@ -87,6 +93,8 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 			service.memorySvc = s
 		case chatrepo.AgentStepRepository:
 			service.stepRepo = s
+		case chatrepo.ConversationRepository:
+			service.convRepo = s
 		case TurnSink:
 			service.turnSinks = append(service.turnSinks, s)
 		}
@@ -212,7 +220,9 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 }
 
 // SaveUserMessage 保存用户消息
-func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error {
+// SaveUserMessage 保存用户消息并开启新逻辑 Turn(Phase 1,§5.2)。
+// Turn/Conversation 创建失败只记日志,不阻塞消息落库(宁可丢归属也不丢消息)。
+func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) (int64, error) {
 	// 仅当传入了非空 msgID（如微信渠道）时才做去重检查；
 	// Web 渠道无 msgID，不应触发去重，否则第二条消息开始会被误判为重复。
 	if msgID != "" {
@@ -226,17 +236,63 @@ func (s *messageService) SaveUserMessage(ctx context.Context, userID int64, cont
 			// 去重检查失败时，继续执行保存（宁可重复也不要丢消息）
 		}
 		if exists {
-			return ErrDuplicateMessage
+			return 0, ErrDuplicateMessage
 		}
 	}
 
 	msg := conversation.NewUserMessage(userID, content, msgID)
-	return s.msgRepo.Create(msg)
+
+	// 开启新 Turn:ensureConversation + createTurn(三渠道入口统一在此生效)。
+	if s.convRepo != nil {
+		if conv, turn, err := s.ensureTurn(userID); err != nil {
+			logger.ErrorWithFields("Failed to create conversation turn, message saved without turn",
+				zap.Int64("user_id", userID),
+				zap.Error(err),
+			)
+		} else {
+			msg.ConversationID = &conv.ID
+			msg.TurnID = &turn.ID
+		}
+	}
+
+	if err := s.msgRepo.Create(msg); err != nil {
+		return 0, err
+	}
+	if msg.TurnID != nil {
+		return *msg.TurnID, nil
+	}
+	return 0, nil
+}
+
+// ensureTurn 取(或建)active conversation 并开新 Turn。
+func (s *messageService) ensureTurn(userID int64) (*conversation.Conversation, *conversation.ConversationTurn, error) {
+	ag, err := s.convRepo.GetAgentByCode(agentdomain.AgentCodeMain)
+	if err != nil {
+		return nil, nil, err
+	}
+	conv, err := s.convRepo.EnsureActiveConversation(userID, ag.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	turn, err := s.convRepo.CreateTurn(conv)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conv, turn, nil
+}
+
+// attachTurnID 把 ctx 中的逻辑 Turn(handler WithTurnID 注入)挂到消息上。
+// 无 Turn 上下文时不动(留 NULL,如系统路径/存量兼容)。
+func attachTurnID(msg *conversation.Message, ctx context.Context) {
+	if turnID := agentdomain.TurnIDFromContext(ctx); turnID > 0 {
+		msg.TurnID = &turnID
+	}
 }
 
 // SaveAssistantMessage 保存助手消息
 func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64, content string) error {
 	msg := conversation.NewAssistantMessage(userID, content)
+	attachTurnID(msg, ctx)
 	if err := s.msgRepo.Create(msg); err != nil {
 		return err
 	}
@@ -247,6 +303,7 @@ func (s *messageService) SaveAssistantMessage(ctx context.Context, userID int64,
 // SaveAssistantMessageWithSegments 保存带思考过程片段的助手消息（v1.5.4），并落 Agent 运行步骤链（v1.5.5）。
 func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
 	msg := conversation.NewAssistantMessageWithSegments(userID, content, segments)
+	attachTurnID(msg, ctx)
 	if err := s.msgRepo.Create(msg); err != nil {
 		return err
 	}
@@ -273,6 +330,7 @@ func (s *messageService) SaveAssistantMessageWithSegments(ctx context.Context, u
 func (s *messageService) SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error {
 	msg := conversation.NewAssistantMessageWithSegments(userID, content, segments)
 	msg.ToolCalls = toolCalls
+	attachTurnID(msg, ctx)
 	if err := s.msgRepo.Create(msg); err != nil {
 		return err
 	}
@@ -295,8 +353,12 @@ func (s *messageService) SaveAssistantMessageWithToolCalls(ctx context.Context, 
 
 // SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),并落 Agent 运行步骤链。
 // 供 HandleReportTask 落库主 Agent 主动汇报,使刷新后历史仍能还原汇报(不再只是前端内存里的一闪而过)。
-func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
+// turnID 是 task.OriginTurnID(汇报可晚于后续 Turn,逻辑归属原始请求,§5.5);0 表示无 Turn。
+func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID, turnID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error {
 	msg := conversation.NewReportMessage(userID, taskID, content, segments)
+	if turnID > 0 {
+		msg.TurnID = &turnID
+	}
 	if err := s.msgRepo.Create(msg); err != nil {
 		return err
 	}

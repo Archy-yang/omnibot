@@ -131,3 +131,33 @@ func TestCreateDelegateTool_ExecuteMissingGoal(t *testing.T) {
 
 // 编译期:保证 taskSpec 字段名引用合法。
 var _ = domainagent.TaskSpec{}
+
+// TestCreateDelegateTool_CapturesOriginTurnID Phase 1(16-架构迭代路线图 §5.3/§5.6):
+// ctx 带 WithTurnID 时,delegate 创建的任务必须落 origin_turn_id(任务与用户意图的因果锚点)。
+func TestCreateDelegateTool_CapturesOriginTurnID(t *testing.T) {
+	tool, svc := setupDelegateToolTest(t)
+
+	ctx := withUserID(context.Background(), 42)
+	ctx = domainagent.WithTurnID(ctx, 100)
+	result, err := tool.Execute(ctx, map[string]interface{}{"goal": "调研任务"})
+	require.NoError(t, err)
+
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
+	taskID := int64(parsed["task_id"].(float64))
+
+	task, err := svc.GetTask(taskID)
+	require.NoError(t, err)
+	require.NotNil(t, task.OriginTurnID, "任务应记录 origin_turn_id")
+	assert.Equal(t, int64(100), *task.OriginTurnID)
+
+	// 无 Turn 上下文(存量路径):origin_turn_id 留空,不报错
+	tool2, svc2 := setupDelegateToolTest(t)
+	result2, err := tool2.Execute(withUserID(context.Background(), 42), map[string]interface{}{"goal": "无 Turn 任务"})
+	require.NoError(t, err)
+	var parsed2 map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result2), &parsed2))
+	task2, err := svc2.GetTask(int64(parsed2["task_id"].(float64)))
+	require.NoError(t, err)
+	assert.Nil(t, task2.OriginTurnID)
+}

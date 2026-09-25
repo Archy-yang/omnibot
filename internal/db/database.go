@@ -119,6 +119,11 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 		return nil, fmt.Errorf("%w: migration failed: %v", ErrInitFailed, err)
 	}
 
+	// 种子数据:内置 main agent(idempotent,已存在则跳过)
+	if err := ensureMainAgent(db); err != nil {
+		return nil, fmt.Errorf("%w: seed main agent failed: %v", ErrInitFailed, err)
+	}
+
 	zaplogger.InfoWithFields("Database initialized successfully",
 		zap.String("driver", cfg.Driver),
 		zap.Int("max_conns", maxConns),
@@ -151,6 +156,9 @@ func autoMigrate(db *gorm.DB) error {
 		&user.BindCode{},
 		&conversation.Message{},
 		&conversation.AgentStep{},
+		&conversation.Conversation{}, // Phase 1(16-架构迭代路线图 §5.2):对话空间
+		&conversation.ConversationTurn{}, // Phase 1:逻辑 Turn(薄表,身份锚点)
+		&agent.Agent{},               // Phase 1:执行体登记簿(全场景预留,种子 main)
 		&memory.Memory{},
 		&memory.MemoryMessageLink{},  // M5.2:记忆↔消息多对多溯源映射(§7.3)
 		&memory.Matter{},             // M6:事项层(助理人视角,状态覆写式)
@@ -169,6 +177,22 @@ func autoMigrate(db *gorm.DB) error {
 
 func ensurePostgresExtensions(db *gorm.DB) error {
 	return db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error
+}
+
+// ensureMainAgent 幂等写入内置 main agent(agents 表种子)。
+// 目前系统唯一对话方;将来多 Agent 时在此追加各自种子。
+func ensureMainAgent(db *gorm.DB) error {
+	var count int64
+	if err := db.Model(&agent.Agent{}).Where("code = ?", agent.AgentCodeMain).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return db.Create(&agent.Agent{
+		Code: agent.AgentCodeMain,
+		Name: "OmniBot 主助理",
+	}).Error
 }
 
 // HealthCheck 健康检查

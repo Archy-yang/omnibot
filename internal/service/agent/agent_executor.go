@@ -91,10 +91,11 @@ func (e *LocalAgentExecutor) Capabilities(ctx context.Context) (*AgentCapabiliti
 }
 
 func (e *LocalAgentExecutor) Submit(ctx context.Context, userID int64, spec domainagent.TaskSpec) (*TaskReceipt, error) {
-	// source/notifyTarget 从 ctx 取(handler 注入),决定完成时往哪推送。
+	// source/notifyTarget/turnID 从 ctx 取(handler 注入),决定推送目标与逻辑归属(§5.3)。
 	source := getSourceFromContext(ctx)
 	notifyTarget := getNotifyTargetFromContext(ctx)
-	taskID, err := e.svc.StartTask(ctx, userID, spec, source, notifyTarget)
+	turnID := domainagent.TurnIDFromContext(ctx)
+	taskID, err := e.svc.StartTask(ctx, userID, spec, source, notifyTarget, turnID)
 	if err != nil {
 		return nil, err
 	}

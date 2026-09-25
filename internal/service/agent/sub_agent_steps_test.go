@@ -94,7 +94,7 @@ func TestSubAgentSteps_SuccessSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "", 0)
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusCompleted, 3*time.Second)
@@ -133,7 +133,7 @@ func TestSubAgentSteps_FailureStillSavesSteps(t *testing.T) {
 	}
 	svc, taskRepo, stepRepo := stepsDiagSetup(t, llm)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究某主题"), "web", "", 0)
 	require.NoError(t, err)
 
 	task := stepsDiagWaitStatus(t, taskRepo, taskID, domainagent.TaskStatusFailed, 3*time.Second)

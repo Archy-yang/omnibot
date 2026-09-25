@@ -57,9 +57,9 @@ type mockMessageService struct {
 	reportErr          error
 }
 
-func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content, msgID string) error {
+func (m *mockMessageService) SaveUserMessage(ctx context.Context, userID int64, content, msgID string) (int64, error) {
 	m.savedUserContent, m.savedUserMsgID = content, msgID
-	return m.saveUserErr
+	return 0, m.saveUserErr
 }
 func (m *mockMessageService) BuildContextMessages(ctx context.Context, userID int64, current string) ([]llm.ChatMessage, error) {
 	if m.buildContextErr != nil {
@@ -94,7 +94,8 @@ func (m *mockMessageService) SaveAssistantMessageWithToolCalls(
 	return nil
 }
 func (m *mockMessageService) SaveReportMessage(
-	ctx context.Context, userID, taskID int64, content string,
+		ctx context.Context,
+		userID, taskID, turnID int64, content string,
 	segments []conversation.MessageSegment, steps []*conversation.AgentStep,
 ) error {
 	m.reportCalled = true

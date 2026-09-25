@@ -35,11 +35,13 @@ type BindingService interface {
 // SaveAssistantMessageWithSegments 与 web 同步端点共用,segments=nil(IM 入口无交错段)。
 // SaveReportMessage 供飞书任务完成推送时落汇报消息(Kind=report,关联 task_id)。
 type MessageService interface {
-	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
+	// SaveUserMessage 保存用户消息并开启新逻辑 Turn,返回 TurnID(0=Turn 创建失败不阻塞)。
+	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) (int64, error)
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
-	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	// turnID 取 task.OriginTurnID,report 逻辑归属原始请求 Turn(§5.5)。
+	SaveReportMessage(ctx context.Context, userID, taskID, turnID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 }
 
 // AgentService Agent 服务接口(仅同步 Run,飞书不走流式)。签名与 web AgentService 一致。

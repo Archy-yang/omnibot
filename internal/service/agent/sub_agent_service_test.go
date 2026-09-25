@@ -110,7 +110,7 @@ func TestSubAgentService_StartTask_Success(t *testing.T) {
 	runner := &mockRunner{artifact: "Go 1.24 要点:① 泛型 ② ...", delay: 20 * time.Millisecond}
 	svc, repo, stepRepo := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "", 0)
 	require.NoError(t, err)
 	assert.NotZero(t, taskID)
 
@@ -139,7 +139,7 @@ func TestSubAgentService_ArtifactPersisted(t *testing.T) {
 	runner := &mockRunner{artifact: "# 报告\n内容", delay: 20 * time.Millisecond}
 	svc, repo, _ := setupSubAgentServiceWithArtifact(t, runner, true)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "", 0)
 	require.NoError(t, err)
 	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
 
@@ -161,7 +161,7 @@ func TestSubAgentService_EventsRecorded(t *testing.T) {
 	runner := &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}
 	svc, repo, _ := setupSubAgentServiceWithArtifact(t, runner, true)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "", 0)
 	require.NoError(t, err)
 	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
 
@@ -182,7 +182,7 @@ func TestSubAgentService_StartTask_RunnerError(t *testing.T) {
 	runner := &mockRunner{err: errors.New("llm timeout"), delay: 20 * time.Millisecond}
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("goal"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("goal"), "web", "", 0)
 	require.NoError(t, err)
 
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
@@ -195,7 +195,7 @@ func TestSubAgentService_StartTask_EmptyArtifact(t *testing.T) {
 	runner := &mockRunner{artifact: "   ", delay: 20 * time.Millisecond} // 空白产出
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, _ := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("goal"), "web", "")
+	taskID, _ := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("goal"), "web", "", 0)
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusFailed, 2*time.Second)
 	require.NotNil(t, task.ErrorMsg)
 	assert.Contains(t, *task.ErrorMsg, "未产出有效结果")
@@ -234,7 +234,7 @@ func TestSubAgentService_StepsSavedIncrementally(t *testing.T) {
 	}
 	svc, repo, stepRepo := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 42, domainagent.NewTaskSpec("g"), "web", "", 0)
 	require.NoError(t, err)
 
 	// 任务 running 中就应能从 DB 查到 onStep 实时落的步骤(不等结束)
@@ -270,7 +270,7 @@ func TestSubAgentService_StartTask_AnyType(t *testing.T) {
 
 	spec := domainagent.NewTaskSpec("goal")
 	spec.Type = "nonexistent-kinda-task" // 任意标签,不 gate
-	taskID, err := svc.StartTask(context.Background(), 1, spec, "web", "")
+	taskID, err := svc.StartTask(context.Background(), 1, spec, "web", "", 0)
 	require.NoError(t, err)
 	task := waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusCompleted, 2*time.Second)
 	assert.Equal(t, "nonexistent-kinda-task", task.SubAgentType)
@@ -386,7 +386,7 @@ func TestSubAgentService_CancelTask_RunningTriggersCtxCancel(t *testing.T) {
 	runner := &ctxCaptureRunner{proceed: proceed, artifact: "result"}
 	svc, repo, _ := setupSubAgentService(t, runner)
 
-	taskID, err := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("g"), "web", "")
+	taskID, err := svc.StartTask(context.Background(), 1, domainagent.NewTaskSpec("g"), "web", "", 0)
 	require.NoError(t, err)
 	// 等 runner 启动(running 状态 + cancel 注册)
 	waitForTaskStatus(t, repo, taskID, domainagent.TaskStatusRunning, 2*time.Second)

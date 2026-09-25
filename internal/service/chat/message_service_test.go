@@ -65,7 +65,7 @@ func TestMessageService_BuildContextMessages_DedupCurrentMessage(t *testing.T) {
 
 	// 生产时序:先存当前用户消息(handler 调 SaveUserMessage),再构建上下文
 	currentContent := "当前用户消息"
-	if err := service.SaveUserMessage(context.Background(), 123, currentContent, "wx_2"); err != nil {
+	if _, err := service.SaveUserMessage(context.Background(), 123, currentContent, "wx_2"); err != nil {
 		t.Fatalf("SaveUserMessage: %v", err)
 	}
 
@@ -186,13 +186,13 @@ func TestMessageService_SaveUserMessage(t *testing.T) {
 	service := NewMessageService(msgRepo)
 
 	// 第一次保存应该成功
-	err := service.SaveUserMessage(context.Background(), 123, "你好", "wx_123")
+	_, err := service.SaveUserMessage(context.Background(), 123, "你好", "wx_123")
 	if err != nil {
 		t.Fatalf("Failed to save user message: %v", err)
 	}
 
 	// 重复 MsgID 应该返回去重错误
-	err = service.SaveUserMessage(context.Background(), 123, "你好", "wx_123")
+	_, err = service.SaveUserMessage(context.Background(), 123, "你好", "wx_123")
 	if err != ErrDuplicateMessage {
 		t.Errorf("Expected ErrDuplicateMessage, got %v", err)
 	}
@@ -205,9 +205,12 @@ func TestMessageService_SaveUserMessage_EmptyMsgID(t *testing.T) {
 	msgRepo := chat.NewMessageRepository(testDB)
 	service := NewMessageService(msgRepo)
 
-	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第一条", ""))
-	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第二条", ""))
-	require.NoError(t, service.SaveUserMessage(context.Background(), 123, "第三条", ""))
+	_, err := service.SaveUserMessage(context.Background(), 123, "第一条", "")
+	require.NoError(t, err)
+	_, err = service.SaveUserMessage(context.Background(), 123, "第二条", "")
+	require.NoError(t, err)
+	_, err = service.SaveUserMessage(context.Background(), 123, "第三条", "")
+	require.NoError(t, err)
 
 	messages, err := msgRepo.GetRecentByUserID(123, 10)
 	require.NoError(t, err)

@@ -67,7 +67,12 @@ func (n *FeishuTaskNotifier) NotifyTaskCompleted(ctx context.Context, openID str
 	// 落 report message(Kind=report,关联 task_id):刷新后历史仍能还原汇报。
 	// 落库失败仅记日志,仍推送(消息能到用户最重要)。
 	steps := recordsToAgentSteps(records, task.UserID, "")
-	if err := n.msgSvc.SaveReportMessage(ctx, task.UserID, task.ID, finalResponse, nil, steps); err != nil {
+	// report 的逻辑归属是任务发起时的 Turn(可晚于后续 Turn,§5.5)
+	var reportTurnID int64
+	if task.OriginTurnID != nil {
+		reportTurnID = *task.OriginTurnID
+	}
+	if err := n.msgSvc.SaveReportMessage(ctx, task.UserID, task.ID, reportTurnID, finalResponse, nil, steps); err != nil {
 		logger.ErrorWithFields("feishu: save report message failed",
 			zap.Int64("task_id", task.ID), zap.Error(err))
 	}

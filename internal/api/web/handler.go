@@ -30,12 +30,14 @@ type UserService interface {
 // MessageService 消息服务接口
 type MessageService interface {
 	BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error)
-	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) error
+	// SaveUserMessage 保存用户消息并开启新逻辑 Turn,返回 TurnID(0=Turn 创建失败不阻塞)。
+	SaveUserMessage(ctx context.Context, userID int64, content string, msgID string) (int64, error)
 	SaveAssistantMessage(ctx context.Context, userID int64, content string) error
 	SaveAssistantMessageWithSegments(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	SaveAssistantMessageWithToolCalls(ctx context.Context, userID int64, content string, segments []conversation.MessageSegment, toolCalls *string, steps []*conversation.AgentStep) error
 	// SaveReportMessage 保存一条子任务汇报消息(Kind=report,关联 task_id),供 HandleReportTask 落库主动汇报。
-	SaveReportMessage(ctx context.Context, userID, taskID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
+	// turnID 取 task.OriginTurnID,逻辑归属原始请求 Turn(§5.5)。
+	SaveReportMessage(ctx context.Context, userID, taskID, turnID int64, content string, segments []conversation.MessageSegment, steps []*conversation.AgentStep) error
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
@@ -230,12 +232,17 @@ func (h *Handler) HandleSendMessage(c *gin.Context) {
 	// v2.1: 身份由 AuthRequired 中间件注入
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	// 保存用户消息
-	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+	// 保存用户消息并开启新逻辑 Turn(Phase 1,16-架构迭代路线图 §5.4):
+	// TurnID 注入请求 ctx,后续 assistant 回复落库与 delegate 派活自动关联本 Turn。
+	turnID, err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+	if err != nil {
 		logger.ErrorWithFields("Failed to save user message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+	if turnID > 0 {
+		c.Request = c.Request.WithContext(agentpkg.WithTurnID(c.Request.Context(), turnID))
 	}
 
 	// 构建上下文消息列表
@@ -308,11 +315,17 @@ func (h *Handler) HandleSendMessageStream(c *gin.Context) {
 	// v2.1: 身份由 AuthRequired 中间件注入
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+	// 保存用户消息并开启新逻辑 Turn(Phase 1,16-架构迭代路线图 §5.4):
+	// TurnID 注入请求 ctx,后续 assistant 回复落库与 delegate 派活自动关联本 Turn。
+	turnID, err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+	if err != nil {
 		logger.ErrorWithFields("Failed to save user message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+	if turnID > 0 {
+		c.Request = c.Request.WithContext(agentpkg.WithTurnID(c.Request.Context(), turnID))
 	}
 
 	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
@@ -402,11 +415,17 @@ func (h *Handler) HandleSendMessageAgent(c *gin.Context) {
 	// v2.1: 身份由 AuthRequired 中间件注入
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+	// 保存用户消息并开启新逻辑 Turn(Phase 1,16-架构迭代路线图 §5.4):
+	// TurnID 注入请求 ctx,后续 assistant 回复落库与 delegate 派活自动关联本 Turn。
+	turnID, err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+	if err != nil {
 		logger.ErrorWithFields("Failed to save user message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+	if turnID > 0 {
+		c.Request = c.Request.WithContext(agentpkg.WithTurnID(c.Request.Context(), turnID))
 	}
 	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
 	if err != nil {
@@ -498,11 +517,17 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	// v2.1: 身份由 AuthRequired 中间件注入
 	userID := c.GetInt64(middleware.AuthUserIDKey)
 
-	if err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, ""); err != nil {
+	// 保存用户消息并开启新逻辑 Turn(Phase 1,16-架构迭代路线图 §5.4):
+	// TurnID 注入请求 ctx,后续 assistant 回复落库与 delegate 派活自动关联本 Turn。
+	turnID, err := h.messageService.SaveUserMessage(c.Request.Context(), userID, req.Content, "")
+	if err != nil {
 		logger.ErrorWithFields("Failed to save user message",
 			zap.Int64("user_id", userID),
 			zap.Error(err),
 		)
+	}
+	if turnID > 0 {
+		c.Request = c.Request.WithContext(agentpkg.WithTurnID(c.Request.Context(), turnID))
 	}
 	ctxMessages, err := h.messageService.BuildContextMessages(c.Request.Context(), userID, req.Content)
 	if err != nil {

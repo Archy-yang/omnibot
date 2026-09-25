@@ -42,6 +42,12 @@ func WithNotifyTarget(ctx context.Context, target string) context.Context {
 	return context.WithValue(ctx, notifyContextKey, target)
 }
 
+// WithTurnID 把当前逻辑 Turn 注入 ctx(Phase 1,16-架构迭代路线图 §5.4)。
+// 实现位于 domain/agent(中立包,service/chat 也要读),此处转发保持 handler 单一 import 入口。
+func WithTurnID(ctx context.Context, turnID int64) context.Context {
+	return domainagent.WithTurnID(ctx, turnID)
+}
+
 func getSourceFromContext(ctx context.Context) string {
 	if s, ok := ctx.Value(sourceContextKey).(string); ok {
 		return s
@@ -185,10 +191,12 @@ func CreateDelegateTool(svc *SubAgentService) Tool {
 				}
 			}
 
-			// source/notifyTarget 从 ctx 取(web/feishu handler 注入):决定完成时往哪推送汇报。
+			// source/notifyTarget/turnID 从 ctx 取(handler 注入):
+			// 前两者决定完成时往哪推送汇报;turnID 记录触发本任务的用户意图(§5.3)。
 			source := getSourceFromContext(ctx)
 			notifyTarget := getNotifyTargetFromContext(ctx)
-			taskID, err := svc.StartTask(ctx, userID, taskSpec, source, notifyTarget)
+			turnID := domainagent.TurnIDFromContext(ctx)
+			taskID, err := svc.StartTask(ctx, userID, taskSpec, source, notifyTarget, turnID)
 			if err != nil {
 				return "", fmt.Errorf("派活失败: %w", err)
 			}

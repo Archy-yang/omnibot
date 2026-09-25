@@ -194,8 +194,9 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 		}
 	}
 
-	// 保存用户消息(飞书 message_id 做幂等)
-	if err := h.messageService.SaveUserMessage(ctx, userID, in.Text, in.MsgID); err != nil {
+	// 保存用户消息(飞书 message_id 做幂等),返回逻辑 TurnID(Phase 1,§5.4)
+	turnID, err := h.messageService.SaveUserMessage(ctx, userID, in.Text, in.MsgID)
+	if err != nil {
 		if errors.Is(err, chatsvc.ErrDuplicateMessage) {
 			// SDK 可能因网络波动重投同一事件;静默丢弃,不重复回复
 			logger.InfoWithFields("feishu: duplicate message ignored",
@@ -243,6 +244,9 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 	// 子 Agent 完成后主动推送回飞书(方案A)。
 	ctx = agentpkg.WithSource(ctx, domainagent.SourceFeishu)
 	ctx = agentpkg.WithNotifyTarget(ctx, in.OpenID)
+	if turnID > 0 {
+		ctx = agentpkg.WithTurnID(ctx, turnID)
+	}
 	result, err := h.agentService.Run(ctx, userID, toAgentMessages(ctxMessages), activeLLMClient)
 	if err != nil {
 		logger.ErrorWithFields("feishu: agent run failed, sending fallback",

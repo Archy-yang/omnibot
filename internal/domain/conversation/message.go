@@ -42,7 +42,12 @@ type Message struct {
 	ToolCalls *string          `gorm:"type:text"`              // 规范改造:assistant 调工具的配对 JSON [{id,name,arguments,result}],NULL 表示无
 	Kind      string           `gorm:"size:20;index"`          // 消息种类:空串=普通对话;"report"=子任务汇报(主 Agent 主动汇报落库,前端按徽标区分)
 	TaskID    *int64           `gorm:"index"`                  // 汇报消息关联的后台任务 ID(Kind=report 时填,反向关联 agent_tasks)
-	CreatedAt time.Time        `gorm:"not null"`
+	// ConversationID / TurnID Phase 1(16-架构迭代路线图 §5.2):逻辑归属。
+	// NULL=存量消息(未回填);Report 消息的 TurnID 取 task.origin_turn_id(汇报可晚于后续 Turn,
+	// 时间线顺序不变,见 §5.5 时间序≠逻辑序)。
+	ConversationID *int64      `gorm:"index"`
+	TurnID         *int64      `gorm:"index"`
+	CreatedAt      time.Time   `gorm:"not null"`
 }
 
 // TableName 指定表名
