@@ -76,6 +76,8 @@ const formName = ref('');
 const formBaseUrl = ref('');
 const formApiKey = ref(''); // 编辑时留空 = 保留原 key
 const formAuthType = ref<'none' | 'bearer' | 'oauth'>('bearer');
+// 传输协议:''=自动(streamable 失败回退 SSE)/'streamable'/'sse'
+const formTransport = ref<'' | 'streamable' | 'sse'>('');
 const formClientId = ref('');
 const formClientSecret = ref(''); // 编辑时留空 = 保留原 secret
 const formScopes = ref('');
@@ -118,6 +120,7 @@ const openEditForm = (server: MCPServerItem) => {
   formBaseUrl.value = server.base_url;
   formApiKey.value = ''; // 留空 = 保留原 key
   formAuthType.value = (server.auth_type as 'none' | 'bearer' | 'oauth') || 'bearer';
+  formTransport.value = (server.transport as '' | 'streamable' | 'sse') || '';
   formClientId.value = ''; // 后端留空 = 保留原值
   formClientSecret.value = '';
   formScopes.value = '';
@@ -144,6 +147,7 @@ const handleSaveServer = async () => {
     base_url: formBaseUrl.value.trim(),
     api_key: formApiKey.value, // 空 = 保留原值(编辑时)
     auth_type: formAuthType.value,
+    transport: formTransport.value,
     oauth_client_id: formClientId.value,
     oauth_client_secret: formClientSecret.value,
     oauth_scopes: formScopes.value,
@@ -307,9 +311,19 @@ watch(
         />
       </div>
       <div class="form-field">
+        <label class="form-label" for="mcp-transport">传输协议</label>
+        <select id="mcp-transport" v-model="formTransport" class="form-input">
+          <option value="">自动（默认 Streamable，失败自动回退 SSE）</option>
+          <option value="streamable">Streamable HTTP（新协议）</option>
+          <option value="sse">SSE（高德等平台端点）</option>
+        </select>
+        <div class="form-hint">高德：鉴权选「URL 参数」，Key 填在密钥框即可；或选 Bearer 并把 Key 写进地址(?key=…)。</div>
+      </div>
+      <div class="form-field">
         <label class="form-label" for="mcp-auth-type">鉴权方式</label>
         <select id="mcp-auth-type" v-model="formAuthType" class="form-input">
-          <option value="bearer">API Key（静态令牌）</option>
+          <option value="bearer">API Key（Bearer 头）</option>
+          <option value="query">URL 参数（key=…，高德等平台）</option>
           <option value="oauth">OAuth 2.1（远程托管服务标准）</option>
           <option value="none">无鉴权</option>
         </select>

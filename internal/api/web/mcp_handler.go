@@ -35,6 +35,7 @@ type upsertMCPServerRequest struct {
 	BaseURL           string `json:"base_url" binding:"required"`
 	APIKey            string `json:"api_key"`
 	AuthType          string `json:"auth_type"` // none/bearer/oauth,空 = bearer
+	Transport         string `json:"transport"` // streamable(空同)/sse
 	OAuthClientID     string `json:"oauth_client_id"`
 	OAuthClientSecret string `json:"oauth_client_secret"`
 	OAuthScopes       string `json:"oauth_scopes"`
@@ -45,7 +46,7 @@ type upsertMCPServerRequest struct {
 func (r *upsertMCPServerRequest) toInput() skillsvc.MCPServerInput {
 	return skillsvc.MCPServerInput{
 		Name: r.Name, BaseURL: r.BaseURL, APIKey: r.APIKey,
-		AuthType: r.AuthType, OAuthClientID: r.OAuthClientID,
+		AuthType: r.AuthType, Transport: r.Transport, OAuthClientID: r.OAuthClientID,
 		OAuthClientSecret: r.OAuthClientSecret, OAuthScopes: r.OAuthScopes,
 		Enabled: *r.Enabled,
 	}

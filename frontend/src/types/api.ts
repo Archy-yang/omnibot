@@ -270,6 +270,8 @@ export interface MCPServerItem {
   auth_type: string;
   /** OAuth 型是否已完成授权 */
   authorized: boolean;
+  /** 传输协议:streamable(空值同)/sse */
+  transport: string;
   /** 上次同步发现的工具数(-1=从未同步成功) */
   tool_count: number;
 }
@@ -290,6 +292,8 @@ export interface UpsertMCPServerRequest {
   api_key?: string;
   /** none/bearer/oauth,空 = bearer */
   auth_type?: string;
+  /** streamable(空同)/sse */
+  transport?: string;
   oauth_client_id?: string;
   /** 更新时留空 = 保留原值 */
   oauth_client_secret?: string;

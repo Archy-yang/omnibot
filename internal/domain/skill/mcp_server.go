@@ -7,6 +7,13 @@ const (
 	AuthTypeNone   = "none"   // 无鉴权
 	AuthTypeBearer = "bearer" // 静态 API Key(Authorization: Bearer)
 	AuthTypeOAuth  = "oauth"  // OAuth 2.1 授权码+PKCE(远程托管 MCP 标准)
+	AuthTypeQuery  = "query"  // URL 参数鉴权:key=<APIKey>(高德等国内平台惯例)
+)
+
+// MCP 传输协议(Phase 3.5)。空值 = streamable + 自动回退,不单设 auto 常量。
+const (
+	TransportStreamable = "streamable" // Streamable HTTP(2025-03 协议,默认)
+	TransportSSE        = "sse"        // HTTP+SSE(2024-11 协议,高德等平台仍在用)
 )
 
 // MCPServer MCP 外部能力服务配置(M3 在线配置,系统级)。
@@ -19,6 +26,11 @@ type MCPServer struct {
 	APIKey   string `gorm:"size:1024"`                    // bearer: AES 密文;oauth: 空
 	Enabled  bool   `gorm:"not null"`                     // false = 不连接、不同步、技能隐藏
 	AuthType string `gorm:"size:16;not null;default:bearer"`
+
+	// Transport MCP 传输协议:"" = streamable(存量兼容,同步失败自动回退 SSE 重试一次)
+	// | "streamable" | "sse"。高德等平台官方端点是 SSE(/sse?key=key):
+	// streamable 客户端连 SSE 端点会报 "response should contain RPC id"。
+	Transport string `gorm:"size:16"`
 
 	// OAuth 2.1(M4):ClientID/Secret 可为空——空则尝试动态客户端注册(RFC 7591)。
 	OAuthClientID     string    `gorm:"size:256"`
@@ -50,6 +62,8 @@ type ServerView struct {
 	AuthType string `json:"auth_type"`
 	// Authorized OAuth 型是否已完成授权
 	Authorized bool `json:"authorized"`
+	// Transport 传输协议:streamable(空值同)/sse
+	Transport string `json:"transport"`
 	// ToolCount 上次同步发现的工具数(-1=从未同步成功)
 	ToolCount int `json:"tool_count"`
 }

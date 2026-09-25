@@ -82,6 +82,7 @@ type MCPServerInput struct {
 	BaseURL           string
 	APIKey            string
 	AuthType          string // none/bearer/oauth,空 = bearer
+	Transport         string // streamable(空同)/sse
 	OAuthClientID     string
 	OAuthClientSecret string
 	OAuthScopes       string
@@ -93,10 +94,21 @@ func normalizeAuthType(t string) (string, error) {
 	switch t {
 	case "":
 		return skilldomain.AuthTypeBearer, nil
-	case skilldomain.AuthTypeNone, skilldomain.AuthTypeBearer, skilldomain.AuthTypeOAuth:
+	case skilldomain.AuthTypeNone, skilldomain.AuthTypeBearer, skilldomain.AuthTypeOAuth, skilldomain.AuthTypeQuery:
 		return t, nil
 	default:
 		return "", fmt.Errorf("不支持的鉴权方式 %q", t)
+	}
+}
+
+// normalizeTransport 传输协议校验:空值保留(= streamable + 同步失败自动回退 SSE),
+// 只有用户显式选择 streamable 才固定协议、放弃回退。
+func normalizeTransport(t string) (string, error) {
+	switch t {
+	case "", skilldomain.TransportStreamable, skilldomain.TransportSSE:
+		return t, nil
+	default:
+		return "", fmt.Errorf("不支持的传输协议 %q(可选 streamable / sse)", t)
 	}
 }
 
@@ -107,6 +119,10 @@ func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, er
 		return nil, err
 	}
 	authType, err := normalizeAuthType(in.AuthType)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := normalizeTransport(in.Transport)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +146,7 @@ func (s *SkillService) AddServer(in MCPServerInput) (*skilldomain.ServerView, er
 	row := &skilldomain.MCPServer{
 		Name: name, BaseURL: in.BaseURL, APIKey: cipher, Enabled: in.Enabled,
 		AuthType:          authType,
+		Transport:         transport,
 		OAuthClientID:     strings.TrimSpace(in.OAuthClientID),
 		OAuthClientSecret: cipherSecret,
 		OAuthScopes:       strings.TrimSpace(in.OAuthScopes),
@@ -153,6 +170,10 @@ func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.S
 	if err != nil {
 		return nil, err
 	}
+	transport, err := normalizeTransport(in.Transport)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -172,6 +193,7 @@ func (s *SkillService) UpdateServer(id int64, in MCPServerInput) (*skilldomain.S
 	row.BaseURL = in.BaseURL
 	row.Enabled = in.Enabled
 	row.AuthType = authType
+	row.Transport = transport
 	if in.APIKey != "" {
 		cipher, err := encryptSecret(in.APIKey)
 		if err != nil {
@@ -277,6 +299,7 @@ func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.Se
 		Enabled:    row.Enabled,
 		HasAPIKey:  row.APIKey != "",
 		AuthType:   row.AuthType,
+		Transport:  row.Transport,
 		Authorized: row.Authorized(),
 		ToolCount:  -1,
 	}
@@ -379,7 +402,7 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 		return res
 	}
 
-	spec := MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, Enabled: true, AuthType: row.AuthType}
+	spec := MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, Enabled: true, AuthType: row.AuthType, Transport: row.Transport}
 	switch row.AuthType {
 	case skilldomain.AuthTypeOAuth:
 		// 未授权 → 不连接,提示先走授权流程
@@ -414,30 +437,85 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 		spec.APIKey = apiKey
 	}
 
-	mcpClient, err := factory(spec)
-	if err != nil {
-		res.Err = fmt.Sprintf("创建客户端失败: %v", err)
-	} else if err := mcpClient.Start(context.Background()); err != nil {
-		res.Err = fmt.Sprintf("连接失败: %v", err)
-	}
-	if res.Err == "" {
-		initReq := mcpInitializeRequest()
-		if _, err := mcpClient.Initialize(context.Background(), initReq); err != nil {
-			res.Err = fmt.Sprintf("初始化失败: %v", err)
-		}
-	}
-	if res.Err == "" {
+	mcpClient, resErr := connectAndInitialize(factory, spec)
+	if resErr == "" {
 		result, err := mcpClient.ListTools(context.Background(), mcpListToolsRequest())
 		if err != nil {
-			res.Err = fmt.Sprintf("获取工具列表失败: %v", err)
+			resErr = fmt.Sprintf("获取工具列表失败: %v", err)
 		} else {
 			res.ToolCount = s.ingestServerTools(row.Name, mcpClient, result.Tools)
 		}
 	}
-	if res.Err != "" {
-		fmt.Printf("[skill] mcp server %q 同步失败: %s\n", row.Name, res.Err)
+
+	// 自动回退(Transport 空值语义):主选 streamable 连接/初始化失败 → 依次尝试
+	// SSE / query 鉴权(key=URL 参数,高德惯例) / SSE+query,直到一组成功。
+	// 只在同步时发生(启动/保存/手动),不影响工具调用路径。
+	if resErr != "" && row.Transport == "" && row.AuthType != skilldomain.AuthTypeOAuth {
+		apiKey := spec.APIKey
+		trials := []MCPServerSpec{
+			func() MCPServerSpec { sp := spec; sp.Transport = skilldomain.TransportSSE; return sp }(),
+		}
+		if apiKey != "" && row.AuthType == skilldomain.AuthTypeBearer {
+			q := func(tp string) MCPServerSpec {
+				sp := MCPServerSpec{Name: spec.Name, BaseURL: spec.BaseURL, Enabled: true,
+					AuthType: skilldomain.AuthTypeQuery, Transport: tp, APIKey: apiKey}
+				return sp
+			}
+			trials = append(trials, q(skilldomain.TransportStreamable), q(skilldomain.TransportSSE))
+		}
+		for _, trial := range trials {
+			fmt.Printf("[skill] mcp server %q 主选失败(%s),回退重试: transport=%s auth=%s\n",
+				row.Name, resErr, trial.Transport, trial.AuthType)
+			mcpClient2, resErr2 := connectAndInitialize(factory, trial)
+			if resErr2 != "" {
+				resErr = resErr2
+				continue
+			}
+			result, err := mcpClient2.ListTools(context.Background(), mcpListToolsRequest())
+			if err != nil {
+				resErr = fmt.Sprintf("获取工具列表失败: %v", err)
+				continue
+			}
+			res.ToolCount = s.ingestServerTools(row.Name, mcpClient2, result.Tools)
+			resErr = ""
+			// 回退组合生效:持久化到 server 行,下次同步直连,不再重复探测
+			if trial.AuthType != row.AuthType || trial.Transport != row.Transport {
+				row.AuthType = trial.AuthType
+				row.Transport = trial.Transport
+				if repo := s.serverRepo; repo != nil {
+					if err := repo.Update(row); err != nil {
+						fmt.Printf("[skill] mcp server %q 回退组合持久化失败(下次仍会探测): %v\n", row.Name, err)
+					} else {
+						fmt.Printf("[skill] mcp server %q 生效组合已持久化: transport=%s auth=%s\n",
+							row.Name, trial.Transport, trial.AuthType)
+					}
+				}
+			}
+			break
+		}
+	}
+
+	if resErr != "" {
+		res.Err = resErr
+		fmt.Printf("[skill] mcp server %q 同步失败: %s\n", row.Name, resErr)
 	}
 	return res
+}
+
+// connectAndInitialize 创建客户端 → Start → Initialize,返回逐步包裹的错误文案。
+func connectAndInitialize(factory MCPClientFactory, spec MCPServerSpec) (MCPClient, string) {
+	mcpClient, err := factory(spec)
+	if err != nil {
+		return nil, fmt.Sprintf("创建客户端失败: %v", err)
+	}
+	if err := mcpClient.Start(context.Background()); err != nil {
+		return nil, fmt.Sprintf("连接失败: %v", err)
+	}
+	initReq := mcpInitializeRequest()
+	if _, err := mcpClient.Initialize(context.Background(), initReq); err != nil {
+		return nil, fmt.Sprintf("初始化失败: %v", err)
+	}
+	return mcpClient, ""
 }
 
 // mcpInitializeRequest / mcpListToolsRequest 协议请求构造(共享)。

@@ -3,6 +3,8 @@ package skill
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ type MCPServerSpec struct {
 	Enabled bool
 	// OAuth(M4):AuthType=oauth 时走 OAuth 客户端(TokenStore 由 dbTokenStore 提供)。
 	AuthType          string
+	Transport         string // ""/streamable/sse
 	OAuthClientID     string
 	OAuthClientSecret string
 	OAuthScopes       string
@@ -41,9 +44,24 @@ type MCPServerSpec struct {
 type MCPClientFactory func(spec MCPServerSpec) (MCPClient, error)
 
 // NewStreamableHTTPMCPClient 真实客户端工厂:
-//   - bearer/none: Streamable HTTP,APIKey 走 Bearer 头
-//   - oauth:      Streamable HTTP + OAuthHandler(授权头/自动刷新由 mcp-go 处理)
+//   - Transport=sse:    SSE 客户端(HTTP+SSE,2024-11 协议;高德等平台端点)
+//   - AuthType=query:  APIKey 以 key=<key> 追加到 URL 参数(高德惯例),两种传输都支持
+//   - 其余:            Streamable HTTP,APIKey 走 Bearer 头;oauth 走 OAuthHandler
 func NewStreamableHTTPMCPClient(spec MCPServerSpec) (MCPClient, error) {
+	if spec.AuthType == skilldomain.AuthTypeQuery {
+		baseURL, err := withQueryParam(spec.BaseURL, "key", spec.APIKey)
+		if err != nil {
+			return nil, err
+		}
+		spec = MCPServerSpec{Name: spec.Name, BaseURL: baseURL, Enabled: spec.Enabled}
+		if spec.BaseURL != "" && spec.Transport == skilldomain.TransportSSE {
+			return newSSEMCPClient(spec)
+		}
+		return client.NewStreamableHttpClient(spec.BaseURL)
+	}
+	if spec.Transport == skilldomain.TransportSSE {
+		return newSSEMCPClient(spec)
+	}
 	opts := []clienttransport.StreamableHTTPCOption{
 		clienttransport.WithHTTPTimeout(MCPToolTimeout),
 	}
@@ -63,6 +81,37 @@ func NewStreamableHTTPMCPClient(spec MCPServerSpec) (MCPClient, error) {
 		}))
 	}
 	return client.NewStreamableHttpClient(spec.BaseURL, opts...)
+}
+
+// withQueryParam 把 key=<value> 追加到 URL query(已有同名参数则不覆盖)。
+func withQueryParam(rawURL, key, value string) (string, error) {
+	if value == "" {
+		return rawURL, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("地址解析失败: %w", err)
+	}
+	q := u.Query()
+	if q.Get(key) == "" {
+		q.Set(key, value)
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
+}
+
+// newSSEMCPClient SSE 传输客户端。APIKey 同样走 Bearer 头(高德用 URL query key,
+// 无需额外处理——key 已在 BaseURL 里)。
+func newSSEMCPClient(spec MCPServerSpec) (MCPClient, error) {
+	opts := []clienttransport.ClientOption{
+		clienttransport.WithHTTPClient(&http.Client{Timeout: MCPToolTimeout}),
+	}
+	if spec.APIKey != "" {
+		opts = append(opts, clienttransport.WithHeaders(map[string]string{
+			"Authorization": "Bearer " + spec.APIKey,
+		}))
+	}
+	return client.NewSSEMCPClient(spec.BaseURL, opts...)
 }
 
 // mcpExecutorName 技能名 → CallTool 工具名(M2 中两者一致;预留映射位)。
