@@ -76,8 +76,13 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 		"推算",
 		"沿用历史编号",
 		"当场穿帮",
+		// B2 直调/派活边界(2026-09-25:游玩规划被主 Agent 连查带算直调,未派活)
+		"多步检索、跨来源汇总",
+		"即使手上连接器工具能查",
+		"什么时候不派",
+		"查个天气",
 	} {
-		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少反幻觉关键句 %q", want)
+		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少关键句 %q", want)
 	}
 	// 铁律必须是规则体的第一段(优先级最高,不允许被其他段落稀释)
 	first := strings.Index(MainDelegationRulesPrompt, "【铁律")
