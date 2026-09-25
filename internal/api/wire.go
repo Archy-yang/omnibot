@@ -270,6 +270,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
 	// 订阅源管理(14 §6.1):主 Agent 管理订阅;子 Agent list 取清单选源(能力打标 research/memory)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateManageSubscriptionsTool(subscriptionSvc) })
+	// 天气(内置,NMC 中央气象台 REST,零 key):主 Agent 直调即答("今天穿什么"),子 Agent(白名单
+	// research)行程规划派活时可用。抓取类不同,天气是单点结构化查询,不属"管家不亲自抓网页"的边界
+	toolSvc.RegisterBuiltin(agenttools.CreateWeatherTool)
 	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateRSSReaderTool)
 	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
