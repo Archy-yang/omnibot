@@ -83,12 +83,23 @@ const canSend = computed(() => {
   return inputText.value.trim().length > 0
 })
 
-// 自动调整高度
+// 自动调整高度。
+// 滚动条策略:低于最大高度一律 overflow-y: hidden——此时高度=内容高度,字不会被裁;
+// 仅当内容触顶(max)才开 auto 滚动。此前恒为 auto,行高取整让单行时 scrollHeight
+// 比 clientHeight 多 1px,右侧常驻一小截滚动条(2026-09-25 反馈)。
+const MAX_TEXTAREA_HEIGHT = 200
+
 function autoResize() {
   if (!textareaRef.value) return
   const textarea = textareaRef.value
+  // 测量时先藏滚动条,避免滚动条宽度挤占内容区导致 scrollHeight 虚高
+  textarea.style.overflowY = 'hidden'
   textarea.style.height = 'auto'
-  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
+  const content = textarea.scrollHeight
+  textarea.style.height = Math.min(content, MAX_TEXTAREA_HEIGHT) + 'px'
+  if (content > MAX_TEXTAREA_HEIGHT) {
+    textarea.style.overflowY = 'auto'
+  }
 }
 
 function handleInput() {
