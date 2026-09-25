@@ -85,6 +85,8 @@ type messageService struct {
 	compactor        ContextCompactor
 	keepRecentTokens     int
 	compactTriggerTokens int
+	// Phase 3(§8):Conversation Recall(Recent Raw 之后注入,补偿 Compact 有损)
+	recall RecallSearcher
 	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
 	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
 	turnSinks []TurnSink
@@ -107,6 +109,8 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 			service.contextStateRepo = s
 		case ContextCompactor:
 			service.compactor = s
+		case RecallSearcher:
+			service.recall = s
 		case TurnSink:
 			service.turnSinks = append(service.turnSinks, s)
 		}
@@ -185,6 +189,34 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 			Role:    msg.Role,
 			Content: msg.Content,
 		})
+	}
+
+	// Conversation Recall(§8.3):位于 Recent Raw 之后、当前问题之前——
+	// 召回内容每轮随问题变化,靠后放置保护前缀缓存;尾窗已覆盖的片段不重复召回。
+	if s.recall != nil {
+		excludeBefore := int64(0)
+		if len(messages) > 0 {
+			excludeBefore = messages[len(messages)-1].ID
+		}
+		recallTexts, rerr := s.recall.Search(ctx, userID, currentContent, excludeBefore)
+		if rerr != nil {
+			logger.WarnWithFields("recall: 召回失败,本轮跳过(不阻塞对话)",
+				zap.Int64("user_id", userID), zap.Error(rerr))
+			recallTexts = nil
+		}
+		if len(recallTexts) > 0 {
+			var sb strings.Builder
+			sb.WriteString("以下是从更早的历史对话中自动召回的、与当前问题可能相关的片段(供参考;与上文冲突时以最近发生为准):\n\n")
+			for _, t := range recallTexts {
+				sb.WriteString("---\n")
+				sb.WriteString(t)
+				sb.WriteString("\n")
+			}
+			result = append(result, llm.ChatMessage{
+				Role:    conversation.RoleSystem,
+				Content: sb.String(),
+			})
+		}
 	}
 
 	result = append(result, llm.ChatMessage{

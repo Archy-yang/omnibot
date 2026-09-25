@@ -52,3 +52,29 @@ func TestManualContextBuild(t *testing.T) {
 		t.Logf("  [%d] role=%s content=%d字 %.40s", i, m.Role, len([]rune(m.Content)), m.Content)
 	}
 }
+
+// TestManualChunkBackfill 手动回填召回块索引(Phase 3,运维工具,默认跳过)。
+// 存量消息在 chunk 机制上线前落库,chunk 水位为 0,首次 RunOnce 自然全量回填。
+//
+//	MANUAL_CHUNK_BACKFILL=1 go test ./internal/api -run TestManualChunkBackfill -v
+func TestManualChunkBackfill(t *testing.T) {
+	if os.Getenv("MANUAL_CHUNK_BACKFILL") == "" {
+		t.Skip("设 MANUAL_CHUNK_BACKFILL=1 以对真实数据库回填召回块索引")
+	}
+	configPath := os.Getenv("MANUAL_CHUNK_BACKFILL_CONFIG")
+	if configPath == "" {
+		configPath = "../../configs/config.yaml"
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("加载配置(%s): %v", configPath, err)
+	}
+	deps := buildAppDeps(cfg)
+	if deps.chunkEmbedder == nil {
+		t.Skip("chunkEmbedder 未装配")
+	}
+	if err := deps.chunkEmbedder.RunOnce(context.Background(), 1); err != nil {
+		t.Fatalf("回填失败: %v", err)
+	}
+	t.Log("召回块回填完成")
+}

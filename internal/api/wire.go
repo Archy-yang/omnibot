@@ -72,6 +72,9 @@ type appDeps struct {
 	// 沉淀管线(可空:extraction.enabled=false 未启用)。
 	// 暴露给手动触发工具(digest_manual_test.go,env 门控)复用同一装配。
 	digestPipeline *memoryService.DigestPipeline
+
+	// Phase 3:召回块构建器(手动回填工具用)。
+	chunkEmbedder *chatService.ChunkEmbedder
 }
 
 // buildAppDeps 构造全部依赖(原 SetupRouter 前半段,行为零变化)。
@@ -199,6 +202,26 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		chatRepo.NewContextStateRepository(dbConn.GetGormDB()),
 		chatService.NewLLMContextCompactor(compactResolver, compactLLM),
 	)
+	// Phase 3(§8/§9):Conversation Recall——turn 粒度 chunk 索引(TurnSink 增量构建)
+	// + 向量召回(邻居展开/阈值),注入 Recent Raw 之后。embedding 未配置时静默缺失。
+	chunkEmbedder := chatService.NewChunkEmbedder(
+		chatRepo.NewChunkWatermarkRepository(dbConn.GetGormDB()),
+		chatRepo.NewConversationChunkRepository(dbConn.GetGormDB()),
+		msgRepo,
+		memoryEmbedding,
+	)
+	chunkEmbedder.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
+		return embeddingResolver.ResolveEmbeddingProvider(userID)
+	})
+	msgSvcOpts = append(msgSvcOpts, chunkEmbedder) // chat.TurnSink
+	chunkRecall := chatService.NewChunkRecallService(
+		chatRepo.NewConversationChunkRepository(dbConn.GetGormDB()),
+		memoryEmbedding,
+	)
+	chunkRecall.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
+		return embeddingResolver.ResolveEmbeddingProvider(userID)
+	})
+	msgSvcOpts = append(msgSvcOpts, chunkRecall)
 	// M7 中期记忆(§10.5):消息级向量增量嵌入,同一 TurnSink 链路、独立水位独立降级。
 	// 复用沉淀的 ConversationSource(msgRepo)与用户级向量解析;存量回填=水位 0 首轮自然全量。
 	if cfg.Memory.Extraction.Enabled {
@@ -383,6 +406,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
 		digestPipeline:      digestPipeline,
+		chunkEmbedder:       chunkEmbedder,
 	}
 }
 

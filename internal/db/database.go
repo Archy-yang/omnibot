@@ -159,6 +159,8 @@ func autoMigrate(db *gorm.DB) error {
 		&conversation.Conversation{}, // Phase 1(16-架构迭代路线图 §5.2):对话空间
 		&conversation.ConversationTurn{}, // Phase 1:逻辑 Turn(薄表,身份锚点)
 		&conversation.ConversationContextState{}, // Phase 2 §7.3:Compact 工作集状态(单对话单行)
+		&conversation.ConversationChunk{},        // Phase 3 §9:对话召回块(turn 粒度向量索引)
+		&conversation.ChunkEmbeddingWatermark{},  // Phase 3:chunk 构建水位
 		&agent.Agent{},               // Phase 1:执行体登记簿(全场景预留,种子 main)
 		&memory.Memory{},
 		&memory.MemoryMessageLink{},  // M5.2:记忆↔消息多对多溯源映射(§7.3)
