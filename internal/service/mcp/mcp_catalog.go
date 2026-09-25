@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	mcp "github.com/mark3labs/mcp-go/mcp"
-
 	mcpdomain "omnibot/internal/domain/mcp"
 	agentpkg "omnibot/internal/service/agent"
 	memoryservice "omnibot/internal/service/memory"
@@ -104,7 +102,7 @@ func (c *MCPToolCatalog) snapshot(userID int64) []*MCPToolInfo {
 // replaceServerCatalog 同步后整目录重建:ListTools 结果 → 向量化 → 替换。返回工具数。
 // 向量化文本 = server 描述(选填) + 工具名 + 工具描述:工具描述干瘪时 server 级
 // 能力概述补位,改善语义匹配召回。指纹同步计入 server 描述(改描述即触发重嵌)。
-func (s *MCPService) replaceServerCatalog(serverRow *mcpdomain.MCPServer, tools []mcp.Tool) int {
+func (s *MCPService) replaceServerCatalog(serverRow *mcpdomain.MCPServer, tools []mcpdomain.MCPRemoteTool) int {
 	provider := s.providerFor(ptrDeref(serverRow.UserID))
 	serverDesc := strings.TrimSpace(serverRow.Description)
 	infos := make([]*MCPToolInfo, 0, len(tools))
@@ -154,12 +152,11 @@ func ptrDeref(p *int64) int64 {
 	return *p
 }
 
-func marshalSchema(schema mcp.ToolInputSchema) string {
-	b, err := json.Marshal(schema)
-	if err != nil {
+func marshalSchema(schema json.RawMessage) string {
+	if len(schema) == 0 {
 		return "{}"
 	}
-	return string(b)
+	return string(schema)
 }
 
 // matchTools 语义匹配用户可见且连接器开启的工具,余弦降序取 topK(只比同模型向量)。
@@ -303,19 +300,7 @@ func (s *MCPService) specForServer(row *mcpdomain.MCPServer) (*MCPServerSpec, er
 	return spec, nil
 }
 
-// mcpContentText 抽取 CallToolResult 文本内容。
-func mcpContentText(result *mcp.CallToolResult) string {
-	if result == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, c := range result.Content {
-		if tc, ok := c.(mcp.TextContent); ok {
-			sb.WriteString(tc.Text)
-		}
-	}
-	return sb.String()
-}
+// mcpContentText 已随 go-sdk 迁移移除:文本抽取收敛在 goSDKClient(sdkContentText)。
 
 // CreateMCPCallTool 构造 mcp_call 元工具(tools 参数恒定项,缓存稳定)。
 func (s *MCPService) CreateMCPCallTool() agentpkg.Tool {
@@ -366,7 +351,8 @@ const mcpSearchDescription = `按语义搜索当前可用的 MCP 连接器工具
 返回工具卡片(名称/描述/参数说明),确认后用 mcp_call 调用。
 纪律:每回合最多搜索 3 次;达到上限后必须停止重试,如实告知用户当前无法完成该操作。`
 
-// invokeMCPTool 现场握手建连调用(无常驻连接:重启/断线不漂移)。
+// invokeMCPTool 现场建连调用(无常驻连接:重启/断线不漂移)。
+// go-sdk 迁移后:Connect(含协议握手)在工厂内一步完成,无需 Start/Initialize 两步。
 func (s *MCPService) invokeMCPTool(ctx context.Context, serverRow *mcpdomain.MCPServer, toolName string, callArgs map[string]interface{}) (string, error) {
 	spec, err := s.specForServer(serverRow)
 	if err != nil {
@@ -375,32 +361,20 @@ func (s *MCPService) invokeMCPTool(ctx context.Context, serverRow *mcpdomain.MCP
 	callCtx, cancel := context.WithTimeout(ctx, MCPToolTimeout)
 	defer cancel()
 
-	mcpClient, ferr := s.mcpFactory(*spec)
+	mcpClient, ferr := s.mcpFactory(callCtx, *spec)
 	if ferr != nil {
 		return "", fmt.Errorf("连接器连接失败: %v", ferr)
 	}
-	if err := mcpClient.Start(callCtx); err != nil {
-		return "", fmt.Errorf("连接器连接失败: %v", err)
-	}
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "omnibot", Version: "1.0"}
-	if _, err := mcpClient.Initialize(callCtx, initReq); err != nil {
-		return "", fmt.Errorf("连接器初始化失败: %v", err)
-	}
-	req := mcp.CallToolRequest{}
-	req.Params.Name = toolName
-	if callArgs != nil {
-		req.Params.Arguments = callArgs
-	}
-	result, err := mcpClient.CallTool(callCtx, req)
+	defer func() { _ = mcpClient.Close() }()
+
+	result, err := mcpClient.CallTool(callCtx, toolName, callArgs)
 	if err != nil {
 		return "", fmt.Errorf("工具调用失败(%s): %v", toolName, err)
 	}
 	if result.IsError {
-		return "", fmt.Errorf("工具执行报错(%s): %s", toolName, mcpContentText(result))
+		return "", fmt.Errorf("工具执行报错(%s): %s", toolName, result.Text)
 	}
-	return mcpContentText(result), nil
+	return result.Text, nil
 }
 
 // CreateMCPSearchTool 构造 mcp_search 元工具(每回合 3 次上限由 runtime 计数器强制)。

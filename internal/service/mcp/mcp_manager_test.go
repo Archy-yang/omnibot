@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mcpdomain "omnibot/internal/domain/mcp"
-
-	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
 // ---- mock MCPServerRepository ----
@@ -99,7 +97,7 @@ func newManagerService(serverRepo *mockMCPServerRepository, clients ...*mockMCPC
 }
 
 func enabledClient(tool string) *mockMCPClient {
-	return &mockMCPClient{tools: []mcp.Tool{textTool(tool, "远端工具 "+tool)}}
+	return &mockMCPClient{tools: []mcpdomain.MCPRemoteTool{textTool(tool, "远端工具 "+tool)}}
 }
 
 // ---- AddServer ----
@@ -147,12 +145,15 @@ func TestAddServer_Validation(t *testing.T) {
 func TestAddServer_DisabledNoConnect(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo)
-	client := &mockMCPClient{}
-	svc.SetMCPClientFactory(mockFactory(client))
+	factoryCalls := 0
+	svc.SetMCPClientFactory(func(ctx context.Context, spec MCPServerSpec) (MCPClient, error) {
+		factoryCalls++
+		return &mockMCPClient{}, nil
+	})
 
 	_, err := svc.AddServer(MCPServerInput{Name: "off", BaseURL: "https://x.com", APIKey: "", Enabled: false}, 42)
 	require.NoError(t, err)
-	assert.False(t, client.started, "停用的 server 不得发起连接")
+	assert.Equal(t, 0, factoryCalls, "停用的 server 不得发起连接")
 	svc.catalog.mu.RLock()
 	_, inCatalog := svc.catalog.byServer[serverRepo.servers[0].ID]
 	svc.catalog.mu.RUnlock()
@@ -215,11 +216,9 @@ func TestDeleteServer_CascadesSkills(t *testing.T) {
 // 测试 24:手动同步发现新工具落库;失败的 server 返回可读错误不 panic。
 func TestSyncServer_Manual(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	svc := newManagerService(serverRepo, &mockMCPClient{startErr: assert.AnError})
-	// 永远失败的工厂(回退链的每次尝试都失败,而非靠下一个 mock 意外成功)
-	svc.SetMCPClientFactory(func(spec MCPServerSpec) (MCPClient, error) {
-		return &mockMCPClient{startErr: assert.AnError}, nil
-	})
+	svc := newManagerService(serverRepo)
+	// 永远失败的工厂(连接错误在工厂阶段抛出)
+	svc.SetMCPClientFactory(failFactory())
 	view, _ := svc.AddServer(MCPServerInput{Name: "broken", BaseURL: "https://x.com", APIKey: "", Enabled: true}, 42) // 同步失败但落库成功
 
 	res, err := svc.SyncServer(view.ID, 42)

@@ -10,8 +10,8 @@
 
 | 项 | 内容 |
 |----|------|
-| 版本 | v1.1 |
-| 状态 | 已确认（2026-09-04;2026-09-25 正名修订） |
+| 版本 | v1.2 |
+| 状态 | 已确认（2026-09-04;2026-09-25 正名修订;2026-09-25 MCP 客户端迁移官方 go-sdk） |
 | PRD | [插件系统PRD-v1.0](../../20-产品PRD/in_progress/插件系统PRD-v1.0.md) |
 | 上游规划 | [15-后续能力演进规划.md](./15-后续能力演进规划.md) 阶段 3 / 阶段 4 |
 | 前置 | 08-后台Agent任务框架（能力白名单已落地）、11-Prompt管理 |
@@ -168,15 +168,21 @@ mcp:
       enabled: true
 ```
 
-### 6.4 OAuth 2.1 支持（M4，已落地）
+### 6.4 OAuth 2.1 支持（M4，已落地；2026-09-25 随 go-sdk 迁移改为自有实现）
 
-远程托管 MCP server 的标准鉴权（MCP 2025-03-26 规范引入）。基于 `mcp-go` OAuthHandler：
-授权码 + PKCE，支持**授权服务器元数据发现**（`/.well-known/oauth-authorization-server`）、
-**动态客户端注册**（RFC 7591，Client ID 留空时自动注册）、**refresh token 自动刷新**。
+远程托管 MCP server 的标准鉴权（MCP 2025-03-26 规范引入）。原基于 mcp-go OAuthHandler，
+2026-09-25 客户端迁移官方 go-sdk 后改为**自有实现**（`mcp_oauth.go`）：
+授权码 + PKCE（自实现 `crypto/rand`+SHA-256 S256），**授权服务器元数据发现**（RFC 8414，
+`/.well-known/oauth-authorization-server`）、**动态客户端注册**（go-sdk `oauthex.RegisterClient`，
+Client ID 留空时自动注册）、**refresh token 自动刷新**（标准 OAuth2 POST 自实现）。
 
-- `mcp_servers` 表新增列：`auth_type`（none/bearer/oauth）、`oauth_client_id`、
+- `mcp_servers` 表新增列：`auth_type`（none/bearer/oauth/query）、`oauth_client_id`、
   `oauth_client_secret`（加密）、`oauth_scopes`、`oauth_tokens`（Token JSON 整体加密）。
-- Token 持久化：`dbTokenStore`（实现 mcp-go `TokenStore`）——授权换新与刷新自动落库，重启不丢。
+- Token 持久化：`dbTokenStore`（自有 `oauthTokenStore` 窄接口）——授权换新与刷新自动落库，重启不丢。
+  Token JSON 字段与原 mcp-go `clienttransport.Token` 完全一致，**存量加密 token 直接可解析，
+  已授权连接器无需重新授权**。
+- 连接时 OAuth 客户端 == Bearer 客户端：service 层连接前刷新 token 后以 access token 走
+  `Authorization: Bearer` 注入（`headerRoundTripper`），传输层不感知鉴权类型。
 - 流程：`POST /api/v1/mcp/servers/:id/authorize`（挂起 state+verifier，返回授权 URL）
   → 用户在服务商页授权 → 重定向 `GET /api/v1/mcp/oauth/callback`（不挂 JWT，一次性 state 防 CSRF）
   → 换 token 加密落库 → 「同步」发现工具。
@@ -184,20 +190,24 @@ mcp:
   空回落 `http://localhost:<port>`；自部署在公网需设置该项）。
 - 未授权的 oauth server 同步被拒（"尚未完成 OAuth 授权"）；token 过期连接前自动刷新，失败如实上报。
 
-### 6.2 客户端与接入流程（实现按 mcp-go v0.32.0 落地）
+### 6.2 客户端与接入流程（2026-09-25 迁移官方 go-sdk 落地）
 
-- 库：`github.com/mark3labs/mcp-go`（client，Streamable HTTP 传输；go 1.24 兼容上限 v0.32.0）。
-- `internal/service/skill/mcp_source.go`：
-  - `MCPClient` 窄接口（Start/Initialize/ListTools/CallTool）+ `MCPClientFactory`，测试注入 mock；
-    真实实现 `NewStreamableHTTPMCPClient`（APIKey 走 `Authorization: Bearer` 头）。
-  - 启动时对每个 enabled server：`Start → Initialize → ListTools`，成功则把工具 upsert 进 `skills`
-    （`source=mcp`，`Enabled=false` 默认停用，重复同步保留用户启停）；失败（超时/鉴权/不可达）
-    则该 server 技能隐藏，**启动不阻塞**。
-  - 与内置技能重名的远端工具跳过 + 日志告警（不覆盖内置）。
-  - 从配置移除的 server：`DeleteMCPSkillsNotIn` 清理其技能行。
-  - 执行：同步成功即注册执行闭包（`CallTool` + 30s 超时 + 文本内容抽取）；`IsError` 的远端结果
-    以错误返回（助手如实告知用户）；server 下线（执行体缺失）技能隐藏。
-- 远端工具默认 `MainVisible=true`（抓取类限制只针对内置工具）。
+- 库：`github.com/modelcontextprotocol/go-sdk` v1.7.0（**官方 SDK**，取代 mark3labs/mcp-go）。
+  支持协议版本 2024-11-05 ~ 2026-07-28；传输 `StreamableClientTransport`（现行）+
+  `SSEClientTransport`（2024-11 旧协议,高德等端点）。go 1.25+（本机已升 go 1.27.1）。
+- `internal/service/mcp/mcp_client_gosdk.go`：
+  - `MCPClient` 窄接口（ListTools/CallTool/Close,参数与返回为 `domain/mcp` 自有 DTO,
+    SDK 类型不出实现文件）+ `MCPClientFactory`,测试注入 mock;真实实现
+    `NewStreamableHTTPMCPClient`（query=key URL 参数 / Bearer 头两种鉴权,
+    Bearer 经 `headerRoundTripper` 注入）。
+  - 会话由 SDK `Connect` 一步建立（协议握手内聚）,原 mcp-go 的 `Start → Initialize`
+    两步取消;客户端用完即 `Close()`。
+  - streamable 传输 `http.Client.Timeout=0`（standalone SSE 常驻流不能一刀切超时）,
+    超时纪律由调用方 ctx 负责（调用 30s / 同步 30s）;SSE 传输保留 30s Timeout（同 mcp-go 行为）。
+  - 空传输回退链（主选失败 → SSE / query 组合逐试,生效组合持久化）逻辑不变。
+- 集成测试：用 go-sdk **server 侧**（`NewServer`+`StreamableHTTPHandler`/`SSEHandler`）起
+  真协议假 MCP server,覆盖 streamable/SSE/query/超时/远端报错全链路（`mcp_client_gosdk_test.go`）;
+  live smoke 受 `LIVE_SMOKE=1` 门控直连真库真站（`mcp_live_smoke_test.go`,高德 15 工具实测通过）。
 
 ### 6.3 安全
 

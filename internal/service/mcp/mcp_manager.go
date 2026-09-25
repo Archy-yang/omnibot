@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
-
 	mcpdomain "omnibot/internal/domain/mcp"
 	"omnibot/internal/pkg/crypto"
 )
@@ -410,22 +408,15 @@ func (s *MCPService) syncServerRow(row *mcpdomain.MCPServer) *SyncResult {
 			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
 			return res
 		}
-		// token 过期则先刷新(失败如实上报,不静默用旧 token)
-		if _, err := s.refreshTokenIfExpired(context.Background(), row.ID); err != nil {
+		// token 过期则先刷新(失败如实上报,不静默用旧 token);
+		// go-sdk 迁移后 OAuth 客户端 == Bearer 客户端(access token 作为 Bearer 注入)
+		tok, err := s.refreshTokenIfExpired(context.Background(), row.ID)
+		if err != nil {
 			res.Err = fmt.Sprintf("OAuth 令牌刷新失败: %v", err)
 			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
 			return res
 		}
-		clientSecret, err := decryptSecret(row.OAuthClientSecret)
-		if err != nil {
-			res.Err = fmt.Sprintf("客户端密钥解密失败: %v", err)
-			fmt.Printf("[skill] mcp server %q: %s\n", row.Name, res.Err)
-			return res
-		}
-		spec.OAuthClientID = row.OAuthClientID
-		spec.OAuthClientSecret = clientSecret
-		spec.OAuthScopes = row.OAuthScopes
-		spec.TokenStore = s.newDBTokenStore(row.ID)
+		spec.APIKey = tok.AccessToken
 	default: // bearer / none
 		apiKey, err := decryptSecret(row.APIKey)
 		if err != nil {
@@ -436,14 +427,9 @@ func (s *MCPService) syncServerRow(row *mcpdomain.MCPServer) *SyncResult {
 		spec.APIKey = apiKey
 	}
 
-	mcpClient, resErr := connectAndInitialize(factory, spec)
+	tools, resErr := listToolsVia(factory, spec)
 	if resErr == "" {
-		result, err := mcpClient.ListTools(context.Background(), mcpListToolsRequest())
-		if err != nil {
-			resErr = fmt.Sprintf("获取工具列表失败: %v", err)
-		} else {
-			res.ToolCount = s.replaceServerCatalog(row, result.Tools)
-		}
+		res.ToolCount = s.replaceServerCatalog(row, tools)
 	}
 
 	// 自动回退(Transport 空值语义):主选 streamable 连接/初始化失败 → 依次尝试
@@ -465,17 +451,12 @@ func (s *MCPService) syncServerRow(row *mcpdomain.MCPServer) *SyncResult {
 		for _, trial := range trials {
 			fmt.Printf("[skill] mcp server %q 主选失败(%s),回退重试: transport=%s auth=%s\n",
 				row.Name, resErr, trial.Transport, trial.AuthType)
-			mcpClient2, resErr2 := connectAndInitialize(factory, trial)
-			if resErr2 != "" {
-				resErr = resErr2
+			tools, trialErr := listToolsVia(factory, trial)
+			if trialErr != "" {
+				resErr = trialErr
 				continue
 			}
-			result, err := mcpClient2.ListTools(context.Background(), mcpListToolsRequest())
-			if err != nil {
-				resErr = fmt.Sprintf("获取工具列表失败: %v", err)
-				continue
-			}
-			res.ToolCount = s.replaceServerCatalog(row, result.Tools)
+			res.ToolCount = s.replaceServerCatalog(row, tools)
 			resErr = ""
 			// 回退组合生效:持久化到 server 行,下次同步直连,不再重复探测
 			if trial.AuthType != row.AuthType || trial.Transport != row.Transport {
@@ -501,32 +482,32 @@ func (s *MCPService) syncServerRow(row *mcpdomain.MCPServer) *SyncResult {
 	return res
 }
 
-// connectAndInitialize 创建客户端 → Start → Initialize,返回逐步包裹的错误文案。
-func connectAndInitialize(factory MCPClientFactory, spec MCPServerSpec) (MCPClient, string) {
-	mcpClient, err := factory(spec)
+// connectMCPClient 经工厂建连(go-sdk Connect 内聚握手),错误文案逐步包裹。
+// 原 Start→Initialize 两步已由 SDK 的 Connect 一步替代。
+func connectMCPClient(factory MCPClientFactory, spec MCPServerSpec) (MCPClient, string) {
+	connectCtx, cancel := context.WithTimeout(context.Background(), MCPToolTimeout)
+	defer cancel()
+	mcpClient, err := factory(connectCtx, spec)
 	if err != nil {
-		return nil, fmt.Sprintf("创建客户端失败: %v", err)
-	}
-	if err := mcpClient.Start(context.Background()); err != nil {
 		return nil, fmt.Sprintf("连接失败: %v", err)
-	}
-	initReq := mcpInitializeRequest()
-	if _, err := mcpClient.Initialize(context.Background(), initReq); err != nil {
-		return nil, fmt.Sprintf("初始化失败: %v", err)
 	}
 	return mcpClient, ""
 }
 
-// mcpInitializeRequest / mcpListToolsRequest 协议请求构造(共享)。
-func mcpInitializeRequest() mcp.InitializeRequest {
-	req := mcp.InitializeRequest{}
-	req.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	req.Params.ClientInfo = mcp.Implementation{Name: "omnibot", Version: "1.0"}
-	return req
-}
-
-func mcpListToolsRequest() mcp.ListToolsRequest {
-	return mcp.ListToolsRequest{}
+// listToolsVia 建连→拉工具列表→关闭,回退探测用(整链路带超时,资源确定释放)。
+func listToolsVia(factory MCPClientFactory, spec MCPServerSpec) ([]mcpdomain.MCPRemoteTool, string) {
+	mcpClient, cerr := connectMCPClient(factory, spec)
+	if cerr != "" {
+		return nil, cerr
+	}
+	defer func() { _ = mcpClient.Close() }()
+	listCtx, cancel := context.WithTimeout(context.Background(), MCPToolTimeout)
+	defer cancel()
+	tools, err := mcpClient.ListTools(listCtx)
+	if err != nil {
+		return nil, fmt.Sprintf("获取工具列表失败: %v", err)
+	}
+	return tools, ""
 }
 
 // derefOrZero nil 安全取值。

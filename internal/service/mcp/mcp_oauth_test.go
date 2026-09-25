@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	clienttransport "github.com/mark3labs/mcp-go/client/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -70,7 +69,7 @@ func TestDBTokenStore_RoundtripEncrypted(t *testing.T) {
 	svc.SetMCPServerRepository(serverRepo)
 
 	store := svc.newDBTokenStore(1)
-	require.NoError(t, store.SaveToken(&clienttransport.Token{
+	require.NoError(t, store.SaveToken(&Token{
 		AccessToken: "at-1", RefreshToken: "rt-1", ExpiresIn: 60,
 	}))
 	stored := serverRepo.servers[0].OAuthTokens
@@ -186,7 +185,7 @@ func TestDBTokenStore_FeedsHandlerRefresh(t *testing.T) {
 
 	store := svc.newDBTokenStore(1)
 	// 写入一个已过期 token(带 refresh_token)
-	expired := &clienttransport.Token{AccessToken: "old-at", RefreshToken: "rt-456", ExpiresIn: -10}
+	expired := &Token{AccessToken: "old-at", RefreshToken: "rt-456", ExpiresIn: -10}
 	expired.ExpiresAt = time.Now().Add(-time.Minute)
 	require.NoError(t, store.SaveToken(expired))
 
