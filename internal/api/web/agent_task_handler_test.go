@@ -53,10 +53,12 @@ func TestHandleListTasks_CompletedUnreported(t *testing.T) {
 	art := "result"
 	t1 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g1"), "web", "")
 	require.NoError(t, repo.Create(t1))
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 	t2 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g2"), "web", "")
 	require.NoError(t, repo.Create(t2))
-	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t2.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t2.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 	require.NoError(t, repo.MarkReported(t2.ID))
 
 	router := gin.New()
@@ -90,12 +92,13 @@ func TestHandleListTasks_AllTasks(t *testing.T) {
 	t1 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g1"), "web", "")
 	t1.Name = "旧任务"
 	require.NoError(t, repo.Create(t1))
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 	require.NoError(t, repo.MarkReported(t1.ID)) // 已汇报也要出现在全量列表
 	t2 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g2"), "web", "")
 	t2.Name = "查AIHOT今日动态"
 	require.NoError(t, repo.Create(t2))
-	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionWeb(t, repo, t2.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	router := gin.New()
 	router.Use(injectUserID(42))
@@ -130,7 +133,8 @@ func TestHandleGetTaskDetail_Success(t *testing.T) {
 	t1 := domainagent.NewAgentTask(42, spec, "web", "")
 	require.NoError(t, repo.Create(t1))
 	art := "# 报告全文"
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	router := gin.New()
 	router.Use(injectUserID(42))
@@ -189,10 +193,12 @@ func TestHandleListTasks_UserIsolation(t *testing.T) {
 	art := "r"
 	t1 := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g1"), "web", "")
 	require.NoError(t, repo.Create(t1))
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 	t2 := domainagent.NewAgentTask(2, domainagent.NewTaskSpec("g2"), "web", "")
 	require.NoError(t, repo.Create(t2))
-	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t2.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t2.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	router := gin.New()
 	router.Use(injectUserID(1))
@@ -230,7 +236,8 @@ func TestHandleReportTask_ForbiddenNotOwner(t *testing.T) {
 	t1 := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(t1))
 	art := "r"
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	router := gin.New()
 	router.Use(injectUserID(2))
@@ -247,7 +254,8 @@ func TestHandleReportTask_AlreadyReported(t *testing.T) {
 	t1 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(t1))
 	art := "r"
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 	require.NoError(t, repo.MarkReported(t1.ID))
 
 	router := gin.New()
@@ -392,7 +400,8 @@ func TestHandleReportTask_PersistsReportMessage(t *testing.T) {
 	t1 := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
 	require.NoError(t, repo.Create(t1))
 	art := "old artifact"
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	router := gin.New()
 	router.Use(injectUserID(42))
@@ -405,4 +414,12 @@ func TestHandleReportTask_PersistsReportMessage(t *testing.T) {
 	assert.True(t, msgSvc.reportSaved, "HandleReportTask 应调 SaveReportMessage 落库汇报")
 	assert.Equal(t, t1.ID, msgSvc.savedReportTaskID, "汇报消息应关联 task_id")
 	assert.Contains(t, msgSvc.savedReportContent, "调研结果:Go 1.24", "汇报内容应是主 Agent 最终文本")
+}
+
+// mustTransitionWeb 测试辅助:CAS 迁移并断言成功(Phase 5)。
+func mustTransitionWeb(t *testing.T, repo repoagent.AgentTaskRepository, id int64, from, to string, artifact, errMsg *string) {
+	t.Helper()
+	ok, err := repo.TransitionStatus(id, from, to, artifact, errMsg)
+	require.NoError(t, err)
+	require.True(t, ok, "%s→%s 迁移应成功", from, to)
 }

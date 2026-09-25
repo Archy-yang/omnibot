@@ -71,6 +71,29 @@ func (t *AgentTask) IsActive() bool {
 	return false
 }
 
+// taskTransitions 合法状态迁移表(Phase 5,16-架构迭代路线图 §11/§12)。
+// 状态机唯一事实源:CAS 落库(repo.TransitionStatus)与服务层判断都以此为准。
+// 与文档 §12.1 的差异:增加 pending → failed(启动阶段 panic 等异常落终态,避免僵尸 pending)。
+var taskTransitions = map[string][]string{
+	TaskStatusPending:       {TaskStatusRunning, TaskStatusCancelled, TaskStatusFailed},
+	TaskStatusRunning:       {TaskStatusCompleted, TaskStatusFailed, TaskStatusInputRequired, TaskStatusCancelled},
+	TaskStatusInputRequired: {TaskStatusRunning, TaskStatusCancelled},
+	// 终态(completed/failed/cancelled)无出边:不可迁出,CAS 拦截
+	TaskStatusCompleted: {},
+	TaskStatusFailed:    {},
+	TaskStatusCancelled: {},
+}
+
+// CanTransition 判断 from → to 是否为合法迁移。未知状态一律非法(防御脏数据)。
+func CanTransition(from, to string) bool {
+	for _, next := range taskTransitions[from] {
+		if next == to {
+			return true
+		}
+	}
+	return false
+}
+
 // 任务来源渠道常量(决定完成时往哪推送汇报)。
 const (
 	SourceWeb    = "web"    // Web 端:完成靠前端轮询 GET /agent/tasks + 前置汇报

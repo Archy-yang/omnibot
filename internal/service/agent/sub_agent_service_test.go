@@ -282,17 +282,20 @@ func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
 	// 直接造任务(不经 StartTask,避免异步)
 	t1 := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g1"), "web", "")
 	require.NoError(t, repo.Create(t1))
-	require.NoError(t, repo.UpdateStatus(t1.ID, domainagent.TaskStatusCompleted, strPtrService("a1"), nil))
+	mustTransitionSvc(t, repo, t1.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, t1.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a1"), nil)
 
 	t2 := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g2"), "web", "")
 	require.NoError(t, repo.Create(t2))
-	require.NoError(t, repo.UpdateStatus(t2.ID, domainagent.TaskStatusCompleted, strPtrService("a2"), nil))
+	mustTransitionSvc(t, repo, t2.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, t2.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a2"), nil)
 	require.NoError(t, repo.MarkReported(t2.ID)) // 已汇报
 
 	// 别的用户的任务
 	t3 := domainagent.NewAgentTask(2, domainagent.NewTaskSpec("g3"), "web", "")
 	require.NoError(t, repo.Create(t3))
-	require.NoError(t, repo.UpdateStatus(t3.ID, domainagent.TaskStatusCompleted, strPtrService("a3"), nil))
+	mustTransitionSvc(t, repo, t3.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, t3.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a3"), nil)
 
 	got, err := svc.GetCompletedUnreported(1)
 	require.NoError(t, err)
@@ -304,7 +307,8 @@ func TestSubAgentService_MarkReported(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a"), nil)
 
 	require.NoError(t, svc.MarkReported(task.ID))
 	got, _ := svc.GetTask(task.ID)
@@ -317,7 +321,7 @@ func TestSubAgentService_QueryTask(t *testing.T) {
 
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 	// 落 2 步(关联 task_id)
 	s1 := conversation.NewLLMStep(1, "req", "resp", "", "success", 10)
 	s2 := conversation.NewToolStep(1, "rss_reader", "{}", "ok", "success", 5)
@@ -373,7 +377,8 @@ func TestSubAgentService_CancelTask_TerminalRejected(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, strPtrService("a"), nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a"), nil)
 
 	err := svc.CancelTask(1, task.ID)
 	require.Error(t, err)
@@ -419,7 +424,7 @@ func TestSubAgentService_UpdateTask_RunningAppendNote(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{artifact: "result"})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	require.NoError(t, svc.UpdateTask(1, task.ID, "", "补充信息1"))
 	got, _ := repo.GetByID(task.ID)
@@ -434,7 +439,7 @@ func TestSubAgentService_RequestInput(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	require.NoError(t, svc.RequestInput(task.ID, "你更关注自部署还是云服务?"))
 	got, _ := repo.GetByID(task.ID)
@@ -449,7 +454,8 @@ func TestSubAgentService_UpdateTask_InputRequired(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusInputRequired, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusInputRequired, nil, nil)
 
 	// 补 note 不报错(input_required 非终态)
 	require.NoError(t, svc.UpdateTask(1, task.ID, "", "自部署"))
@@ -463,7 +469,8 @@ func TestSubAgentService_CancelTask_InputRequired(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusInputRequired, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusInputRequired, nil, nil)
 
 	require.NoError(t, svc.CancelTask(1, task.ID))
 	got, _ := repo.GetByID(task.ID)
@@ -476,6 +483,8 @@ func TestRequestInputTool(t *testing.T) {
 	tool := CreateRequestInputTool(svc)
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
+	// request_input 只在 running 态合法(Phase 5 状态机):先迁移
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	ctx := withTaskID(context.Background(), task.ID)
 	result, err := tool.Execute(ctx, map[string]interface{}{"question": "用 PostgreSQL 还是 MySQL?"})
@@ -501,7 +510,8 @@ func TestSubAgentService_UpdateTask_TerminalRejected(t *testing.T) {
 	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
 	task := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, strPtrService("err")))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusFailed, nil, strPtrService("err"))
 
 	err := svc.UpdateTask(1, task.ID, "new", "note")
 	require.Error(t, err)
@@ -528,3 +538,11 @@ func (r *ctxCaptureRunner) Run(ctx context.Context, _ int64, _ int64, _ domainag
 // TaskSummary 任务概要(供 query_task 工具返回给 LLM)。定义在 service 层,测试这里复用。
 
 func strPtrService(s string) *string { return &s }
+
+// mustTransitionSvc 测试辅助:CAS 迁移并断言成功(Phase 5)。
+func mustTransitionSvc(t *testing.T, repo repoagent.AgentTaskRepository, id int64, from, to string, artifact, errMsg *string) {
+	t.Helper()
+	ok, err := repo.TransitionStatus(id, from, to, artifact, errMsg)
+	require.NoError(t, err)
+	require.True(t, ok, "%s→%s 迁移应成功", from, to)
+}

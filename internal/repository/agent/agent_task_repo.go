@@ -10,16 +10,18 @@ import (
 type AgentTaskRepository interface {
 	Create(task *agent.AgentTask) error
 	GetByID(id int64) (*agent.AgentTask, error)
-	// UpdateStatus 更新状态;completed 时填 artifact,failed 时填 errorMsg。
-	UpdateStatus(id int64, status string, artifact *string, errorMsg *string) error
+	// TransitionStatus CAS 状态迁移(Phase 5,16-路线图 §11/§12):
+	// UPDATE ... WHERE id=? AND status=from,仅当当前状态等于 from 才生效。
+	// 迁移先过 domainagent.CanTransition 状态机表,非法迁移直接拒绝(false, nil)。
+	// 返回 false = 迁移未发生(并发竞争或非法迁移),调用方据此决策,不作为错误。
+	// completed 填 artifact,failed 填 errorMsg;时间戳随目标状态自动记。
+	TransitionStatus(id int64, from, to string, artifact *string, errorMsg *string) (bool, error)
 	MarkReported(id int64) error
 	// ListCompletedUnreported 返回该用户已 completed/failed 但未汇报的任务(C 模式核心查询)。
 	// 包含 failed 任务--失败也要汇报(08 §9)。
 	ListCompletedUnreported(userID int64) ([]*agent.AgentTask, error)
 	// ListByUser 列出该用户的任务(按创建时间倒序,limit 限上限)。
 	ListByUser(userID int64, limit int) ([]*agent.AgentTask, error)
-	// Cancel 取消任务:置 cancelled + cancelled_at。
-	Cancel(id int64) error
 	// UpdateGoal 改 goal(pending 态 update_task 用)。
 	UpdateGoal(id int64, goal string) error
 	// AppendNote 追加补充信息到 Notes(running 态 update_task 用)。
@@ -49,9 +51,15 @@ func (r *GormAgentTaskRepository) GetByID(id int64) (*agent.AgentTask, error) {
 	return &t, nil
 }
 
-func (r *GormAgentTaskRepository) UpdateStatus(id int64, status string, artifact *string, errorMsg *string) error {
+// TransitionStatus CAS 状态迁移(Phase 5)。UPDATE ... WHERE id=? AND status=from,
+// RowsAffected==0 → 返回 false。先过 CanTransition 状态机表(非法迁移 false, nil)。
+// 时间戳随目标状态:running→started_at,completed/failed→completed_at,cancelled→cancelled_at。
+func (r *GormAgentTaskRepository) TransitionStatus(id int64, from, to string, artifact *string, errorMsg *string) (bool, error) {
+	if !agent.CanTransition(from, to) {
+		return false, nil
+	}
 	updates := map[string]interface{}{
-		"status": status,
+		"status": to,
 	}
 	if artifact != nil {
 		updates["artifact"] = *artifact
@@ -59,14 +67,18 @@ func (r *GormAgentTaskRepository) UpdateStatus(id int64, status string, artifact
 	if errorMsg != nil {
 		updates["error_msg"] = *errorMsg
 	}
-	// completed/failed 时记录完成时间
-	if status == agent.TaskStatusCompleted || status == agent.TaskStatusFailed {
+	switch to {
+	case agent.TaskStatusCompleted, agent.TaskStatusFailed:
 		updates["completed_at"] = gorm.Expr("CURRENT_TIMESTAMP")
-	}
-	if status == agent.TaskStatusRunning {
+	case agent.TaskStatusRunning:
 		updates["started_at"] = gorm.Expr("CURRENT_TIMESTAMP")
+	case agent.TaskStatusCancelled:
+		updates["cancelled_at"] = gorm.Expr("CURRENT_TIMESTAMP")
 	}
-	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).Updates(updates).Error
+	res := r.db.Model(&agent.AgentTask{}).
+		Where("id = ? AND status = ?", id, from).
+		Updates(updates)
+	return res.RowsAffected == 1, res.Error
 }
 
 func (r *GormAgentTaskRepository) MarkReported(id int64) error {
@@ -102,14 +114,6 @@ func (r *GormAgentTaskRepository) ListByUser(userID int64, limit int) ([]*agent.
 		return nil, err
 	}
 	return tasks, nil
-}
-
-// Cancel 取消任务:置 cancelled + cancelled_at。
-func (r *GormAgentTaskRepository) Cancel(id int64) error {
-	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":       agent.TaskStatusCancelled,
-		"cancelled_at": gorm.Expr("CURRENT_TIMESTAMP"),
-	}).Error
 }
 
 // UpdateGoal 改 goal(pending 态 update_task 用)。

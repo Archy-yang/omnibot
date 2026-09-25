@@ -34,7 +34,7 @@ func TestNotifyCompleted_Feishu(t *testing.T) {
 	// 手动造一个飞书来源的 running 任务
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_openid_xxx")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	// 调 notifyCompleted(模拟 executeTask 完成)
 	svc.notifyCompleted(task.ID)
@@ -55,7 +55,7 @@ func TestNotifyCompleted_Web(t *testing.T) {
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	svc.notifyCompleted(task.ID)
 	assert.False(t, notifier.called, "web 任务不应触发 notifier")
@@ -83,7 +83,7 @@ func TestNotifyCompleted_Web_Publisher(t *testing.T) {
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	svc.notifyCompleted(task.ID)
 	assert.True(t, pub.called, "web 任务完成应推送 WS 事件")
@@ -102,7 +102,7 @@ func TestNotifyCompleted_Feishu_NoPublisher(t *testing.T) {
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_xxx")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	svc.notifyCompleted(task.ID)
 	assert.False(t, pub.called, "飞书任务不应触发 WS 推送")

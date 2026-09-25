@@ -42,7 +42,8 @@ func TestHandleSendMessageAgentStream_PreReportInjectsReceipt(t *testing.T) {
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("研究 Go 1.24"), "web", "")
 	require.NoError(t, repo.Create(task))
 	art := "Go 1.24 要点"
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	// 主 Handler,注入 SubAgent 支持
 	agentSvc := &mockAgentService{events: []agentpkg.AgentEvent{

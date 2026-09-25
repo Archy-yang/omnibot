@@ -43,7 +43,7 @@ func TestLocalAgentExecutor_Send(t *testing.T) {
 	e := NewLocalAgentExecutor(svc)
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	ctx := withUserID(context.Background(), 42)
 	err := e.Send(ctx, task.ID, AgentMessage{

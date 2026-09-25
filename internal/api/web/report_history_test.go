@@ -43,7 +43,8 @@ func TestHandleReportTask_IncludeConversationHistory(t *testing.T) {
 	task := domainagent.NewAgentTask(42, spec, "web", "")
 	require.NoError(t, repo.Create(task))
 	art := "Go 1.24 要点全文"
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &art, nil))
+	mustTransitionWeb(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
 
 	agentSvc := &mockAgentService{events: []agentpkg.AgentEvent{
 		{Type: agentpkg.AgentEventFinal, Content: "汇报完毕"},

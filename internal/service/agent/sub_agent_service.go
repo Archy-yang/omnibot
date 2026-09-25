@@ -106,20 +106,24 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 				zap.Any("recover", r),
 			)
 			errMsg := fmt.Sprintf("内部错误: %v", r)
-			_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
+			// CAS 落终态:running→failed 优先;若 panic 发生在 running 之前(pending),按启动失败落终态
+			if ok, _ := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusFailed, nil, &errMsg); !ok {
+				_, _ = s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusFailed, nil, &errMsg)
+			}
 		}
 	}()
 
-	// 启动前检查:若已被 cancel(pending 态被取消),直接置 cancelled 跳过执行。
-	cur, err := s.taskRepo.GetByID(task.ID)
-	if err == nil && cur.Status == domainagent.TaskStatusCancelled {
+	// CAS pending→running(Phase 5):失败=启动前已被取消(CancelTask 先到),静默跳过执行。
+	// 取代旧的"先查再写"两步——两步之间取消会丢失,CAS 一步消除竞态窗口。
+	ok, err := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	if err != nil {
+		logger.ErrorWithFields("sub agent: transition to running failed",
+			zap.Int64("task_id", task.ID), zap.Error(err))
 		return
 	}
-
-	// running
-	if err := s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil); err != nil {
-		logger.ErrorWithFields("sub agent: update to running failed",
-			zap.Int64("task_id", task.ID), zap.Error(err))
+	if !ok {
+		logger.InfoWithFields("sub agent: task cancelled before start, skip execution",
+			zap.Int64("task_id", task.ID))
 		return
 	}
 	s.recordEvent(task.ID, domainagent.EventTaskRunning, "sub")
@@ -157,11 +161,14 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 
 	artifact, runErr := s.runner.Run(ctx, task.ID, task.UserID, task.TaskSpec, onStep)
 
-	// 识别取消 vs 真失败:若 ctx 被 cancel(外部 CancelTask 触发),置 cancelled 而非 failed。
+	// 识别取消 vs 真失败:若 ctx 被 cancel(外部 CancelTask 触发),CAS 落 cancelled。
+	// CancelTask 自己会先 CAS(在触发 cancelFn 之前),所以这里通常 CAS 失败=取消方已收尾,
+	// 不重复记事件/推送;仅当 CAS 成功(未来出现非 CancelTask 来源的取消)才补齐收尾。
 	if ctx.Err() == context.Canceled {
-		_ = s.taskRepo.Cancel(task.ID)
-		s.recordEvent(task.ID, domainagent.EventTaskCancelled, "main")
-		s.notifyCompleted(task.ID)
+		if ok, _ := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCancelled, nil, nil); ok {
+			s.recordEvent(task.ID, domainagent.EventTaskCancelled, "main")
+			s.notifyCompleted(task.ID)
+		}
 		logger.InfoWithFields("sub agent: task cancelled",
 			zap.Int64("task_id", task.ID),
 			zap.String("sub_agent", task.SubAgentType))
@@ -174,33 +181,52 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 			zap.String("sub_agent", task.SubAgentType),
 			zap.Error(runErr),
 		)
-		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
-		s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
-		s.notifyCompleted(task.ID)
+		// CAS running→failed:失败=已被并发取消,放弃覆盖(取消路径负责收尾)
+		if ok, _ := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusFailed, nil, &errMsg); ok {
+			s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
+			s.notifyCompleted(task.ID)
+		} else {
+			logger.InfoWithFields("sub agent: task no longer running, skip failed marking",
+				zap.Int64("task_id", task.ID))
+		}
 		return // 步骤已随 onStep 实时落库,无需再批量落
 	}
 
 	if strings.TrimSpace(artifact) == "" {
 		errMsg := "子 Agent 未产出有效结果"
-		_ = s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusFailed, nil, &errMsg)
-		s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
-		s.notifyCompleted(task.ID)
+		if ok, _ := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusFailed, nil, &errMsg); ok {
+			s.recordEvent(task.ID, domainagent.EventTaskFailed, "sub")
+			s.notifyCompleted(task.ID)
+		}
 		return
 	}
 
-	// 子 Agent 调 request_input 后任务已置 input_required(RequestInput 改了状态)。
-	// 此时 runner.Run 返回(本轮结束),不要覆盖成 completed--任务挂起等输入。
-	cur2, _ := s.taskRepo.GetByID(task.ID)
-	if cur2 != nil && cur2.Status == domainagent.TaskStatusInputRequired {
-		s.recordEvent(task.ID, domainagent.EventTaskInputRequired, "sub")
-		logger.InfoWithFields("sub agent: task suspended for input",
-			zap.Int64("task_id", task.ID))
-		return
-	}
-
-	if err := s.taskRepo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, &artifact, nil); err != nil {
-		logger.ErrorWithFields("sub agent: update to completed failed",
+	// CAS running→completed(Phase 5):失败=并发状态变化,读回现态分别处理——
+	// input_required(request_input 先到,任务挂起不覆盖)/ cancelled(取消先到,不覆盖)。
+	// 取代旧的"先查 input_required 再写"两步,消除查询与写入之间的竞态窗口。
+	completed, err := s.taskRepo.TransitionStatus(task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &artifact, nil)
+	if err != nil {
+		logger.ErrorWithFields("sub agent: transition to completed failed",
 			zap.Int64("task_id", task.ID), zap.Error(err))
+		return
+	}
+	if !completed {
+		cur2, _ := s.taskRepo.GetByID(task.ID)
+		if cur2 != nil && cur2.Status == domainagent.TaskStatusInputRequired {
+			s.recordEvent(task.ID, domainagent.EventTaskInputRequired, "sub")
+			logger.InfoWithFields("sub agent: task suspended for input",
+				zap.Int64("task_id", task.ID))
+			return
+		}
+		logger.InfoWithFields("sub agent: task no longer running, skip completed marking",
+			zap.Int64("task_id", task.ID),
+			zap.String("current_status", func() string {
+				if cur2 != nil {
+					return cur2.Status
+				}
+				return "unknown"
+			}()))
+		return
 	}
 	s.recordEvent(task.ID, domainagent.EventTaskCompleted, "sub")
 	// 落结构化 artifact(独立表,#18)。子 Agent 产出当前是自由文本,包装为 markdown artifact。
@@ -313,9 +339,10 @@ func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, 
 	return sm, nil
 }
 
-// CancelTask 取消任务。pending/running 可取消;已结束(completed/failed/cancelled)拒绝。
-// running 态:触发 activeCancels[id]() 让 runner ctx 取消,executeTask 识别后置 cancelled。
-// pending 态:直接 repo.Cancel(executeTask 启动时检查状态会跳过)。
+// CancelTask 取消任务。pending/running/input_required 可取消;已结束(completed/failed/cancelled)拒绝。
+// Phase 5 CAS:先 CAS 当前态→cancelled(落定状态 + cancelled_at),成功后再打断 runner——
+// 顺序保证取消方拥有收尾权(事件/推送),runner 侧的终态 CAS 必然失败、不会覆盖或重复收尾。
+// 旧顺序(先 cancelFn 后写状态)存在"取消指令发出但 executeTask 已写完终态"的竞态窗口。
 func (s *SubAgentService) CancelTask(userID, taskID int64) error {
 	task, err := s.taskRepo.GetByID(taskID)
 	if err != nil {
@@ -327,19 +354,28 @@ func (s *SubAgentService) CancelTask(userID, taskID int64) error {
 	if task.IsTerminal() {
 		return fmt.Errorf("任务已结束(状态:%s),不可取消", task.Status)
 	}
-	// running:触发 ctx 取消,executeTask 会识别 ctx.Canceled 置 cancelled
-	s.cancelMu.Lock()
-	cancelFn, ok := s.activeCancels[taskID]
-	s.cancelMu.Unlock()
-	if ok && task.Status == domainagent.TaskStatusRunning {
-		cancelFn()
-		return nil
-	}
-	// pending(还没起 runner):直接置 cancelled,executeTask 启动时检查会跳过
-	if err := s.taskRepo.Cancel(taskID); err != nil {
+	// CAS 当前态 → cancelled:失败=读后被并发结束,如实拒绝
+	ok, err := s.taskRepo.TransitionStatus(taskID, task.Status, domainagent.TaskStatusCancelled, nil, nil)
+	if err != nil {
 		return err
 	}
+	if !ok {
+		cur, _ := s.taskRepo.GetByID(taskID)
+		st := "未知"
+		if cur != nil {
+			st = cur.Status
+		}
+		return fmt.Errorf("任务状态已变化(现态:%s),不可取消", st)
+	}
+	// running:打断 runner(runner 感知 ctx 取消后走收尾,终态已落定,不再写)
+	s.cancelMu.Lock()
+	cancelFn, hasRunner := s.activeCancels[taskID]
+	s.cancelMu.Unlock()
+	if hasRunner {
+		cancelFn()
+	}
 	s.recordEvent(taskID, domainagent.EventTaskCancelled, "main")
+	s.notifyCompleted(taskID)
 	return nil
 }
 
@@ -351,8 +387,13 @@ func (s *SubAgentService) RequestInput(taskID int64, question string) error {
 	if err := s.taskRepo.AppendNote(taskID, "[需要输入] "+question); err != nil {
 		return fmt.Errorf("append note: %w", err)
 	}
-	if err := s.taskRepo.UpdateStatus(taskID, domainagent.TaskStatusInputRequired, nil, nil); err != nil {
+	// CAS running→input_required:失败=并发取消/结束,如实报错(runner 本轮会结束)
+	ok, err := s.taskRepo.TransitionStatus(taskID, domainagent.TaskStatusRunning, domainagent.TaskStatusInputRequired, nil, nil)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return fmt.Errorf("任务状态已变化,无法挂起等输入")
 	}
 	s.recordEvent(taskID, domainagent.EventTaskInputRequired, "sub")
 	return nil

@@ -121,7 +121,7 @@ func TestUpdateTaskTool_RunningNote(t *testing.T) {
 	tool := CreateUpdateTaskTool(svc)
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusRunning, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 
 	ctx := withUserID(context.Background(), 42)
 	result, err := tool.Execute(ctx, map[string]interface{}{
@@ -155,7 +155,8 @@ func TestQueryTaskTool_Single_TimeFields(t *testing.T) {
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("带时间的任务"), "web", "")
 	require.NoError(t, repo.Create(task))
-	require.NoError(t, repo.UpdateStatus(task.ID, domainagent.TaskStatusCompleted, nil, nil))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, nil, nil)
 
 	ctx := withUserID(context.Background(), 42)
 	result, err := tool.Execute(ctx, map[string]interface{}{"task_id": float64(task.ID)})

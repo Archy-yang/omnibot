@@ -475,8 +475,8 @@ func (a *digestAuditAdapter) BeginTask(userID, fromID, toID int64, msgCount int)
 	if err := a.taskRepo.Create(t); err != nil {
 		return 0, err
 	}
-	if err := a.taskRepo.UpdateStatus(t.ID, domainagent.TaskStatusRunning, nil, nil); err != nil {
-		return 0, err
+	if ok, err := a.taskRepo.TransitionStatus(t.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil); err != nil || !ok {
+		return 0, fmt.Errorf("digest task %d pending→running 迁移失败: %v", t.ID, err)
 	}
 	return t.ID, nil
 }
@@ -499,7 +499,15 @@ func (a *digestAuditAdapter) EndTask(taskID int64, status, artifact, errMsg stri
 	if errMsg != "" {
 		errMsgPtr = &errMsg
 	}
-	return a.taskRepo.UpdateStatus(taskID, status, artifactPtr, errMsgPtr)
+	// Phase 5 CAS:digest 任务正常恒为 running,running→终态;false=状态被并发改动(异常),如实报错
+	ok, err := a.taskRepo.TransitionStatus(taskID, domainagent.TaskStatusRunning, status, artifactPtr, errMsgPtr)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("digest task %d 状态迁移到 %s 失败(当前非 running)", taskID, status)
+	}
+	return nil
 }
 
 // userPipelineLLM 沉淀管线 LLM 按用户解析(M5.1 修订 §7.2):
