@@ -34,7 +34,8 @@ func stepsDiagSetup(t *testing.T, llm StreamingLLMClient) (*SubAgentService, *re
 	sqlDB, _ := db.DB()
 	// 子 Agent 在后台 goroutine 跑,必须强制单连接共享内存库
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}))
+	// TaskEvent 也要建:Phase 7a 起状态迁移与事件同事务,缺表会导致迁移整体回滚
+	require.NoError(t, db.AutoMigrate(&domainagent.AgentTask{}, &conversation.AgentStep{}, &domainagent.TaskEvent{}))
 
 	taskRepo := repoagent.NewAgentTaskRepository(db).(*repoagent.GormAgentTaskRepository)
 	stepRepo := chatrepo.NewAgentStepRepository(db)

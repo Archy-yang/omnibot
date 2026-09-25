@@ -8,13 +8,15 @@ import "time"
 //   - 审计/可观测(任务经过哪些状态、何时)
 //   - 未来事件驱动(替代 ListCompletedUnreported 轮询;Postgres LISTEN/NOTIFY 推送)
 //
-// 存 agent_task_events 表。当前由 SubAgentService 在状态变更时同步写(同事务保证原子)。
+// 存 agent_task_events 表。Phase 7a(16-路线图 §14)起事件与状态迁移同事务写入
+// (repo TransitionStatusWithEvent/CreateWithEvent),序号由 agent_tasks.version 派生,
+// (task_id, sequence) 唯一约束兜底幂等——不再依赖进程内 eventSeq map。
 // 消费方当前仍轮询 task 表;events 表为未来推送铺路。
 type TaskEvent struct {
-	ID          int64          `json:"id" gorm:"primaryKey;autoIncrement"`
-	TaskID      int64          `json:"task_id" gorm:"index;not null"`
-	EventType   string         `json:"event_type" gorm:"size:50;index"` // task.submitted/accepted/running/input_required/completed/failed/cancelled
-	Sequence    int            `json:"sequence" gorm:"not null"`        // 任务内事件序号(幂等用)
+	ID          int64 `json:"id" gorm:"primaryKey;autoIncrement"`
+	TaskID      int64 `json:"task_id" gorm:"not null;uniqueIndex:idx_task_event_task_seq,priority:1"`
+	EventType   string `json:"event_type" gorm:"size:50;index"` // task.submitted/accepted/running/input_required/completed/failed/cancelled
+	Sequence    int    `json:"sequence" gorm:"not null;uniqueIndex:idx_task_event_task_seq,priority:2"` // 任务内事件序号(= 迁移后的 task.version,幂等用)
 	Payload     map[string]any `json:"payload,omitempty" gorm:"serializer:json"`
 	SourceAgent string         `json:"source_agent,omitempty" gorm:"size:50"` // 事件来源(main/sub agent)
 	OccurredAt  time.Time      `json:"occurred_at" gorm:"not null"`

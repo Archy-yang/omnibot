@@ -16,6 +16,16 @@ type AgentTaskRepository interface {
 	// 返回 false = 迁移未发生(并发竞争或非法迁移),调用方据此决策,不作为错误。
 	// completed 填 artifact,failed 填 errorMsg;时间戳随目标状态自动记。
 	TransitionStatus(id int64, from, to string, artifact *string, errorMsg *string) (bool, error)
+	// TransitionStatusWithEvent CAS 状态迁移 + 任务事件同一事务(Phase 7a,16-路线图 §14):
+	// UPDATE status/version + INSERT task_event 原子提交——状态与事件史强一致,不会出现
+	// "迁移成功但事件丢失"。事件 sequence = 迁移后的 task.version(version 随迁移 +1)。
+	// CAS 失败或非法迁移返回 false,事务回滚、不产生事件。
+	// eventType/source 语义同 TaskEvent 常量(EventTask* / "main"/"sub")。
+	TransitionStatusWithEvent(id int64, from, to string, artifact *string, errorMsg *string, eventType, source string) (bool, error)
+	// CreateWithEvent 建任务与 submitted 事件同一事务(Phase 7a):任务 version 置 1,
+	// 事件 sequence=1。eventRepo 与 taskRepo 分属不同表,只有走同一事务才能保证
+	// "任务存在 ⇒ submitted 事件存在"。
+	CreateWithEvent(task *agent.AgentTask, eventType, source string) error
 	MarkReported(id int64) error
 	// ListCompletedUnreported 返回该用户已 completed/failed 但未汇报的任务(C 模式核心查询)。
 	// 包含 failed 任务--失败也要汇报(08 §9)。
@@ -51,13 +61,9 @@ func (r *GormAgentTaskRepository) GetByID(id int64) (*agent.AgentTask, error) {
 	return &t, nil
 }
 
-// TransitionStatus CAS 状态迁移(Phase 5)。UPDATE ... WHERE id=? AND status=from,
-// RowsAffected==0 → 返回 false。先过 CanTransition 状态机表(非法迁移 false, nil)。
+// transitionUpdates 构造状态迁移的 SET 子句(不含 version):目标状态 + 附加字段 + 时间戳。
 // 时间戳随目标状态:running→started_at,completed/failed→completed_at,cancelled→cancelled_at。
-func (r *GormAgentTaskRepository) TransitionStatus(id int64, from, to string, artifact *string, errorMsg *string) (bool, error) {
-	if !agent.CanTransition(from, to) {
-		return false, nil
-	}
+func transitionUpdates(to string, artifact, errorMsg *string) map[string]interface{} {
 	updates := map[string]interface{}{
 		"status": to,
 	}
@@ -75,10 +81,67 @@ func (r *GormAgentTaskRepository) TransitionStatus(id int64, from, to string, ar
 	case agent.TaskStatusCancelled:
 		updates["cancelled_at"] = gorm.Expr("CURRENT_TIMESTAMP")
 	}
+	return updates
+}
+
+// TransitionStatus CAS 状态迁移(Phase 5)。UPDATE ... WHERE id=? AND status=from,
+// RowsAffected==0 → 返回 false。先过 CanTransition 状态机表(非法迁移 false, nil)。
+// version 随迁移 +1(= 状态变更次数;无事件路径序号允许跳号)。供无事件场景(审计适配器等)。
+func (r *GormAgentTaskRepository) TransitionStatus(id int64, from, to string, artifact *string, errorMsg *string) (bool, error) {
+	if !agent.CanTransition(from, to) {
+		return false, nil
+	}
+	updates := transitionUpdates(to, artifact, errorMsg)
+	updates["version"] = gorm.Expr("version + 1")
 	res := r.db.Model(&agent.AgentTask{}).
 		Where("id = ? AND status = ?", id, from).
 		Updates(updates)
 	return res.RowsAffected == 1, res.Error
+}
+
+// TransitionStatusWithEvent CAS 状态迁移 + 事件写入同一事务(Phase 7a,16-路线图 §14)。
+// CAS 赢得行锁后事务内读回新 version 作为事件 sequence——同事务内无并发写者,读值可信。
+func (r *GormAgentTaskRepository) TransitionStatusWithEvent(id int64, from, to string, artifact *string, errorMsg *string, eventType, source string) (bool, error) {
+	if !agent.CanTransition(from, to) {
+		return false, nil
+	}
+	ok := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		updates := transitionUpdates(to, artifact, errorMsg)
+		updates["version"] = gorm.Expr("version + 1")
+		res := tx.Model(&agent.AgentTask{}).
+			Where("id = ? AND status = ?", id, from).
+			Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 { // CAS 失败:事务结束(无改动),不写事件
+			return nil
+		}
+		var t agent.AgentTask
+		if err := tx.Select("version").Where("id = ?", id).First(&t).Error; err != nil {
+			return err
+		}
+		ev := agent.NewTaskEvent(id, eventType, int(t.Version), source)
+		if err := tx.Create(&ev).Error; err != nil {
+			return err
+		}
+		ok = true
+		return nil
+	})
+	return ok, err
+}
+
+// CreateWithEvent 建任务 + submitted 事件同一事务(Phase 7a):version=1,事件 sequence=1。
+func (r *GormAgentTaskRepository) CreateWithEvent(task *agent.AgentTask, eventType, source string) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		task.Version = 1
+		if err := tx.Create(task).Error; err != nil {
+			return err
+		}
+		ev := agent.NewTaskEvent(task.ID, eventType, 1, source)
+		return tx.Create(&ev).Error
+	})
 }
 
 func (r *GormAgentTaskRepository) MarkReported(id int64) error {

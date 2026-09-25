@@ -31,8 +31,12 @@ type AgentTask struct {
 	// OriginTurnID Phase 1(16-架构迭代路线图 §5.3):触发本任务的用户意图 Turn。
 	// delegate 从 ctx(WithTurnID)取;NULL=存量任务/无 Turn 上下文。Report 据此回挂原始对话。
 	OriginTurnID *int64    `gorm:"index"`
-	CreatedAt    time.Time `gorm:"not null"`
-	StartedAt    *time.Time
+	// Version 乐观版本号 = 状态变更次数(Phase 7a,16-路线图 §14)。
+	// CreateWithEvent 落 submitted 时置 1,此后每次迁移 +1;
+	// 任务事件 TaskEvent.Sequence 由迁移后的 version 派生,序号不依赖进程内状态(重启/多实例安全)。
+	Version    int64 `gorm:"not null;default:0"`
+	CreatedAt  time.Time
+	StartedAt  *time.Time
 	CompletedAt  *time.Time
 	CancelledAt  *time.Time `gorm:"index"` // cancelled 时填
 }
