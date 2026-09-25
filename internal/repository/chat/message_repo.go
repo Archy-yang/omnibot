@@ -18,6 +18,9 @@ type MessageRepository interface {
 	GetRangeByUserID(userID int64, afterID, toID int64) ([]*conversation.Message, error)
 	// GetByIDs 按 id 集合取消息原文(中期记忆命中后回表,M7 §10.6;id 无序返回,缺失跳过)。
 	GetByIDs(ids []int64) ([]*conversation.Message, error)
+	// GetRecentByUserIDAfter 取 id > afterID 的最近 limit 条(倒序取再反转,id 升序返回)。
+	// Phase 2(16-架构迭代路线图 §7.3):Context 尾窗从"最近 N 条"改为"compact 水位之后"。
+	GetRecentByUserIDAfter(userID int64, afterID int64, limit int) ([]*conversation.Message, error)
 }
 
 type messageRepository struct {
@@ -117,4 +120,21 @@ func (r *messageRepository) GetByIDs(ids []int64) ([]*conversation.Message, erro
 	var messages []*conversation.Message
 	err := r.db.Where("id IN ?", ids).Find(&messages).Error
 	return messages, err
+}
+
+// GetRecentByUserIDAfter 取 id > afterID 的最近 limit 条,反转后按 id 升序返回。
+// afterID 为 0 时等价于 GetRecentByUserID(全历史起步)。
+func (r *messageRepository) GetRecentByUserIDAfter(userID int64, afterID int64, limit int) ([]*conversation.Message, error) {
+	var messages []*conversation.Message
+	err := r.db.Where("user_id = ? AND id > ?", userID, afterID).
+		Order("id DESC").
+		Limit(limit).
+		Find(&messages).Error
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
 }

@@ -26,21 +26,22 @@ func TestMessageService_BuildContextMessages(t *testing.T) {
 		msgRepo.Create(conversation.NewAssistantMessage(123, fmt.Sprintf("机器人回复 %d", i)))
 	}
 
-	// 构建上下文（应该取最近 10 轮 = 20 条消息 + 最新的当前消息）
+	// 构建上下文。Phase 2 起(16-架构迭代路线图 §6.1)固定 20 条已废弃:
+	// token 预算内全部保留——15 轮(30 条)短消息远小于预算,应 30 条全在 + 当前消息。
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
 	if err != nil {
 		t.Fatalf("Failed to build context messages: %v", err)
 	}
 
-	// 应该有：20 条历史 + 1 条当前 = 21 条
-	expectedCount := 20 + 1
+	// 应该有：30 条历史 + 1 条当前 = 31 条
+	expectedCount := 30 + 1
 	if len(ctxMsgs) != expectedCount {
 		t.Errorf("Expected %d context messages, got %d", expectedCount, len(ctxMsgs))
 	}
 
-	// 验证第一条历史是第 6 轮的用户消息
-	if ctxMsgs[0].Content != "用户消息 6" {
-		t.Errorf("Expected first history message to be '用户消息 6', got '%s'", ctxMsgs[0].Content)
+	// 验证第一条历史是第 1 轮的用户消息(预算内一条不丢)
+	if ctxMsgs[0].Content != "用户消息 1" {
+		t.Errorf("Expected first history message to be '用户消息 1', got '%s'", ctxMsgs[0].Content)
 	}
 
 	// 验证最后一条是当前消息

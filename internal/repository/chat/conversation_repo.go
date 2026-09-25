@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 
 	"omnibot/internal/domain/agent"
@@ -17,6 +18,9 @@ type ConversationRepository interface {
 	GetAgentByCode(code string) (*agent.Agent, error)
 	// EnsureActiveConversation 取用户在某 Agent 下的 active conversation,没有则创建。
 	EnsureActiveConversation(userID, agentID int64) (*conversation.Conversation, error)
+	// GetActiveByUserAndAgent 只读查询 active conversation;不存在返回 (nil, nil)。
+	// Context 构建路径用只读版,避免读上下文时意外建行。
+	GetActiveByUserAndAgent(ctx context.Context, userID, agentID int64) (*conversation.Conversation, error)
 	// CreateTurn 在对话内开启新 Turn。
 	CreateTurn(conv *conversation.Conversation) (*conversation.ConversationTurn, error)
 }
@@ -50,6 +54,19 @@ func (r *conversationRepository) EnsureActiveConversation(userID, agentID int64)
 	conv = *conversation.NewConversation(userID, agentID)
 	if err := r.db.Create(&conv).Error; err != nil {
 		return nil, fmt.Errorf("create conversation: %w", err)
+	}
+	return &conv, nil
+}
+
+func (r *conversationRepository) GetActiveByUserAndAgent(_ context.Context, userID, agentID int64) (*conversation.Conversation, error) {
+	var conv conversation.Conversation
+	err := r.db.Where("user_id = ? AND agent_id = ? AND status = ?",
+		userID, agentID, conversation.ConversationStatusActive).First(&conv).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query active conversation: %w", err)
 	}
 	return &conv, nil
 }

@@ -16,8 +16,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// 上下文轮数配置
+// 上下文配置(Phase 2 起固定轮数已废弃,保留常量兼容外部引用)
 const (
+	// Deprecated: Phase 2 起上下文改由 token 预算控制(context_manager.go),不再按轮数截断。
 	ContextRounds           = 10 // 保留最近 10 轮对话
 	ContextMessagesPerRound = 2  // 每轮 2 条消息（user + assistant）
 	MaxContextMessages      = ContextRounds * ContextMessagesPerRound
@@ -79,6 +80,11 @@ type messageService struct {
 	memorySvc MemoryInjectionProvider
 	stepRepo  chatrepo.AgentStepRepository
 	convRepo  chatrepo.ConversationRepository
+	// Phase 2(16-架构迭代路线图 §6/§7):Context Manager 状态
+	contextStateRepo chatrepo.ContextStateRepository
+	compactor        ContextCompactor
+	keepRecentTokens     int
+	compactTriggerTokens int
 	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
 	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
 	turnSinks []TurnSink
@@ -87,6 +93,8 @@ type messageService struct {
 // NewMessageService 创建消息服务
 func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...interface{}) MessageService {
 	service := &messageService{msgRepo: msgRepo}
+	service.keepRecentTokens = DefaultKeepRecentTokens
+	service.compactTriggerTokens = DefaultCompactTriggerTokens
 	for _, svc := range optionalServices {
 		switch s := svc.(type) {
 		case MemoryInjectionProvider:
@@ -95,6 +103,10 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 			service.stepRepo = s
 		case chatrepo.ConversationRepository:
 			service.convRepo = s
+		case chatrepo.ContextStateRepository:
+			service.contextStateRepo = s
+		case ContextCompactor:
+			service.compactor = s
 		case TurnSink:
 			service.turnSinks = append(service.turnSinks, s)
 		}
@@ -106,17 +118,20 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...i
 func (s *messageService) BuildContextMessages(ctx context.Context, userID int64, currentContent string) ([]llm.ChatMessage, error) {
 	memoryMessages := s.buildLongTermMemoryMessages(ctx, userID)
 
-	messages, err := s.msgRepo.GetRecentByUserID(userID, MaxContextMessages)
-	if err != nil {
-		logger.ErrorWithFields("Failed to get recent messages, degraded to no context",
-			zap.Int64("user_id", userID),
-			zap.Error(err),
-		)
-		messages = nil
-	}
+	// Phase 2(§6.1/§7):固定"最近 20 条"→ token 预算尾窗 + Compact 水位之后的原始消息
+	messages, compactText := s.buildRecentRaw(ctx, userID)
 
-	result := make([]llm.ChatMessage, 0, len(memoryMessages)+len(messages)+1)
+	result := make([]llm.ChatMessage, 0, len(memoryMessages)+len(messages)+2)
 	result = append(result, memoryMessages...)
+
+	// History Compact 作为独立 system 消息注入(§6.3):不拼接进主 system prompt 字符串,
+	// 保持稳定前缀(Prompt Cache 友好);位置在记忆之后、Recent Raw 之前,更新频率 ≪ 对话轮。
+	if compactText != "" {
+		result = append(result, llm.ChatMessage{
+			Role:    conversation.RoleSystem,
+			Content: compactText,
+		})
+	}
 
 	// 去重:handler 调用顺序是 SaveUserMessage(当前消息落库) -> BuildContextMessages,
 	// 故 GetRecentByUserID 取到的历史已含当前消息,末尾又 append 一份会重复。

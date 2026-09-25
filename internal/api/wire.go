@@ -168,6 +168,37 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if digestPipeline != nil {
 		msgSvcOpts = append(msgSvcOpts, digestPipeline) // chat.TurnSink
 	}
+	// Phase 2(16-架构迭代路线图 §7):Context Manager 三件套——Turn 模型状态仓储 +
+	// Compact 水位仓储 + LLM 压缩器。压缩失败在服务内降级(水位不推进),不阻塞对话。
+	// 压缩器用独立 LLM 客户端:超时放宽到 180s——压缩输入可达数万 token,
+	// 默认 30s 必超时(HTTP client 超时在建客户端时固定,无法按调用放宽)。
+	compactLLMCfg := cfg.LLM
+	for name, p := range compactLLMCfg.Providers {
+		p.Timeout = "180s"
+		compactLLMCfg.Providers[name] = p
+	}
+	compactLLM, err := llm.NewClient(compactLLMCfg)
+	if err != nil {
+		logger.Fatal("Failed to create compact LLM client", zap.Error(err))
+	}
+	// 压缩客户端按用户解析(与对话同源,用户自定义配置生效);无配置回落系统默认。
+	compactResolver := func(ctx context.Context, userID int64) (chatService.CompactLLMClient, error) {
+		userConfig, has, err := llmConfigSvc.GetFullConfigForUser(userID)
+		if err != nil || !has {
+			return nil, err
+		}
+		return llm.NewUserConfigClientWithTimeout(llm.UserConfig{
+			Provider: userConfig.Provider,
+			APIKey:   userConfig.APIKey,
+			BaseURL:  userConfig.BaseURL,
+			Model:    userConfig.Model,
+		}, 180*time.Second)
+	}
+	msgSvcOpts = append(msgSvcOpts,
+		chatRepo.NewConversationRepository(dbConn.GetGormDB()),
+		chatRepo.NewContextStateRepository(dbConn.GetGormDB()),
+		chatService.NewLLMContextCompactor(compactResolver, compactLLM),
+	)
 	// M7 中期记忆(§10.5):消息级向量增量嵌入,同一 TurnSink 链路、独立水位独立降级。
 	// 复用沉淀的 ConversationSource(msgRepo)与用户级向量解析;存量回填=水位 0 首轮自然全量。
 	if cfg.Memory.Extraction.Enabled {

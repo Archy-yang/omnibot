@@ -69,8 +69,13 @@ func NewClient(cfg config.LLMConfig) (*Client, error) {
 // NewClientFromUserConfig 从用户级配置创建简化版 LLM 客户端
 // 不包含 fallback 机制，只使用用户指定的单一配置
 func NewClientFromUserConfig(cfg UserConfig) (*Client, error) {
+	return NewUserConfigClientWithTimeout(cfg, 30*time.Second)
+}
+
+// NewUserConfigClientWithTimeout 同 NewClientFromUserConfig,但允许指定请求超时。
+// Phase 2:Compact 压缩输入可达数万 token,需要放宽超时(180s);对话路径维持 30s。
+func NewUserConfigClientWithTimeout(cfg UserConfig, timeout time.Duration) (*Client, error) {
 	var provider LLMProvider
-	timeout := 30 * time.Second
 
 	switch strings.ToLower(cfg.Provider) {
 	case "qwen", "tongyi", "alibabacloud":
