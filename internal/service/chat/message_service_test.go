@@ -18,7 +18,7 @@ import (
 func TestMessageService_BuildContextMessages(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	// 创建 15 轮对话（30 条消息）
 	for i := 1; i <= 15; i++ {
@@ -58,7 +58,7 @@ func TestMessageService_BuildContextMessages(t *testing.T) {
 func TestMessageService_BuildContextMessages_DedupCurrentMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	// 历史对话
 	msgRepo.Create(conversation.NewUserMessage(123, "之前的问题", "wx_1"))
@@ -116,7 +116,9 @@ func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	memorySvc := &mockContextMemoryService{manual: []string{"我偏好简洁回答", "我正在开发 OmniBot"}}
-	service := NewMessageService(msgRepo, memorySvc)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Memory: memorySvc,
+	})
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
 
@@ -136,7 +138,9 @@ func TestMessageService_BuildContextMessages_AutoMemoriesHintedNotInjected(t *te
 	msgRepo := chat.NewMessageRepository(testDB)
 	// 注入分层:手动 2 条 + 自动 7 条 → 手动全量,自动只出提示行
 	memorySvc := &mockContextMemoryService{manual: []string{"我偏好简洁回答"}, autoCount: 7}
-	service := NewMessageService(msgRepo, memorySvc)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Memory: memorySvc,
+	})
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
 
@@ -150,7 +154,9 @@ func TestMessageService_BuildContextMessages_SkipsMemoryMessageWhenNoLongTermMem
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	memorySvc := &mockContextMemoryService{}
-	service := NewMessageService(msgRepo, memorySvc)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Memory: memorySvc,
+	})
 
 	ctxMsgs, err := service.BuildContextMessages(context.Background(), 123, "当前用户消息")
 
@@ -164,7 +170,9 @@ func TestMessageService_BuildContextMessages_DegradesWhenLongTermMemoryQueryFail
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	memorySvc := &mockContextMemoryService{err: errors.New("memory database down")}
-	service := NewMessageService(msgRepo, memorySvc)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Memory: memorySvc,
+	})
 
 	require.NoError(t, msgRepo.Create(conversation.NewUserMessage(123, "历史用户消息", "wx_history")))
 	require.NoError(t, msgRepo.Create(conversation.NewAssistantMessage(123, "历史助手回复")))
@@ -184,7 +192,7 @@ func TestMessageService_BuildContextMessages_DegradesWhenLongTermMemoryQueryFail
 func TestMessageService_SaveUserMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	// 第一次保存应该成功
 	_, err := service.SaveUserMessage(context.Background(), 123, "你好", "wx_123")
@@ -204,7 +212,7 @@ func TestMessageService_SaveUserMessage(t *testing.T) {
 func TestMessageService_SaveUserMessage_EmptyMsgID(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	_, err := service.SaveUserMessage(context.Background(), 123, "第一条", "")
 	require.NoError(t, err)
@@ -224,7 +232,7 @@ func TestMessageService_SaveUserMessage_EmptyMsgID(t *testing.T) {
 func TestMessageService_SaveAssistantMessage(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	err := service.SaveAssistantMessage(context.Background(), 123, "你好！有什么可以帮你的？")
 	if err != nil {
@@ -237,7 +245,7 @@ func TestMessageService_SaveAssistantMessage(t *testing.T) {
 func TestMessageService_SaveAssistantMessageWithSegments(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	segments := []conversation.MessageSegment{
 		{Type: "text", Content: "让我查一下。"},
@@ -274,7 +282,9 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	stepRepo := chat.NewAgentStepRepository(testDB)
-	service := NewMessageService(msgRepo, stepRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Steps: stepRepo,
+	})
 
 	segments := []conversation.MessageSegment{
 		{Type: "tool", Tool: "rss_reader", Label: "读取了 RSS 订阅", Result: "工具执行失败"},
@@ -334,7 +344,7 @@ func TestMessageService_SaveAssistantMessageWithSegments_AgentSteps(t *testing.T
 func TestMessageService_BuildContextMessages_RebuildsToolCallsPair(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	// 造一条带 tool_calls 的 assistant 消息(模拟主 Agent 调了 delegate)
 	toolCallsJSON := `[{"id":"call_1","name":"delegate","arguments":"{\"sub_agent_type\":\"researcher\",\"goal\":\"研究X\"}","result":"{\"task_id\":7,\"status\":\"pending\"}"}]`
@@ -372,7 +382,7 @@ func TestMessageService_BuildContextMessages_RebuildsToolCallsPair(t *testing.T)
 func TestMessageService_BuildContextMessages_NoToolCallsForPlainAssistant(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{})
 
 	msgRepo.Create(conversation.NewUserMessage(123, "你好", ""))
 	msgRepo.Create(conversation.NewAssistantMessage(123, "你好,有什么可以帮你"))

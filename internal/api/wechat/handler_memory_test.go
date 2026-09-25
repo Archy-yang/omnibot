@@ -239,7 +239,7 @@ func TestHandler_HandleMemoryCommand_WithoutMemoryServiceDoesNotHandle(t *testin
 
 func TestNewHandler_AcceptsMemoryService(t *testing.T) {
 	memoryService := &mockMemoryService{}
-	handler := NewHandler(Config{Token: "testtoken"}, &MockLLMClient{}, &MockBindingService{}, memoryService)
+	handler := NewHandler(Config{Token: "testtoken"}, &MockLLMClient{}, &MockBindingService{}, HandlerDeps{Memory: memoryService})
 
 	assert.Same(t, memoryService, handler.memoryService)
 }
@@ -248,7 +248,7 @@ func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
 	memoryService := &mockMemoryService{}
 	llmClient := &MockLLMClient{returnString: "LLM reply"}
 	mockUser := &MockBindingService{resolveUserID: 42, resolveBound: true}
-	handler := NewHandler(Config{Token: "testtoken"}, llmClient, mockUser, memoryService)
+	handler := NewHandler(Config{Token: "testtoken"}, llmClient, mockUser, HandlerDeps{Memory: memoryService})
 
 	msg := &channelwechat.InboundMessage{
 		ToUserName:   "gh_test",

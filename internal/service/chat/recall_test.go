@@ -48,7 +48,9 @@ func newRecallTest(t *testing.T) (*ChunkRecallService, *messageService, *gorm.DB
 		msgRepo,
 		topicEmbedProvider{},
 	)
-	svc := NewMessageService(msgRepo, convRepo).(*messageService)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+	}).(*messageService)
 
 	var turnIDs []int64
 	topics := []string{"苹果什么时候吃最好", "香蕉怎么保存", "樱桃的价格", "随便聊聊天气"}
@@ -98,8 +100,8 @@ func TestChunkRecallService_ExcludeTailWindow(t *testing.T) {
 
 	// 樱桃 turn 的 EndMessageID:查出该 turn 的最后一条消息 id
 	var lastMsg struct {
-		ID    int64
-		Turn  int64
+		ID      int64
+		Turn    int64
 		Content string
 	}
 	require.NoError(t, testDB.Raw(`SELECT id, turn_id AS turn, content FROM messages WHERE content LIKE '%樱桃%' ORDER BY id DESC LIMIT 1`).
@@ -118,7 +120,10 @@ func TestBuildContextMessages_RecallInjected(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	convRepo := chat.NewConversationRepository(testDB)
-	svc := NewMessageService(msgRepo, convRepo, stubRecallSearcher{}).(*messageService)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+		Recall:       stubRecallSearcher{},
+	}).(*messageService)
 
 	turn1, _ := svc.SaveUserMessage(context.Background(), 42, "历史问题", "")
 	require.NoError(t, svc.SaveAssistantMessage(agentdomain.WithTurnID(context.Background(), turn1), 42, "历史回复"))

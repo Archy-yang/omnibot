@@ -19,7 +19,9 @@ func TestSaveUserMessage_CreatesTurnAndConversation(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	convRepo := chat.NewConversationRepository(testDB)
-	service := NewMessageService(msgRepo, convRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+	})
 	ctx := context.Background()
 
 	turnID1, err := service.SaveUserMessage(ctx, 42, "帮我调研 Claude Agent SDK", "")
@@ -72,7 +74,9 @@ func TestSaveAssistantMessage_AttachesContextTurn(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	convRepo := chat.NewConversationRepository(testDB)
-	service := NewMessageService(msgRepo, convRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+	})
 
 	turnID, err := service.SaveUserMessage(context.Background(), 42, "问题", "")
 	require.NoError(t, err)
@@ -97,7 +101,9 @@ func TestSaveAssistantMessage_AttachesContextTurn(t *testing.T) {
 func TestSaveUserMessage_TurnFailureDegraded(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
-	service := NewMessageService(msgRepo, failingConversationRepo{})
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: failingConversationRepo{},
+	})
 	ctx := context.Background()
 
 	turnID, err := service.SaveUserMessage(ctx, 42, "消息", "")
@@ -128,7 +134,9 @@ func TestSaveReportMessage_AttachesOriginTurn(t *testing.T) {
 	testDB := db.NewTestDB(t)
 	msgRepo := chat.NewMessageRepository(testDB)
 	convRepo := chat.NewConversationRepository(testDB)
-	service := NewMessageService(msgRepo, convRepo)
+	service := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+	})
 
 	// Turn #100 发起任务;期间用户又聊了两个 Turn(#101/#102)
 	turn100, err := service.SaveUserMessage(context.Background(), 42, "帮我调研 X", "")

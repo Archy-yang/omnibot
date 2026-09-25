@@ -16,8 +16,8 @@ import (
 
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/client/llm"
-	"omnibot/internal/domain/conversation"
 	agentdomain "omnibot/internal/domain/agent"
+	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	chat "omnibot/internal/service/chat"
 	memoryService "omnibot/internal/service/memory"
@@ -156,43 +156,43 @@ type Config struct {
 	CallbackURL    string `mapstructure:"callback_url"`
 }
 
+// HandlerDeps 显式可选依赖(DeepSeek 审查 §6.1(a) 整改:废弃 ...interface{} type-switch)。
+// 零值字段 = 未装配,使用侧判空兜底。
+type HandlerDeps struct {
+	// LLMConfig 用户 LLM 配置服务(用户自配模型优先)。
+	LLMConfig userSvc.LLMConfigService
+	// Messages 消息服务(对话落库)。
+	Messages chat.MessageService
+	// Memory 记忆服务(#记住/#我的记忆 命令)。
+	Memory memoryService.MemoryService
+	// WechatChannel 微信通道(留空 = 默认 NewChannel())。
+	WechatChannel *channelwechat.Channel
+}
+
 // NewHandler 创建微信处理器。
 //
-// v1.9 起 wechatChannel 由调用方注入(通常 routes.go 装配)——若调用方未传入,
-// HandleMessage 内部会用默认 channelwechat.NewChannel() 兜底,保证旧测试构造路径
-// (NewHandler(config, llmClient, userService, optionalServices...)) 不变。
+// v1.9 起 wechatChannel 由调用方注入(通常 wire.go 装配)——HandlerDeps.WechatChannel
+// 留空时 HandleMessage 内部用默认 channelwechat.NewChannel() 兜底。
 func NewHandler(
 	config Config,
 	llmClient LLMClient,
 	bindingSvc BindingService,
-	optionalServices ...interface{},
+	deps HandlerDeps,
 ) *Handler {
 	handler := &Handler{
 		config:         config,
 		llmClient:      llmClient,
 		bindingService: bindingSvc,
-		wechatChannel:  channelwechat.NewChannel(),
+		wechatChannel:  deps.WechatChannel,
 	}
-
-	// 解析可选参数(支持 LLMConfigService / MessageService / MemoryService / *channelwechat.Channel)
-	for _, svc := range optionalServices {
-		switch s := svc.(type) {
-		case userLLMConfigService:
-			handler.llmConfigService = s
-		case chat.MessageService:
-			handler.msgService = s
-		case memoryService.MemoryService:
-			handler.memoryService = s
-		case *channelwechat.Channel:
-			handler.wechatChannel = s
-		}
+	if handler.wechatChannel == nil {
+		handler.wechatChannel = channelwechat.NewChannel()
 	}
-
+	handler.llmConfigService = deps.LLMConfig
+	handler.msgService = deps.Messages
+	handler.memoryService = deps.Memory
 	return handler
 }
-
-// userLLMConfigService 是为了避免 type switch 中的包名冲突
-type userLLMConfigService = userSvc.LLMConfigService
 
 // Verify 微信服务器验证
 func (h *Handler) Verify(c *gin.Context) {

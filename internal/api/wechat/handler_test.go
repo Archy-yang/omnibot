@@ -68,7 +68,7 @@ func TestHandler_Verify_ValidSignature(t *testing.T) {
 	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.GET("/wechat/callback", handler.Verify)
@@ -96,7 +96,7 @@ func TestHandler_Verify_InvalidSignature(t *testing.T) {
 	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.GET("/wechat/callback", handler.Verify)
@@ -123,7 +123,7 @@ func TestHandler_HandleMessage_DoesNotRequireRawBodyLogging(t *testing.T) {
 	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -169,7 +169,7 @@ func TestHandler_HandleMessage_TextMessage_LLMSuccess(t *testing.T) {
 	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -210,7 +210,7 @@ func TestHandler_HandleMessage_TextMessage_LLMFails(t *testing.T) {
 	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -249,7 +249,7 @@ func TestHandler_HandleMessage_ImageMessage(t *testing.T) {
 	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -294,7 +294,7 @@ func TestHandler_HandleMessage_SubscribeEvent_CreatesUser(t *testing.T) {
 	mockUser := &MockBindingService{resolveUserID: 1, resolveBound: true}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -334,7 +334,7 @@ func TestHandler_HandleMessage_SubscribeEvent_UserServiceError(t *testing.T) {
 	mockUser := &MockBindingService{resolveErr: assert.AnError}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)
@@ -371,7 +371,7 @@ func TestHandler_HandleMessage_Unsubscribe_NoResponse(t *testing.T) {
 	mockUser := &MockBindingService{}
 	handler := NewHandler(Config{
 		Token: "testtoken",
-	}, mockLLM, mockUser)
+	}, mockLLM, mockUser, HandlerDeps{})
 
 	r := gin.New()
 	r.POST("/wechat/callback", handler.HandleMessage)

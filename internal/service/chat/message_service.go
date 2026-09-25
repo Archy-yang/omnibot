@@ -81,8 +81,8 @@ type messageService struct {
 	stepRepo  chatrepo.AgentStepRepository
 	convRepo  chatrepo.ConversationRepository
 	// Phase 2(16-架构迭代路线图 §6/§7):Context Manager 状态
-	contextStateRepo chatrepo.ContextStateRepository
-	compactor        ContextCompactor
+	contextStateRepo     chatrepo.ContextStateRepository
+	compactor            ContextCompactor
 	keepRecentTokens     int
 	compactTriggerTokens int
 	// Phase 3(§8):Conversation Recall(Recent Raw 之后注入,补偿 Compact 有损)
@@ -92,28 +92,48 @@ type messageService struct {
 	turnSinks []TurnSink
 }
 
-// NewMessageService 创建消息服务
-func NewMessageService(msgRepo chatrepo.MessageRepository, optionalServices ...interface{}) MessageService {
-	service := &messageService{msgRepo: msgRepo}
-	service.keepRecentTokens = DefaultKeepRecentTokens
-	service.compactTriggerTokens = DefaultCompactTriggerTokens
-	for _, svc := range optionalServices {
-		switch s := svc.(type) {
-		case MemoryInjectionProvider:
-			service.memorySvc = s
-		case chatrepo.AgentStepRepository:
-			service.stepRepo = s
-		case chatrepo.ConversationRepository:
-			service.convRepo = s
-		case chatrepo.ContextStateRepository:
-			service.contextStateRepo = s
-		case ContextCompactor:
-			service.compactor = s
-		case RecallSearcher:
-			service.recall = s
-		case TurnSink:
-			service.turnSinks = append(service.turnSinks, s)
-		}
+// MessageServiceDeps 显式依赖集(DeepSeek 架构审查 §6.1(a) 整改):
+// 取代原 `...interface{}` + 运行时 type-switch 注入——依赖集可从签名看出,
+// 编译期类型安全,传错/漏传显性。零值字段 = 该可选能力未装配(nil 安全,使用侧判空)。
+type MessageServiceDeps struct {
+	// Memory 记忆常驻注入(注入分层 §6.5:手动全量 + 自动存在性提示)。
+	Memory MemoryInjectionProvider
+	// Steps 子 Agent 运行步骤落库。
+	Steps chatrepo.AgentStepRepository
+	// Conversation Turn/Conversation 持久化(SaveUserMessage 开 Turn)。
+	Conversation chatrepo.ConversationRepository
+	// ContextState Phase 2:Compact 水位仓储。
+	ContextState chatrepo.ContextStateRepository
+	// Compactor Phase 2:LLM 上下文压缩器(失败服务内降级)。
+	Compactor ContextCompactor
+	// Recall Phase 3:Conversation Recall 检索器。
+	Recall RecallSearcher
+	// TurnSinks 轮次收尾观察者(沉淀管线/消息嵌入器/chunk 嵌入器,广播不覆盖)。
+	TurnSinks []TurnSink
+	// KeepRecentTokens/CompactTriggerTokens 覆盖默认值(0 = 用 Default 常量)。
+	KeepRecentTokens     int
+	CompactTriggerTokens int
+}
+
+// NewMessageService 创建消息服务。
+func NewMessageService(msgRepo chatrepo.MessageRepository, deps MessageServiceDeps) MessageService {
+	service := &messageService{
+		msgRepo:              msgRepo,
+		memorySvc:            deps.Memory,
+		stepRepo:             deps.Steps,
+		convRepo:             deps.Conversation,
+		contextStateRepo:     deps.ContextState,
+		compactor:            deps.Compactor,
+		recall:               deps.Recall,
+		turnSinks:            append([]TurnSink(nil), deps.TurnSinks...),
+		keepRecentTokens:     deps.KeepRecentTokens,
+		compactTriggerTokens: deps.CompactTriggerTokens,
+	}
+	if service.keepRecentTokens <= 0 {
+		service.keepRecentTokens = DefaultKeepRecentTokens
+	}
+	if service.compactTriggerTokens <= 0 {
+		service.compactTriggerTokens = DefaultCompactTriggerTokens
 	}
 	return service
 }

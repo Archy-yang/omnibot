@@ -40,7 +40,11 @@ func newContextTestDB(t *testing.T, compactor ContextCompactor) (*gorm.DB, *mess
 	msgRepo := chat.NewMessageRepository(testDB)
 	convRepo := chat.NewConversationRepository(testDB)
 	stateRepo := chat.NewContextStateRepository(testDB)
-	svc := NewMessageService(msgRepo, convRepo, stateRepo, compactor).(*messageService)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+		ContextState: stateRepo,
+		Compactor:    compactor,
+	}).(*messageService)
 	var stub *stubCompactor
 	if compactor != nil {
 		stub = compactor.(*stubCompactor)
@@ -142,8 +146,8 @@ func TestBuildContextMessages_CompactPrependedAsSystem(t *testing.T) {
 // 新 Compact 注入上下文,水位推进到中段末尾;下一次构建不重复压缩(频率 ≪ agent loop)。
 func TestBuildContextMessages_CompactionTriggered(t *testing.T) {
 	testDB, svc, stub := newContextTestDB(t, &stubCompactor{})
-	svc.keepRecentTokens = 50       // 尾窗很小
-	svc.compactTriggerTokens = 30   // 中段 ≥30 token 即触发
+	svc.keepRecentTokens = 50     // 尾窗很小
+	svc.compactTriggerTokens = 30 // 中段 ≥30 token 即触发
 
 	seedTurnedMessages(t, svc, 42, 20, 2) // 40 条 ≈80 token:尾窗 ~25 条,中段 ~15 条 ≈30 token → 触发
 	ids := listMessageIDs(t, testDB, 42)

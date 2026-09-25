@@ -21,7 +21,9 @@ func (f *fakeTurnSink) NotifyTurn(userID int64) {
 func turnSinkSetup(t *testing.T, sink *fakeTurnSink) MessageService {
 	t.Helper()
 	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))
-	return NewMessageService(msgRepo, sink)
+	return NewMessageService(msgRepo, MessageServiceDeps{
+		TurnSinks: []TurnSink{sink},
+	})
 }
 
 // TestTurnSink_NotifyOnAssistantSave 助手消息落库成功 → NotifyTurn 被调。
@@ -58,7 +60,9 @@ func TestTurnSink_MultipleSinksAllNotified(t *testing.T) {
 	sinkA := &fakeTurnSink{}
 	sinkB := &fakeTurnSink{}
 	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))
-	svc := NewMessageService(msgRepo, sinkA, sinkB)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{
+		TurnSinks: []TurnSink{sinkA, sinkB},
+	})
 
 	if err := svc.SaveAssistantMessage(context.Background(), 42, "回复"); err != nil {
 		t.Fatalf("SaveAssistantMessage: %v", err)
@@ -71,7 +75,7 @@ func TestTurnSink_MultipleSinksAllNotified(t *testing.T) {
 // TestTurnSink_NilSinkNoPanic 未注入 sink(管线禁用) → 无副作用。
 func TestTurnSink_NilSinkNoPanic(t *testing.T) {
 	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))
-	svc := NewMessageService(msgRepo)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{})
 	if err := svc.SaveAssistantMessage(context.Background(), 42, "回复"); err != nil {
 		t.Fatalf("SaveAssistantMessage: %v", err)
 	}
@@ -104,7 +108,9 @@ func (f *fakeInjectionMemory) GetMemoryInjection(_ context.Context, _ int64) ([]
 func injectionSetup(t *testing.T, mem *fakeInjectionMemory) MessageService {
 	t.Helper()
 	msgRepo := chat.NewMessageRepository(db.NewTestDB(t))
-	return NewMessageService(msgRepo, mem)
+	return NewMessageService(msgRepo, MessageServiceDeps{
+		Memory: mem,
+	})
 }
 
 func findSystemMessage(svc MessageService, userID int64) string {

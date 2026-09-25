@@ -29,10 +29,10 @@ import (
 	"omnibot/internal/realtime"
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
-	memoryRepo "omnibot/internal/repository/memory"
 	mcpRepo "omnibot/internal/repository/mcp"
-	toolRepo "omnibot/internal/repository/tool"
+	memoryRepo "omnibot/internal/repository/memory"
 	subscriptionRepo "omnibot/internal/repository/subscription"
+	toolRepo "omnibot/internal/repository/tool"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
@@ -169,9 +169,14 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			zap.Int("threshold", digestThreshold),
 			zap.Bool("embedding", memoryEmbedding != nil))
 	}
-	msgSvcOpts := []interface{}{memorySvc, stepRepo}
+	// 显式依赖集(DeepSeek 审查 §6.1(a) 整改):取代 ...interface{} type-switch 注入
+	msgSvcDeps := chatService.MessageServiceDeps{
+		Memory:    memorySvc,
+		Steps:     stepRepo,
+		TurnSinks: []chatService.TurnSink{},
+	}
 	if digestPipeline != nil {
-		msgSvcOpts = append(msgSvcOpts, digestPipeline) // chat.TurnSink
+		msgSvcDeps.TurnSinks = append(msgSvcDeps.TurnSinks, digestPipeline) // chat.TurnSink
 	}
 	// Phase 2(16-架构迭代路线图 §7):Context Manager 三件套——Turn 模型状态仓储 +
 	// Compact 水位仓储 + LLM 压缩器。压缩失败在服务内降级(水位不推进),不阻塞对话。
@@ -199,11 +204,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			Model:    userConfig.Model,
 		}, 180*time.Second)
 	}
-	msgSvcOpts = append(msgSvcOpts,
-		chatRepo.NewConversationRepository(dbConn.GetGormDB()),
-		chatRepo.NewContextStateRepository(dbConn.GetGormDB()),
-		chatService.NewLLMContextCompactor(compactResolver, compactLLM),
-	)
+	msgSvcDeps.Conversation = chatRepo.NewConversationRepository(dbConn.GetGormDB())
+	msgSvcDeps.ContextState = chatRepo.NewContextStateRepository(dbConn.GetGormDB())
+	msgSvcDeps.Compactor = chatService.NewLLMContextCompactor(compactResolver, compactLLM)
 	// Phase 3(§8/§9):Conversation Recall——turn 粒度 chunk 索引(TurnSink 增量构建)
 	// + 向量召回(邻居展开/阈值),注入 Recent Raw 之后。embedding 未配置时静默缺失。
 	chunkEmbedder := chatService.NewChunkEmbedder(
@@ -215,7 +218,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	chunkEmbedder.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
 		return embeddingResolver.ResolveEmbeddingProvider(userID)
 	})
-	msgSvcOpts = append(msgSvcOpts, chunkEmbedder) // chat.TurnSink
+	msgSvcDeps.TurnSinks = append(msgSvcDeps.TurnSinks, chunkEmbedder) // chat.TurnSink
 	chunkRecall := chatService.NewChunkRecallService(
 		chatRepo.NewConversationChunkRepository(dbConn.GetGormDB()),
 		memoryEmbedding,
@@ -223,7 +226,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	chunkRecall.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
 		return embeddingResolver.ResolveEmbeddingProvider(userID)
 	})
-	msgSvcOpts = append(msgSvcOpts, chunkRecall)
+	msgSvcDeps.Recall = chunkRecall
 	// M7 中期记忆(§10.5):消息级向量增量嵌入,同一 TurnSink 链路、独立水位独立降级。
 	// 复用沉淀的 ConversationSource(msgRepo)与用户级向量解析;存量回填=水位 0 首轮自然全量。
 	if cfg.Memory.Extraction.Enabled {
@@ -234,11 +237,11 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			memoryEmbedding,
 		)
 		msgEmbedder.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
-		msgSvcOpts = append(msgSvcOpts, msgEmbedder) // chat.TurnSink
+		msgSvcDeps.TurnSinks = append(msgSvcDeps.TurnSinks, msgEmbedder) // chat.TurnSink
 		logger.Info("memory: 消息嵌入器已启用(中期记忆)",
 			zap.Bool("embedding", memoryEmbedding != nil))
 	}
-	msgSvc := chatService.NewMessageService(msgRepo, msgSvcOpts...)
+	msgSvc := chatService.NewMessageService(msgRepo, msgSvcDeps)
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
 	// v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
@@ -249,7 +252,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		Token:          cfg.Wechat.Token,
 		EncodingAESKey: cfg.Wechat.EncodingAESKey,
 		CallbackURL:    cfg.Wechat.CallbackURL,
-	}, llmClient, bindingSvc, llmConfigSvc, msgSvc, memorySvc, wechatChan)
+	}, llmClient, bindingSvc, wechat.HandlerDeps{
+		LLMConfig:     llmConfigSvc,
+		Messages:      msgSvc,
+		Memory:        memorySvc,
+		WechatChannel: wechatChan,
+	})
 	// 管理API路由 handler(路由注册见 routes.go)
 	adminHandler := admin.NewHandler(cfg)
 

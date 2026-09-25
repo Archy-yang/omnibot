@@ -47,7 +47,9 @@ func newChunkEmbedderTest(t *testing.T, provider *stubEmbedProvider) (*ChunkEmbe
 		msgRepo,
 		provider,
 	)
-	svc := NewMessageService(msgRepo, convRepo).(*messageService)
+	svc := NewMessageService(msgRepo, MessageServiceDeps{
+		Conversation: convRepo,
+	}).(*messageService)
 	return embedder, svc, testDB
 }
 
