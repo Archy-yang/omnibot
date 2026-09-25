@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	mcpdomain "omnibot/internal/domain/mcp"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,5 +95,5 @@ func TestMCPMetaTools_RegisteredAsTools(t *testing.T) {
 	assert.Equal(t, "mcp_search", search.Name)
 	assert.Contains(t, call.Description, "mcp_search")
 	assert.Contains(t, search.Description, "3 次", "描述必须写明每回合搜索上限")
-	var _ = agentpkg.Tool{}
+	var _ = toolcore.Tool{}
 }

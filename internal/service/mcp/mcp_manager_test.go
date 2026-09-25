@@ -180,7 +180,7 @@ func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 // 测试 22:UpdateServer 改为 disabled → 目录即时失效(工具不可调用、不参与匹配)。
 func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
-		svc := newManagerService(serverRepo, enabledClient("gh_search"))
+	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 
@@ -202,7 +202,7 @@ func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 // 测试 23:DeleteServer → 目录即时失效(内存缓存,无库表残留)。
 func TestDeleteServer_CascadesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
-		svc := newManagerService(serverRepo, enabledClient("gh_search"))
+	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)
 
 	err := svc.DeleteServer(view.ID)
@@ -213,6 +213,7 @@ func TestDeleteServer_CascadesSkills(t *testing.T) {
 	svc.catalog.mu.RUnlock()
 	assert.False(t, had, "删除后目录应即时失效")
 }
+
 // 测试 24:手动同步发现新工具落库;失败的 server 返回可读错误不 panic。
 func TestSyncServer_Manual(t *testing.T) {
 	serverRepo := newMockServerRepo()

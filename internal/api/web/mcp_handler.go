@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"omnibot/internal/middleware"
 	mcpdomain "omnibot/internal/domain/mcp"
+	"omnibot/internal/middleware"
 	mcpsvc "omnibot/internal/service/mcp"
 
 	"github.com/gin-gonic/gin"

@@ -12,15 +12,15 @@ import (
 
 	"github.com/mmcdole/gofeed"
 
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
-func CreateRSSReaderTool() agentpkg.Tool {
-	return agentpkg.Tool{
+func CreateRSSReaderTool() toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "rss_reader",
 		Description:  "解析并获取RSS/Atom订阅源的内容，支持所有主流RSS(0.9x/1.0/2.0)和Atom(0.3/1.0)格式。传入RSS链接，返回订阅源的基本信息和最新文章列表。",
 		DisplayLabel: "读取了 RSS 订阅",
-		Capabilities: []string{agentpkg.CapResearch, agentpkg.CapWeb, agentpkg.CapIngest},
+		Capabilities: []string{toolcore.CapResearch, toolcore.CapWeb, toolcore.CapIngest},
 		Parameters: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"url"},

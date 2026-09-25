@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
 const (
@@ -36,20 +36,20 @@ const (
 )
 
 // CreateWeatherTool 创建 weather 工具(生产入口,指向真站)。
-func CreateWeatherTool() agentpkg.Tool {
+func CreateWeatherTool() toolcore.Tool {
 	return newWeatherTool(nmcDefaultBaseURL)
 }
 
 // newWeatherTool 构造天气工具。baseURL 可注入(httpmock/httptest),测试用。
-func newWeatherTool(baseURL string) agentpkg.Tool {
+func newWeatherTool(baseURL string) toolcore.Tool {
 	client := &nmcClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: nmcRequestTimeout},
 	}
-	return agentpkg.Tool{
+	return toolcore.Tool{
 		Name:         "weather",
 		DisplayLabel: "查询了天气",
-		Capabilities: []string{agentpkg.CapResearch, agentpkg.CapBasic},
+		Capabilities: []string{toolcore.CapResearch, toolcore.CapBasic},
 		Description: "查询中国城市天气:实况(温度/体感/风/湿度)、未来7天预报、空气质量(AQI)、生效预警。" +
 			"传 city(如 北京/海淀/朝阳);同名城市(如朝阳)传 province(如 北京市)消歧。" +
 			"仅支持中国境内城市。",

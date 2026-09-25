@@ -12,15 +12,15 @@ import (
 	"strings"
 	"time"
 
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
-func CreateGetCurrentTimeTool() agentpkg.Tool {
-	return agentpkg.Tool{
+func CreateGetCurrentTimeTool() toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "get_current_time",
 		Description:  "获取当前的日期和时间",
 		DisplayLabel: "查询了当前时间",
-		Capabilities: []string{agentpkg.CapBasic},
+		Capabilities: []string{toolcore.CapBasic},
 		Parameters: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -32,12 +32,12 @@ func CreateGetCurrentTimeTool() agentpkg.Tool {
 }
 
 // CreateCalculatorTool 计算器工具
-func CreateCalculatorTool() agentpkg.Tool {
-	return agentpkg.Tool{
+func CreateCalculatorTool() toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "calculator",
 		Description:  "执行安全的数学计算（仅支持四则运算和括号）",
 		DisplayLabel: "计算了一下",
-		Capabilities: []string{agentpkg.CapBasic},
+		Capabilities: []string{toolcore.CapBasic},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

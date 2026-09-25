@@ -45,30 +45,30 @@ func NewAgentTaskHandler(
 
 // taskDTO 任务列表行展示结构。
 type taskDTO struct {
-	ID           int64      `json:"id"`
-	Name         string     `json:"name"`            // 任务短名(可空,前端回落 goal 摘要)
-	SubAgentType string     `json:"sub_agent_type"`  // 溯源标签
-	Goal         string     `json:"goal"`
-	Status       string     `json:"status"`
-	Reported     bool       `json:"reported"`
-	CreatedAt    string     `json:"created_at"`
-	FinishedAt   string     `json:"finished_at,omitempty"` // completed/cancelled 的结束时间
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`           // 任务短名(可空,前端回落 goal 摘要)
+	SubAgentType string `json:"sub_agent_type"` // 溯源标签
+	Goal         string `json:"goal"`
+	Status       string `json:"status"`
+	Reported     bool   `json:"reported"`
+	CreatedAt    string `json:"created_at"`
+	FinishedAt   string `json:"finished_at,omitempty"` // completed/cancelled 的结束时间
 }
 
 // taskDetailDTO 任务详情展示结构(任务中心详情页)。
 type taskDetailDTO struct {
-	ID           int64                  `json:"id"`
-	Name         string                 `json:"name"`
-	SubAgentType string                 `json:"sub_agent_type"`
-	Goal         string                 `json:"goal"`
-	Status       string                 `json:"status"`
-	Reported     bool                   `json:"reported"`
-	CreatedAt    string                 `json:"created_at"`
-	StartedAt    string                 `json:"started_at,omitempty"`
-	CompletedAt  string                 `json:"completed_at,omitempty"`
-	Artifact     string                 `json:"artifact,omitempty"` // 结果全文(completed 时)
-	ErrorMsg     string                 `json:"error_msg,omitempty"` // failed 时
-	Spec         domainagent.TaskSpec   `json:"spec"`               // 任务合同(背景/交付物/完成标准)
+	ID           int64                `json:"id"`
+	Name         string               `json:"name"`
+	SubAgentType string               `json:"sub_agent_type"`
+	Goal         string               `json:"goal"`
+	Status       string               `json:"status"`
+	Reported     bool                 `json:"reported"`
+	CreatedAt    string               `json:"created_at"`
+	StartedAt    string               `json:"started_at,omitempty"`
+	CompletedAt  string               `json:"completed_at,omitempty"`
+	Artifact     string               `json:"artifact,omitempty"`  // 结果全文(completed 时)
+	ErrorMsg     string               `json:"error_msg,omitempty"` // failed 时
+	Spec         domainagent.TaskSpec `json:"spec"`                // 任务合同(背景/交付物/完成标准)
 }
 
 // HandleListTasks GET /api/v1/agent/tasks
@@ -101,7 +101,7 @@ func (h *AgentTaskHandler) HandleListTasks(c *gin.Context) {
 			dto := taskDTO{
 				ID: s.ID, Name: s.Name, SubAgentType: s.SubAgent, Goal: s.Goal,
 				Status: s.Status, Reported: s.Reported,
-				CreatedAt:  s.CreatedAt.Format("2006-01-02 15:04"),
+				CreatedAt: s.CreatedAt.Format("2006-01-02 15:04"),
 			}
 			if s.FinishedAt != nil {
 				dto.FinishedAt = s.FinishedAt.Format("2006-01-02 15:04")

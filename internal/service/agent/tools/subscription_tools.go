@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	subdomain "omnibot/internal/domain/subscription"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
 // SubscriptionManager 订阅源管理(14-订阅源管理技术方案 §6.1)。
@@ -22,12 +22,12 @@ type SubscriptionManager interface {
 // CreateManageSubscriptionsTool 订阅源管理工具:对话即管理界面。
 // 主 Agent 用它管理订阅(add/list/remove/pause/resume);子 Agent 研究用户
 // 关注领域时用 list 取订阅清单选源(见 SubSourceRulesPrompt)。
-func CreateManageSubscriptionsTool(svc SubscriptionManager) agentpkg.Tool {
-	return agentpkg.Tool{
+func CreateManageSubscriptionsTool(svc SubscriptionManager) toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "manage_subscriptions",
 		Description:  "管理用户关注的 RSS 信息源。action=add 订阅(url 可以是网站/博客地址,工具自动发现其 RSS 地址,也可直接给 feed 地址);action=list 查看订阅清单(含每个源的主题描述);action=remove 退订;action=pause/resume 暂停/恢复(按 id)。用户说'订阅X/我关注X的博客/帮我盯着X'时调用 add;用户问'我订了哪些'时调用 list。",
 		DisplayLabel: "管理了订阅源",
-		Capabilities: []string{agentpkg.CapResearch, agentpkg.CapMemory},
+		Capabilities: []string{toolcore.CapResearch, toolcore.CapMemory},
 		Parameters: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"action"},
@@ -52,7 +52,7 @@ func CreateManageSubscriptionsTool(svc SubscriptionManager) agentpkg.Tool {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			userID := agentpkg.GetUserIDFromContext(ctx)
+			userID := toolcore.UserIDFromContext(ctx)
 			if userID == 0 {
 				return "", fmt.Errorf("无法识别当前用户")
 			}

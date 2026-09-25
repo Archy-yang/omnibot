@@ -9,37 +9,33 @@ import (
 	"fmt"
 
 	domainagent "omnibot/internal/domain/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
-type contextKey string
+// 工具 ctx 键与注入/读取实现已下沉 internal/pkg/toolcore(2026-09-25,§7.3 下沉);
+// 此处保留 agent 包内既有小写助手名,转发到 toolcore,包内调用零改动。
 
 // UserIDContextKey 工具 ctx 中用户 id 的键(导出供 tools 子包测试构造 ctx)。
-
-const (
-	UserIDContextKey contextKey = "agent_user_id"
-	taskIDContextKey contextKey = "agent_task_id"       // 子 Agent 运行时的 taskID(供 request_input 工具用)
-	sourceContextKey contextKey = "agent_source"        // 任务来源渠道(web/feishu),供 delegate 记录到 task
-	notifyContextKey contextKey = "agent_notify_target" // 主动推送目标(feishu=open_id),供 delegate 记录
-)
+const UserIDContextKey = toolcore.UserIDKey
 
 func withUserID(ctx context.Context, userID int64) context.Context {
-	return context.WithValue(ctx, UserIDContextKey, userID)
+	return toolcore.WithUserID(ctx, userID)
 }
 
 // withTaskID 把 taskID 注入 ctx(子 Agent runner 启动时调,供 request_input 工具取)。
 func withTaskID(ctx context.Context, taskID int64) context.Context {
-	return context.WithValue(ctx, taskIDContextKey, taskID)
+	return toolcore.WithTaskID(ctx, taskID)
 }
 
 // WithSource 把来源渠道注入 ctx(web/feishu handler 调,供 delegate 记录到 task.Source)。
 // 导出供 handler 层调用(web/feishu 在调主 Agent Run 前注入)。
 func WithSource(ctx context.Context, source string) context.Context {
-	return context.WithValue(ctx, sourceContextKey, source)
+	return toolcore.WithSource(ctx, source)
 }
 
 // WithNotifyTarget 把主动推送目标注入 ctx(feishu handler 注入 open_id,供 delegate 记录到 task.NotifyTarget)。
 func WithNotifyTarget(ctx context.Context, target string) context.Context {
-	return context.WithValue(ctx, notifyContextKey, target)
+	return toolcore.WithNotifyTarget(ctx, target)
 }
 
 // WithTurnID 把当前逻辑 Turn 注入 ctx(Phase 1,16-架构迭代路线图 §5.4)。
@@ -49,48 +45,30 @@ func WithTurnID(ctx context.Context, turnID int64) context.Context {
 }
 
 func getSourceFromContext(ctx context.Context) string {
-	if s, ok := ctx.Value(sourceContextKey).(string); ok {
-		return s
-	}
-	return ""
+	return toolcore.SourceFromContext(ctx)
 }
 
 func getNotifyTargetFromContext(ctx context.Context) string {
-	if s, ok := ctx.Value(notifyContextKey).(string); ok {
-		return s
-	}
-	return ""
+	return toolcore.NotifyTargetFromContext(ctx)
 }
 
 func getTaskIDFromContext(ctx context.Context) int64 {
-	if id, ok := ctx.Value(taskIDContextKey).(int64); ok {
-		return id
-	}
-	return 0
+	return toolcore.TaskIDFromContext(ctx)
 }
 
-// mcpSearchAttemptKey 每回合 mcp_search 调用计数(ReActAgent 每轮执行开始注入,
+// WithMCPSearchCounter 初始化本回合的 MCP 搜索计数器(ReActAgent 每轮执行开始注入,
 // mcp_search 工具读取并自增;运行时强制上限,非 prompt 约束)。
-type mcpSearchAttemptKey struct{}
-
-// WithMCPSearchCounter 初始化本回合的 MCP 搜索计数器。
 func WithMCPSearchCounter(ctx context.Context) context.Context {
-	return context.WithValue(ctx, mcpSearchAttemptKey{}, new(int32))
+	return toolcore.WithMCPSearchCounter(ctx)
 }
 
 // MCPSearchCounter 取计数器(未注入返回 nil,工具侧跳过限流)。
 func MCPSearchCounter(ctx context.Context) *int32 {
-	if c, ok := ctx.Value(mcpSearchAttemptKey{}).(*int32); ok {
-		return c
-	}
-	return nil
+	return toolcore.MCPSearchCounter(ctx)
 }
 
 func GetUserIDFromContext(ctx context.Context) int64 {
-	if id, ok := ctx.Value(UserIDContextKey).(int64); ok {
-		return id
-	}
-	return 0
+	return toolcore.UserIDFromContext(ctx)
 }
 
 // CreateDelegateTool 创建 delegate 工具(08 §4.4):主 Agent 通过它派活给子 Agent。

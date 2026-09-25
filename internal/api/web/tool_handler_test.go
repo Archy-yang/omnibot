@@ -61,7 +61,7 @@ func TestHandleListTools(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			 Tools []toolsvc.ToolView `json:"tools"`
+			Tools []toolsvc.ToolView `json:"tools"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

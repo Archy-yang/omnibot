@@ -6,12 +6,12 @@ import (
 	"sync"
 
 	tooldomain "omnibot/internal/domain/tool"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
 // ToolBuilder 工具执行体的构造器(builtin):返回带 Execute 闭包的工具。
 // 现有 agent.CreateXXXTool 工厂即 builder——定义与执行体同源,避免漂移(13-技术方案 §5.1)。
-type ToolBuilder func() agentpkg.Tool
+type ToolBuilder func() toolcore.Tool
 
 // ToolView 面向 API 的工具视图。
 type ToolView struct {
@@ -40,8 +40,8 @@ type ToolService struct {
 	mu          sync.RWMutex
 	builders    map[string]ToolBuilder
 	mainVisible map[string]bool
-	main        *agentpkg.ToolRegistry
-	global      *agentpkg.ToolRegistry
+	main        *toolcore.ToolRegistry
+	global      *toolcore.ToolRegistry
 }
 
 func NewToolService(repo ToolRepository) *ToolService {
@@ -75,7 +75,7 @@ func (s *ToolService) registerBuiltin(builder ToolBuilder, mainVisible bool) {
 
 // BindRegistries 绑定运行时的两个工具池(主 Agent 池 + 子 Agent 全局池)。
 // 绑定后 SetEnabled 的启停立即应用到这两个池(停用即时生效)。
-func (s *ToolService) BindRegistries(main, global *agentpkg.ToolRegistry) error {
+func (s *ToolService) BindRegistries(main, global *toolcore.ToolRegistry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.main, s.global = main, global
@@ -147,7 +147,7 @@ func (s *ToolService) SetEnabled(name string, enabled bool) error {
 
 // ApplyTo 幂等重建:对工具名集合——先从两池移除,再把 enabled∧执行体可用的加回。
 // 不碰注册在池里的框架工具(名字不属于工具集,天然不受影响)。
-func (s *ToolService) ApplyTo(main, global *agentpkg.ToolRegistry) error {
+func (s *ToolService) ApplyTo(main, global *toolcore.ToolRegistry) error {
 	rows, err := s.repo.List()
 	if err != nil {
 		return fmt.Errorf("tool: list for apply: %w", err)
@@ -178,12 +178,12 @@ func (s *ToolService) ApplyTo(main, global *agentpkg.ToolRegistry) error {
 }
 
 // buildTool 由 tool 行构造运行时 Tool(builtin:定义以代码 builder 为准)。
-func (s *ToolService) buildTool(row *tooldomain.Tool) (agentpkg.Tool, bool) {
+func (s *ToolService) buildTool(row *tooldomain.Tool) (toolcore.Tool, bool) {
 	s.mu.RLock()
 	builder, ok := s.builders[row.Name]
 	s.mu.RUnlock()
 	if ok {
 		return builder(), true
 	}
-	return agentpkg.Tool{}, false
+	return toolcore.Tool{}, false
 }

@@ -314,10 +314,10 @@ func (s *MCPService) serverToView(row *mcpdomain.MCPServer) (*mcpdomain.ServerVi
 		Description: row.Description,
 		Enabled:     row.Enabled,
 		HasAPIKey:   row.APIKey != "",
-		AuthType:   row.AuthType,
-		Transport:  row.Transport,
-		Authorized: row.Authorized(),
-		ToolCount:  -1,
+		AuthType:    row.AuthType,
+		Transport:   row.Transport,
+		Authorized:  row.Authorized(),
+		ToolCount:   -1,
 	}
 	if s.catalog != nil {
 		s.catalog.mu.RLock()

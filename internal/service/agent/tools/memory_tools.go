@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	memorydomain "omnibot/internal/domain/memory"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 )
 
 type MemoryProvider interface {
@@ -25,14 +25,14 @@ type MemorySearcher interface {
 
 // CreateGetCurrentTimeTool 获取当前时间工具
 
-func CreateSearchMemoriesTool(memorySvc MemoryProvider) agentpkg.Tool {
-	return agentpkg.Tool{
+func CreateSearchMemoriesTool(memorySvc MemoryProvider) toolcore.Tool {
+	return toolcore.Tool{
 		Name: "search_memories",
 		Description: "搜索用户的记忆，一次返回三段：①进行中的事项（含当前状态与相关记忆全景，" +
 			"适合问\"某件事怎么样了/进展如何\"）；②近期对话原文（带发生时间，适合问\"最近/当时聊了什么\"）；" +
 			"③与查询相关的长期记忆条目",
 		DisplayLabel: "翻了翻记忆",
-		Capabilities: []string{agentpkg.CapMemory, agentpkg.CapResearch},
+		Capabilities: []string{toolcore.CapMemory, toolcore.CapResearch},
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -48,7 +48,7 @@ func CreateSearchMemoriesTool(memorySvc MemoryProvider) agentpkg.Tool {
 			if !ok || query == "" {
 				return "", fmt.Errorf("query is required")
 			}
-			userID := agentpkg.GetUserIDFromContext(ctx)
+			userID := toolcore.UserIDFromContext(ctx)
 			if searcher, ok := memorySvc.(MemorySearcher); ok {
 				recent, _ := memorySvc.(RecentMessageSearcher) // M7:中期区可选,无实现则省略
 				// M7 三段式:事项命中优先(返回"这件事"的全景) → 近期对话原文 → 散点记忆

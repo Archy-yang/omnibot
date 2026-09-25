@@ -49,9 +49,9 @@ func newFakeMCPServer(t *testing.T, transport string) (*httptest.Server, *authRe
 
 // authRecorder 记录请求路径与鉴权头(断言 Bearer 注入)。
 type authRecorder struct {
-	mu     sync.Mutex
-	auths  []string
-	paths  []string
+	mu    sync.Mutex
+	auths []string
+	paths []string
 }
 
 func (a *authRecorder) record(r *http.Request) {

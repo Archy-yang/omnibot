@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 
 	mcpdomain "omnibot/internal/domain/mcp"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 	memoryservice "omnibot/internal/service/memory"
 )
 
@@ -303,8 +303,8 @@ func (s *MCPService) specForServer(row *mcpdomain.MCPServer) (*MCPServerSpec, er
 // mcpContentText 已随 go-sdk 迁移移除:文本抽取收敛在 goSDKClient(sdkContentText)。
 
 // CreateMCPCallTool 构造 mcp_call 元工具(tools 参数恒定项,缓存稳定)。
-func (s *MCPService) CreateMCPCallTool() agentpkg.Tool {
-	return agentpkg.Tool{
+func (s *MCPService) CreateMCPCallTool() toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "mcp_call",
 		DisplayLabel: "调用外部工具",
 		Description:  mcpCallDescription,
@@ -323,7 +323,7 @@ func (s *MCPService) CreateMCPCallTool() agentpkg.Tool {
 			"required": []string{"tool"},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			userID := agentpkg.GetUserIDFromContext(ctx)
+			userID := toolcore.UserIDFromContext(ctx)
 			toolName, _ := args["tool"].(string)
 			if strings.TrimSpace(toolName) == "" {
 				return "", fmt.Errorf("tool 不能为空")
@@ -378,8 +378,8 @@ func (s *MCPService) invokeMCPTool(ctx context.Context, serverRow *mcpdomain.MCP
 }
 
 // CreateMCPSearchTool 构造 mcp_search 元工具(每回合 3 次上限由 runtime 计数器强制)。
-func (s *MCPService) CreateMCPSearchTool() agentpkg.Tool {
-	return agentpkg.Tool{
+func (s *MCPService) CreateMCPSearchTool() toolcore.Tool {
+	return toolcore.Tool{
 		Name:         "mcp_search",
 		DisplayLabel: "搜索外部工具",
 		Description:  mcpSearchDescription,
@@ -394,12 +394,12 @@ func (s *MCPService) CreateMCPSearchTool() agentpkg.Tool {
 			"required": []string{"query"},
 		},
 		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-			if counter := agentpkg.MCPSearchCounter(ctx); counter != nil {
+			if counter := toolcore.MCPSearchCounter(ctx); counter != nil {
 				if n := atomic.AddInt32(counter, 1); n > mcpSearchMaxAttempts {
 					return "", fmt.Errorf("本回合 MCP 搜索已达上限(%d 次)。请停止重试,如实告知用户当前无法完成该操作", mcpSearchMaxAttempts)
 				}
 			}
-			userID := agentpkg.GetUserIDFromContext(ctx)
+			userID := toolcore.UserIDFromContext(ctx)
 			query, _ := args["query"].(string)
 			rows, err := s.matchTools(ctx, userID, query, mcpMatchTopK)
 			if err != nil {

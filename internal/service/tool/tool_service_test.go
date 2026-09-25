@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	tooldomain "omnibot/internal/domain/tool"
-	agentpkg "omnibot/internal/service/agent"
+	"omnibot/internal/pkg/toolcore"
 	agenttools "omnibot/internal/service/agent/tools"
 )
 
@@ -61,13 +61,10 @@ func (m *mockToolRepository) SetEnabled(name string, enabled bool) error {
 	return nil
 }
 
-
-
-
 // ---- 工具 ----
 
-func timeBuilder() agentpkg.Tool { return agenttools.CreateGetCurrentTimeTool() }
-func calcBuilder() agentpkg.Tool { return agenttools.CreateCalculatorTool() }
+func timeBuilder() toolcore.Tool { return agenttools.CreateGetCurrentTimeTool() }
+func calcBuilder() toolcore.Tool { return agenttools.CreateCalculatorTool() }
 
 func newService(repo *mockToolRepository) *ToolService {
 	svc := NewToolService(repo)
@@ -76,13 +73,13 @@ func newService(repo *mockToolRepository) *ToolService {
 	return svc
 }
 
-func newRegistries() (main, global *agentpkg.ToolRegistry) {
-	main = agentpkg.NewToolRegistry()
-	global = agentpkg.NewToolRegistry()
+func newRegistries() (main, global *toolcore.ToolRegistry) {
+	main = toolcore.NewToolRegistry()
+	global = toolcore.NewToolRegistry()
 	return
 }
 
-func hasTool(r *agentpkg.ToolRegistry, name string) bool {
+func hasTool(r *toolcore.ToolRegistry, name string) bool {
 	_, ok := r.Get(name)
 	return ok
 }
@@ -92,7 +89,7 @@ func toolRow(name string, enabled bool) *tooldomain.Tool {
 		Name:        name,
 		DisplayName: name,
 		Description: "desc",
-			Enabled:     enabled,
+		Enabled:     enabled,
 		MainVisible: true,
 	}
 }
@@ -115,7 +112,7 @@ func TestSeedBuiltins_UpsertsDefinitions(t *testing.T) {
 	timeDef, ok := byName["get_current_time"]
 	require.True(t, ok)
 	assert.Equal(t, "获取当前的日期和时间", timeDef.Description)
-	assert.Equal(t, []string{agentpkg.CapBasic}, timeDef.Capabilities)
+	assert.Equal(t, []string{toolcore.CapBasic}, timeDef.Capabilities)
 	assert.Equal(t, "查询了当前时间", timeDef.DisplayName)
 
 	calcDef, ok := byName["calculator"]
@@ -136,7 +133,7 @@ func TestApplyTo_EnabledSkillInBothRegistries(t *testing.T) {
 
 	tool, ok := global.Get("get_current_time")
 	require.True(t, ok)
-	assert.Equal(t, []string{agentpkg.CapBasic}, tool.Capabilities)
+	assert.Equal(t, []string{toolcore.CapBasic}, tool.Capabilities)
 	assert.Equal(t, "获取当前的日期和时间", tool.Description)
 }
 
@@ -159,7 +156,7 @@ func TestApplyTo_SubOnlySkill_NotInMain(t *testing.T) {
 	row.MainVisible = false
 	repo := &mockToolRepository{rows: []*tooldomain.Tool{row}}
 	svc := newService(repo)
-	svc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateRSSReaderTool() })
+	svc.RegisterBuiltin(func() toolcore.Tool { return agenttools.CreateRSSReaderTool() })
 	main, global := newRegistries()
 
 	err := svc.ApplyTo(main, global)
@@ -187,7 +184,7 @@ func TestApplyTo_RebuildIdempotentAndKeepsFrameworkTools(t *testing.T) {
 	main, global := newRegistries()
 
 	// 框架工具预注册在 main 池
-	require.NoError(t, main.Register(agentpkg.Tool{Name: "delegate", Description: "framework"}))
+	require.NoError(t, main.Register(toolcore.Tool{Name: "delegate", Description: "framework"}))
 
 	require.NoError(t, svc.ApplyTo(main, global))
 	assert.True(t, hasTool(main, "calculator"))

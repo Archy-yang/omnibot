@@ -359,11 +359,11 @@ type oauthClientCredentials struct {
 // registerOAuthClient 动态客户端注册(go-sdk sdkoauthex.RegisterClient,RFC 7591)。
 func registerOAuthClient(ctx context.Context, registrationEndpoint, redirectURI string) (*oauthClientCredentials, error) {
 	meta := &sdkoauthex.ClientRegistrationMetadata{
-		RedirectURIs:     []string{redirectURI},
+		RedirectURIs:            []string{redirectURI},
 		TokenEndpointAuthMethod: "client_secret_post",
-		GrantTypes:       []string{"authorization_code", "refresh_token"},
-		ResponseTypes:    []string{"code"},
-		ClientName:       "omnibot",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		ClientName:              "omnibot",
 	}
 	reg, err := sdkoauthex.RegisterClient(ctx, registrationEndpoint, meta, &http.Client{Timeout: MCPToolTimeout})
 	if err != nil {
