@@ -129,8 +129,9 @@ func (c *nmcClient) loadStations(ctx context.Context) ([]nmcStation, error) {
 
 	var all []nmcStation
 	// 逐省拉城市表:并发(小工作池)控制首调延迟——串行 34 省实测 ~15s,并发后 ~2s。
+	// 并发度压在 4:站点表 7 天才拉一次,不差这几秒,避免首调即触发 NMC 限流。
 	// 单省失败不拖垮整体(站点表照常建),跳过。
-	const workers = 8
+	const workers = 4
 	type provinceResult struct {
 		stations []nmcStation
 	}
