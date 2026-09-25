@@ -217,8 +217,9 @@ func CreateRequestInputTool(svc *SubAgentService) Tool {
 		DisplayLabel: "请求了用户输入",
 		Capabilities: []string{CapInteractive},
 		Description: "当任务执行中需要用户/主 Agent 提供更多信息才能继续时调用。" +
-			"调用后任务挂起(input_required),你的问题会存入任务,主 Agent 会问用户并补充。" +
-			"问题要具体清晰(如'你更关注自部署还是云服务?')。调用后结束本轮,不要继续。",
+			"调用后任务立即挂起(input_required),本轮自动结束——不要再发起任何操作。" +
+			"你的问题会存入任务,主 Agent 会问用户并补充。" +
+			"问题要具体清晰(如'你更关注自部署还是云服务?')。",
 		Parameters: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"question"},
@@ -241,6 +242,9 @@ func CreateRequestInputTool(svc *SubAgentService) Tool {
 			if err := svc.RequestInput(taskID, question); err != nil {
 				return "", fmt.Errorf("请求输入失败: %w", err)
 			}
+			// Phase 6(§13):上报 Suspend 控制信号,运行时收到后终止本轮(停剩余工具/停下一轮),
+			// 不再依赖"调用后结束本轮"的 prompt 约束。
+			RaiseControlSignal(ctx, ControlSuspend)
 			return fmt.Sprintf("已请求输入,任务挂起。问题: %s\n主 Agent 补充信息后,请基于补充内容继续(或重新派任务)。", question), nil
 		},
 	}

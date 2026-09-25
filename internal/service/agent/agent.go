@@ -253,6 +253,10 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		ctx, cancel := context.WithTimeout(ctx, a.timeout)
 		defer cancel()
 
+		// Phase 6(§13):控制信号容器。工具执行体内经 RaiseControlSignal 上报,
+		// 循环在每个工具执行后消费(见下方工具循环)。
+		ctx = WithControlSignal(ctx)
+
 		messages := make([]map[string]interface{}, 0, len(conversation)+1)
 		messages = append(messages, map[string]interface{}{
 			"role":    "system",
@@ -443,6 +447,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 			out <- AgentEvent{Type: AgentEventThought, Content: roundContent}
 
 			// 逐个执行工具：先 emit ToolCall（用户友好的「正在调用 xxx」），再执行，再 emit ToolResult。
+			suspended := false
 			for _, idx := range indices {
 				acc := toolCallAccum[idx]
 				toolCall := parseToolCall(map[string]interface{}{
@@ -521,6 +526,31 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 					"tool_call_id": toolCall.ID,
 					"content":      toolResult,
 				})
+
+				// Phase 6(§13):消费控制信号。工具上报(如 request_input→Suspend)后:
+				// 停止执行同批剩余工具(占位 tool 消息保持协议配对完整)、不再进入下一轮 ReAct,
+				// 直接收尾。取代"prompt 要求模型记得停止"的不可靠机制。
+				if sig := PeekControlSignal(ctx); sig != "" {
+					// 同批剩余 tool_call 补占位 tool 消息(OpenAI 协议要求每个 tool_call_id 有应答)
+					for _, rest := range indices {
+						if rest <= idx {
+							continue
+						}
+						rt.Messages = append(rt.Messages, map[string]interface{}{
+							"role":         "tool",
+							"tool_call_id": toolCallAccum[rest].id,
+							"content":      "本轮已挂起,未执行。",
+						})
+					}
+					suspended = true
+					break
+				}
+			}
+			if suspended {
+				finalText := "本轮已挂起,等待补充输入。"
+				out <- AgentEvent{Type: AgentEventFinal, Content: finalText}
+				out <- AgentEvent{Type: AgentEventDone, Content: finalText}
+				return
 			}
 			// 进入下一轮 ReAct，让 LLM 基于工具结果继续推理。
 		}
