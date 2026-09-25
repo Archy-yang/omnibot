@@ -81,6 +81,11 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 		"即使手上连接器工具能查",
 		"什么时候不派",
 		"查个天气",
+		// 派活自检 + 例子(2026-09-25 二次漏派:餐饮追问被 10 连发 mcp_call 直调)
+		"派活自检",
+		"追问不豁免",
+		"并发一次发多个查询也算多处",
+		"对照感受量级",
 	} {
 		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少关键句 %q", want)
 	}
