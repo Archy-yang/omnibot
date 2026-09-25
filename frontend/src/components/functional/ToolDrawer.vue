@@ -161,7 +161,7 @@ const handleSaveServer = async () => {
   try {
     if (editingId.value === null) {
       await mcpServerService.createServer(body);
-      success('服务已保存并同步,发现的新工具默认关闭,请到下方逐个开启');
+      success('服务已保存并同步,发现的工具默认可用');
     } else {
       await mcpServerService.updateServer(editingId.value, body);
       success('服务已更新并重新同步');
@@ -251,7 +251,7 @@ watch(
     <!-- ===== 连接器 tab(MCP) ===== -->
     <div v-show="activeTab === 'connectors'">
     <div class="section-title">连接器</div>
-    <p class="section-hint">接入 MCP 服务后,它提供的工具会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
+    <p class="section-hint">接入 MCP 服务后,点开连接器可查看它提供的工具能力。密钥加密保存,不会明文显示。</p>
 
     <div v-if="serversLoading" class="hint-text">加载中...</div>
     <div v-else-if="servers.length === 0 && !showServerForm" class="hint-text">
@@ -259,54 +259,58 @@ watch(
     </div>
     <ul v-else class="server-list">
       <li v-for="server in servers" :key="server.id" class="server-item">
+        <!-- 收起态:连接器信息一览(点击整行展开/收起,同对话思考折叠交互) -->
         <div class="server-info" role="button" @click="toggleServerExpand(server.id)">
           <div class="server-name-row">
+            <span class="server-chevron" :class="{ open: expandedServers.has(server.id) }">▸</span>
             <span class="server-name">{{ server.name }}</span>
             <span v-if="server.auth_type === 'oauth'" class="server-badge" :class="server.authorized ? '' : 'is-off'">
               {{ server.authorized ? '已授权' : '待授权' }}
             </span>
             <span class="server-badge" :class="{ 'is-off': !server.enabled }">
-              {{ server.enabled ? '已启用' : '已停用' }}
+              {{ server.enabled ? '已连接' : '未连接' }}
             </span>
             <span class="server-count">{{ toolCountText(server) }}</span>
           </div>
           <div class="server-url">{{ server.base_url }}</div>
         </div>
-        <div class="server-actions">
-          <button
-            v-if="server.auth_type === 'oauth' && !server.authorized"
-            type="button"
-            class="server-btn is-primary"
-            :disabled="busyServerId === server.id"
-            @click="handleAuthorizeServer(server)"
-          >授权</button>
-          <button
-            type="button"
-            class="server-btn"
-            :disabled="busyServerId === server.id"
-            @click="handleSyncServer(server)"
-          >同步</button>
-          <button
-            type="button"
-            class="server-btn"
-            :disabled="busyServerId === server.id"
-            @click="openEditForm(server)"
-          >编辑</button>
-          <button
-            type="button"
-            class="server-btn is-danger"
-            :disabled="busyServerId === server.id"
-            @click="handleDeleteServer(server)"
-          >删除</button>
+        <!-- 展开态:工具能力清单 + 操作 -->
+        <div v-if="expandedServers.has(server.id)" class="server-detail">
+          <ul v-if="server.tools && server.tools.length > 0" class="server-tools">
+            <li v-for="t in server.tools" :key="t.name" class="server-tool">
+              <span class="server-tool-name">{{ t.name }}</span>
+              <span class="server-tool-desc">{{ t.description }}</span>
+            </li>
+          </ul>
+          <div v-else class="hint-text">该连接器暂未同步到工具,点「同步」重试</div>
+          <div class="server-actions">
+            <button
+              v-if="server.auth_type === 'oauth' && !server.authorized"
+              type="button"
+              class="server-btn is-primary"
+              :disabled="busyServerId === server.id"
+              @click="handleAuthorizeServer(server)"
+            >授权</button>
+            <button
+              type="button"
+              class="server-btn"
+              :disabled="busyServerId === server.id"
+              @click="handleSyncServer(server)"
+            >同步</button>
+            <button
+              type="button"
+              class="server-btn"
+              :disabled="busyServerId === server.id"
+              @click="openEditForm(server)"
+            >编辑</button>
+            <button
+              type="button"
+              class="server-btn is-danger"
+              :disabled="busyServerId === server.id"
+              @click="handleDeleteServer(server)"
+            >删除</button>
+          </div>
         </div>
-        <!-- 工具能力折叠区(点击 server 行展开) -->
-        <ul v-if="expandedServers.has(server.id) && server.tools && server.tools.length > 0" class="server-tools">
-          <li v-for="t in server.tools" :key="t.name" class="server-tool">
-            <span class="server-tool-name">{{ t.name }}</span>
-            <span class="server-tool-desc">{{ t.description }}</span>
-          </li>
-        </ul>
-        <div v-else-if="expandedServers.has(server.id)" class="hint-text">该连接器暂未同步到工具</div>
       </li>
     </ul>
 
@@ -544,8 +548,8 @@ watch(
 }
 .server-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 0;
   border-bottom: 0.5px solid var(--border-l1);
 }
@@ -555,6 +559,17 @@ watch(
 .server-info {
   flex: 1;
   min-width: 0;
+  cursor: pointer;
+}
+.server-chevron {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--label-caption);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.server-chevron.open {
+  transform: rotate(90deg);
 }
 .server-name-row {
   display: flex;
@@ -591,8 +606,14 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.server-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .server-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 4px;
   flex-shrink: 0;
 }
