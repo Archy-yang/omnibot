@@ -12,6 +12,7 @@ import (
 
 	domain "omnibot/internal/domain/user"
 	"omnibot/internal/pkg/auth"
+	userRepo "omnibot/internal/repository/user"
 )
 
 const authTestSecret = "test-secret-32-chars-min-len-ok!"
@@ -30,7 +31,7 @@ func setupAuthTestDB(t *testing.T) *gorm.DB {
 func newAuthService(t *testing.T) *AuthService {
 	db := setupAuthTestDB(t)
 	jwtSvc := auth.NewJWTService(authTestSecret, time.Hour)
-	return NewAuthService(db, jwtSvc)
+	return NewAuthService(userRepo.NewAuthRepository(db), jwtSvc)
 }
 
 // ---------- Register ----------
@@ -155,7 +156,7 @@ func TestAuthService_Login_EmailCaseInsensitive(t *testing.T) {
 func TestAuthService_Login_BannedUser(t *testing.T) {
 	db := setupAuthTestDB(t)
 	jwtSvc := auth.NewJWTService(authTestSecret, time.Hour)
-	svc := NewAuthService(db, jwtSvc)
+	svc := NewAuthService(userRepo.NewAuthRepository(db), jwtSvc)
 
 	_, err := svc.Register("banned@example.com", "password123")
 	require.NoError(t, err)

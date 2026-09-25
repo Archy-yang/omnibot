@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 
 	"omnibot/internal/domain/user"
 	"omnibot/internal/pkg/auth"
@@ -19,8 +18,8 @@ var (
 	ErrEmailInvalid = errors.New("email invalid")
 	// ErrPasswordInvalid 密码长度不在 8~64 位
 	ErrPasswordInvalid = errors.New("password invalid")
-	// ErrEmailAlreadyExists 邮箱已被注册
-	ErrEmailAlreadyExists = errors.New("email already exists")
+	// ErrEmailAlreadyExists 邮箱已被注册(领域哨兵,repository 事务内唯一冲突转译用同一定义)
+	ErrEmailAlreadyExists = user.ErrEmailAlreadyExists
 	// ErrInvalidCredentials 邮箱或密码错误(统一提示,防枚举)
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	// ErrAccountUnavailable 账号被封禁 / 已删除
@@ -28,7 +27,7 @@ var (
 )
 
 // 邮箱格式:粗校验,含且仅含一个 @ 且域名部分含 .
-var emailRegexp = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+var emailRegexp = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s]+$`)
 
 // 邮箱最大长度(RFC 5321)
 const emailMaxLen = 254
@@ -39,24 +38,37 @@ const (
 	passwordMaxLen = 64
 )
 
+// AuthRepository 认证持久化窄接口(service 层声明,repository 层实现,DeepSeek 审查 §5.4 整改):
+// AuthService 不再持有 *gorm.DB——事务边界收进实现层的 CreateEmailAccount,
+// service 层不感知 ORM 与其哨兵错误;查询"不存在"以 (nil, nil) 表达,
+// 登录的防枚举语义(不存在/密码错误统一映射)由本层负责。
+type AuthRepository interface {
+	// CreateEmailAccount 原子创建邮箱账号(User + email channel + credential,同事务)。
+	// 邮箱已注册返回 domainuser.ErrEmailAlreadyExists。
+	CreateEmailAccount(email, passwordHash string) (userID int64, err error)
+	// FindEmailChannel 查 email 通道;不存在返回 (nil, nil)。
+	FindEmailChannel(email string) (*user.UserChannel, error)
+	// GetPasswordCredential 查用户密码凭证;不存在返回 (nil, nil)。
+	GetPasswordCredential(userID int64) (*user.UserCredential, error)
+	// GetUser 查用户;不存在返回 (nil, nil)。
+	GetUser(userID int64) (*user.User, error)
+}
+
 // AuthService 邮箱密码认证服务
-//
-// 直接持有 *gorm.DB 用于事务(Register 需要跨 3 张表:users / user_channels / user_credentials)。
-// 事务边界收敛在这一处,避免为一次性事务改动 4 个 repo 接口。
 type AuthService struct {
-	db  *gorm.DB
-	jwt *auth.JWTService
+	repo AuthRepository
+	jwt  *auth.JWTService
 }
 
 // NewAuthService 创建 AuthService
-func NewAuthService(db *gorm.DB, jwtSvc *auth.JWTService) *AuthService {
-	return &AuthService{db: db, jwt: jwtSvc}
+func NewAuthService(repo AuthRepository, jwtSvc *auth.JWTService) *AuthService {
+	return &AuthService{repo: repo, jwt: jwtSvc}
 }
 
 // Register 注册邮箱账号。成功返回签发的 JWT(自动登录)。
 //
-// 事务:创建 User + UserChannel(email) + UserCredential,任一步失败整体回滚。
-// 邮箱归一化(trim + 小写),唯一索引兜底并发重复。
+// 账号三表创建由 repository 原子完成;邮箱归一化(trim + 小写),
+// 唯一索引兜底并发重复(repository 转译为 ErrEmailAlreadyExists)。
 func (s *AuthService) Register(email, password string) (string, error) {
 	normalized, err := normalizeAndValidateEmail(email)
 	if err != nil {
@@ -71,38 +83,11 @@ func (s *AuthService) Register(email, password string) (string, error) {
 		return "", err
 	}
 
-	var newUserID int64
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		u := user.NewUser()
-		if err := tx.Create(u).Error; err != nil {
-			return err
-		}
-
-		ch := user.NewUserChannel(u.ID, "email", normalized)
-		if err := tx.Create(ch).Error; err != nil {
-			// (channel_type, channel_user_id) 唯一索引冲突 → 邮箱已注册
-			if errors.Is(err, gorm.ErrDuplicatedKey) {
-				return ErrEmailAlreadyExists
-			}
-			return err
-		}
-
-		cred := &user.UserCredential{
-			UserID:       u.ID,
-			PasswordHash: string(hash),
-		}
-		if err := tx.Create(cred).Error; err != nil {
-			return err
-		}
-
-		newUserID = u.ID
-		return nil
-	})
+	userID, err := s.repo.CreateEmailAccount(normalized, string(hash))
 	if err != nil {
 		return "", err
 	}
-
-	return s.jwt.GenerateToken(newUserID)
+	return s.jwt.GenerateToken(userID)
 }
 
 // Login 邮箱密码登录。
@@ -118,24 +103,21 @@ func (s *AuthService) Login(email, password string) (string, error) {
 	}
 
 	// 1. 找到 email → user_id
-	var ch user.UserChannel
-	err = s.db.Where("channel_type = ? AND channel_user_id = ?", "email", normalized).First(&ch).Error
+	ch, err := s.repo.FindEmailChannel(normalized)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", ErrInvalidCredentials
-		}
 		return "", err
 	}
+	if ch == nil {
+		return "", ErrInvalidCredentials
+	}
 
-	// 2. 查 credential
-	var cred user.UserCredential
-	err = s.db.Where("user_id = ?", ch.UserID).First(&cred).Error
+	// 2. 查 credential(理论上不该缺——注册事务保证同时建,缺则兜底归并)
+	cred, err := s.repo.GetPasswordCredential(ch.UserID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// 理论上不该发生(注册事务保证同时建),但兜底
-			return "", ErrInvalidCredentials
-		}
 		return "", err
+	}
+	if cred == nil {
+		return "", ErrInvalidCredentials
 	}
 
 	// 3. 比对密码
@@ -144,10 +126,12 @@ func (s *AuthService) Login(email, password string) (string, error) {
 	}
 
 	// 4. 检查用户状态
-	var u user.User
-	err = s.db.First(&u, ch.UserID).Error
+	u, err := s.repo.GetUser(ch.UserID)
 	if err != nil {
 		return "", err
+	}
+	if u == nil {
+		return "", ErrInvalidCredentials
 	}
 	if u.Status != user.StatusNormal {
 		return "", ErrAccountUnavailable

@@ -406,7 +406,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		tokenTTL = 720 * time.Hour // 30 天,PRD 5.3
 	}
 	jwtSvc := auth.NewJWTService(cfg.Auth.JWTSecret, tokenTTL)
-	authSvc := userService.NewAuthService(dbConn.GetGormDB(), jwtSvc)
+	authSvc := userService.NewAuthService(userRepo.NewAuthRepository(dbConn.GetGormDB()), jwtSvc)
 	authHandler := web.NewAuthHandler(authSvc)
 
 	// 订阅源管理接口(14-订阅源管理:页面管理入口)
