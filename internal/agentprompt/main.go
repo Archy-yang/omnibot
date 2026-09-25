@@ -13,6 +13,8 @@ func MainAgentSections(hasSubAgents bool) []PromptSection {
 	sections := []PromptSection{
 		// agent_base:基础人格(DefaultSystemPrompt),Order -100 最前。
 		StaticSection("agent_base", ScopeMain, -100, DefaultSystemPrompt),
+		// response_style:表达方式(persona 层,-90),恒装配——不依赖 hasSubAgents。
+		StaticSection("response_style", ScopeMain, -90, MainResponseStylePrompt),
 	}
 	if !hasSubAgents {
 		return sections

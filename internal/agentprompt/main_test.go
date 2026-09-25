@@ -16,25 +16,28 @@ import (
 func TestMainAgentMigration_Golden_WithSubAgents(t *testing.T) {
 	got, err := BuildMainAgentSystemPrompt(true)
 	require.NoError(t, err)
-	want := DefaultSystemPrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt + MainSubscriptionRulesPrompt
+	want := DefaultSystemPrompt + MainResponseStylePrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt + MainSubscriptionRulesPrompt
 	require.Equal(t, want, got,
 		"主 Agent(有子 Agent)的 registry 组装必须与默认拼接逐字节一致")
 }
 
-// TestMainAgentMigration_Golden_NoSubAgents hasSubAgents=false:组装输出 == base prompt。
+// TestMainAgentMigration_Golden_NoSubAgents hasSubAgents=false:组装输出 == base + 表达方式。
 func TestMainAgentMigration_Golden_NoSubAgents(t *testing.T) {
 	got, err := BuildMainAgentSystemPrompt(false)
 	require.NoError(t, err)
-	require.Equal(t, DefaultSystemPrompt, got, "无子 Agent 时只有基础人格")
+	require.Equal(t, DefaultSystemPrompt+MainResponseStylePrompt, got,
+		"无子 Agent 时只有基础人格 + 表达方式")
 }
 
-// TestMainAgentSections_Scoping 派活/汇报/任务管理仅 hasSubAgents 时存在;基础人格恒在。
+// TestMainAgentSections_Scoping 派活/汇报/任务管理仅 hasSubAgents 时存在;
+// 基础人格与表达方式(persona 层)恒在。
 func TestMainAgentSections_Scoping(t *testing.T) {
 	withSub := MainAgentSections(true)
 	assert.True(t, sectionHas(withSub, ScopeMain, "delegation_rules"))
 	assert.True(t, sectionHas(withSub, ScopeMain, "reporting_rules"))
 	assert.True(t, sectionHas(withSub, ScopeMain, "task_mgmt"))
 	assert.True(t, sectionHas(withSub, ScopeMain, "subscription_rules"))
+	assert.True(t, sectionHas(withSub, ScopeMain, "response_style"))
 
 	noSub := MainAgentSections(false)
 	assert.False(t, sectionHas(noSub, ScopeMain, "delegation_rules"), "无子 Agent 时不装配派活 section")
@@ -42,6 +45,7 @@ func TestMainAgentSections_Scoping(t *testing.T) {
 	assert.False(t, sectionHas(noSub, ScopeMain, "task_mgmt"))
 	assert.False(t, sectionHas(noSub, ScopeMain, "subscription_rules"))
 	assert.True(t, sectionHas(noSub, ScopeMain, "agent_base"), "基础人格恒在")
+	assert.True(t, sectionHas(noSub, ScopeMain, "response_style"), "表达方式是 persona 层,恒在")
 }
 
 // TestMainAgentSections_Order 主 Agent sections 按 order 排序:base(-100) 在 delegation(100) 前。
@@ -81,6 +85,23 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 	require.NotEqual(t, -1, first)
 	require.NotEqual(t, -1, second)
 	assert.Less(t, first, second, "铁律段必须位于「什么时候派」之前")
+}
+
+// TestMainResponseStylePrompt_ButlerVoice 表达方式守护:管家口吻、不叙述工具调用过程
+// (task#161 用户反馈:"用高德 MCP 实查了……"这类技术过程叙述不该出现在回复里)。
+func TestMainResponseStylePrompt_ButlerVoice(t *testing.T) {
+	for _, want := range []string{
+		"私人管家",
+		"直接给结果",
+		"不提工具名",
+		"MCP",
+		"技术名词",
+		"如实",
+		// 护栏:不得弱化行为铁律——派活确认这类基于真实工具调用的口语保留
+		"已安排",
+	} {
+		assert.Contains(t, MainResponseStylePrompt, want, "表达方式缺少关键句 %q", want)
+	}
 }
 
 // TestMainDelegationRulesPrompt_ConciseHumanReply 派活后的回复必须是一句口语人话

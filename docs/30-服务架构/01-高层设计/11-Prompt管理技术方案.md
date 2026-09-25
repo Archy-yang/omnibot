@@ -200,9 +200,14 @@ Assemble(c PromptCtx):
 |---------|:---:|:---:|----------|
 | `harness_identity` | 全局 | -100 | "你是全平台智能助手"（与子 Agent 共享） |
 | `persona` | main | 0 | 管家定位（从 `defaultSystemPrompt` 扩容而来） |
+| `response_style` | main | -90 | 表达方式：管家口吻、直接给结果、不叙述工具调用过程（persona 层，恒装配） |
 | `delegation_rules` | main | 100 | 派活规则（**仅装配了子 Agent 时注册**） |
 | `reporting_rules` | main | 110 | 汇报引导 |
 | `task_mgmt` | main | 120 | 任务管理工具(query/update/cancel)指引 |
+
+> `response_style` 只约束"怎么说"不影响"做什么"——派活/汇报的反幻觉铁律、input_required 转述等
+> 基于真实工具调用的确认话术原样保留（section 末段护栏明示）。
+> 背景：模型曾回复"用高德 MCP 实查了……"把工具调用过程当台词；工具是助理的手脚，不是台词。
 
 > `hasSubAgents` 布尔**消失**：组装点不再传 bool，而是"子 Agent 支持开启时就 `Register(delegation_rules/reporting/task_mgmt)`，否则不注册"。语义变成数据：`registry.Has(main, "delegation_rules")` 为真 ⇔ 派活规则在场。
 
@@ -213,7 +218,7 @@ Assemble(c PromptCtx):
 | section | Scope | Order | 内容来源 |
 |---------|:---:|:---:|----------|
 | `agent_base` | sub | -100 | 共享基础人格（`DefaultSystemPrompt`，与主 Agent 同款） |
-| `sub_role` | sub | 0 | 通用执行器 persona（`SubAgentExecutorPersona`，含收敛规则；不再有角色模板） |
+| `sub_role` | sub | 0 | 通用执行器 persona（`SubAgentExecutorPersona`，含收敛规则 + 报告只写结论不写工具过程；不再有角色模板） |
 | `sub_persona_hint` | sub | 50 | `TaskSpec.PersonaHint` 非空才注册 → `【本次任务角色】{hint}`（任务级角色，主 Agent 按任务给） |
 | `sub_contract` | sub | 100 | 任务包详情（deliverable/criteria/background/constraints，`spec.HasDetail()` gate） |
 

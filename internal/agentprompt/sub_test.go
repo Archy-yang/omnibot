@@ -13,6 +13,13 @@ import (
 // 子 Agent prompt section 化 + 去角色测试(11-Prompt管理 §8,08 §5.7)。
 // 去角色后子 Agent 提示词 = 共享基础人格 + 通用执行器 persona + (可选)persona_hint + 任务合同,无角色卡模板。
 
+// TestSubAgentExecutorPersona_ReportFactsOnly 执行器报告只写结论与事实,不写工具调用过程叙事
+// (回执是主 Agent 转述的素材,干净的过程叙述才能保证"管家口吻"不被污染)。
+func TestSubAgentExecutorPersona_ReportFactsOnly(t *testing.T) {
+	assert.Contains(t, SubAgentExecutorPersona, "报告只写结论与事实")
+	assert.Contains(t, SubAgentExecutorPersona, "不写工具调用过程")
+}
+
 // TestSubAgentPromptSections_NoRole 无 persona_hint:不含"研究员"等角色卡文案,含通用执行器 persona。
 func TestSubAgentPromptSections_NoRole(t *testing.T) {
 	s := SubAgentPromptSections(ScopeSub, domainagent.NewTaskSpec("查高铁票"))
