@@ -78,6 +78,7 @@ func validateServerInput(name, baseURL string) error {
 // MCPServerInput 新增/更新入参(api_key/client_secret 空 = 更新时保留原值)。
 type MCPServerInput struct {
 	Name              string
+	Description       string // 能力概述(选填)
 	BaseURL           string
 	APIKey            string
 	AuthType          string // none/bearer/oauth,空 = bearer
@@ -149,6 +150,7 @@ func (s *MCPService) AddServer(in MCPServerInput, userID int64) (*mcpdomain.Serv
 	}
 	row := &mcpdomain.MCPServer{
 		Name: name, BaseURL: in.BaseURL, APIKey: cipher, Enabled: in.Enabled,
+		Description:       strings.TrimSpace(in.Description),
 		AuthType:          authType,
 		Transport:         transport,
 		UserID:            owner,
@@ -200,6 +202,7 @@ func (s *MCPService) UpdateServer(id int64, in MCPServerInput, userID int64) (*m
 	row.Name = name
 	row.BaseURL = in.BaseURL
 	row.Enabled = in.Enabled
+	row.Description = strings.TrimSpace(in.Description)
 	row.AuthType = authType
 	row.Transport = transport
 	if in.APIKey != "" {
@@ -307,11 +310,12 @@ func (s *MCPService) ListServers(userID int64) ([]mcpdomain.ServerView, error) {
 // serverToView 行 → 掩码视图(工具数直接统计该 server 的 mcp 技能行,缺省 -1=从未同步成功)。
 func (s *MCPService) serverToView(row *mcpdomain.MCPServer) (*mcpdomain.ServerView, error) {
 	view := &mcpdomain.ServerView{
-		ID:         row.ID,
-		Name:       row.Name,
-		BaseURL:    row.BaseURL,
-		Enabled:    row.Enabled,
-		HasAPIKey:  row.APIKey != "",
+		ID:          row.ID,
+		Name:        row.Name,
+		BaseURL:     row.BaseURL,
+		Description: row.Description,
+		Enabled:     row.Enabled,
+		HasAPIKey:   row.APIKey != "",
 		AuthType:   row.AuthType,
 		Transport:  row.Transport,
 		Authorized: row.Authorized(),

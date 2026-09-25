@@ -301,3 +301,27 @@ func TestSeedServersFromConfig(t *testing.T) {
 	assert.Equal(t, 0, n)
 	assert.Len(t, serverRepo.servers, 1)
 }
+
+// ---- 描述字段 ----
+
+// 测试 28:AddServer/UpdateServer 的能力描述落库并回显;UpdateServer 清空描述生效。
+func TestServerDescription_Passthrough(t *testing.T) {
+	serverRepo := newMockServerRepo()
+	svc := newManagerService(serverRepo, enabledClient("t"))
+
+	view, err := svc.AddServer(MCPServerInput{Name: "amap", BaseURL: "https://mcp.amap.com/mcp", Enabled: true,
+		Description: "高德地图:天气/POI/路径规划"}, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "高德地图:天气/POI/路径规划", view.Description, "新增回显描述")
+	assert.Equal(t, "高德地图:天气/POI/路径规划", serverRepo.servers[0].Description, "落库含描述")
+
+	view, err = svc.UpdateServer(serverRepo.servers[0].ID, MCPServerInput{Name: "amap", BaseURL: "https://mcp.amap.com/mcp", Enabled: true,
+		Description: "  地图与出行能力  "}, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "地图与出行能力", view.Description, "更新回显 trim 后描述")
+
+	// 描述可清空
+	view, err = svc.UpdateServer(serverRepo.servers[0].ID, MCPServerInput{Name: "amap", BaseURL: "https://mcp.amap.com/mcp", Enabled: true}, 42)
+	require.NoError(t, err)
+	assert.Empty(t, view.Description)
+}

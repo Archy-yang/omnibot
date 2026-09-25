@@ -102,8 +102,11 @@ func (c *MCPToolCatalog) snapshot(userID int64) []*MCPToolInfo {
 // MCPService 上的目录装配与检索。
 
 // replaceServerCatalog 同步后整目录重建:ListTools 结果 → 向量化 → 替换。返回工具数。
+// 向量化文本 = server 描述(选填) + 工具名 + 工具描述:工具描述干瘪时 server 级
+// 能力概述补位,改善语义匹配召回。指纹同步计入 server 描述(改描述即触发重嵌)。
 func (s *MCPService) replaceServerCatalog(serverRow *mcpdomain.MCPServer, tools []mcp.Tool) int {
 	provider := s.providerFor(ptrDeref(serverRow.UserID))
+	serverDesc := strings.TrimSpace(serverRow.Description)
 	infos := make([]*MCPToolInfo, 0, len(tools))
 	s.catalog.mu.Lock()
 	cache := s.catalog.embedCash[serverRow.ID]
@@ -119,17 +122,21 @@ func (s *MCPService) replaceServerCatalog(serverRow *mcpdomain.MCPServer, tools 
 			Description:  tool.Description,
 			ParamsSchema: marshalSchema(tool.InputSchema),
 		}
+		embedText := tool.Name + "\n" + tool.Description
+		if serverDesc != "" {
+			embedText = serverDesc + "\n" + embedText
+		}
 		// 描述向量化(指纹去重:重同步未变不重嵌;provider 变更后指纹判等失效自动重嵌)
-		if provider != nil && strings.TrimSpace(tool.Description) != "" {
-			sum := sha1.Sum([]byte(tool.Name + "|" + tool.Description))
+		if provider != nil && strings.TrimSpace(embedText) != "" {
+			sum := sha1.Sum([]byte(serverDesc + "|" + tool.Name + "|" + tool.Description))
 			fp := hex.EncodeToString(sum[:])
 			if hit, ok := cache[tool.Name]; ok && hit.fingerprint == fp && hit.model == provider.Name() {
 				info.Embedding, info.EmbeddingModel = hit.vec, hit.model
-			} else if vecs, err := provider.Embed(context.Background(), []string{tool.Name + "\n" + tool.Description}); err == nil && len(vecs) == 1 {
+			} else if vecs, err := provider.Embed(context.Background(), []string{embedText}); err == nil && len(vecs) == 1 {
 				info.Embedding, info.EmbeddingModel = vecs[0], provider.Name()
 				cache[tool.Name] = mcpEmbedEntry{fingerprint: fp, vec: vecs[0], model: provider.Name()}
 			} else {
-				fmt.Printf("[skill] mcp tool %q (server %s) 向量化失败,不参与语义匹配: %v\n", tool.Name, serverRow.Name, err)
+				fmt.Printf("[mcp] tool %q (server %s) 向量化失败,不参与语义匹配: %v\n", tool.Name, serverRow.Name, err)
 			}
 		}
 		infos = append(infos, info)

@@ -78,6 +78,7 @@ const busyServerId = ref<number | null>(null);
 const showServerForm = ref(false);
 const editingId = ref<number | null>(null);
 const formName = ref('');
+const formDescription = ref(''); // 能力概述(选填)
 const formBaseUrl = ref('');
 const formApiKey = ref(''); // 编辑时留空 = 保留原 key
 const formAuthType = ref<'none' | 'bearer' | 'oauth'>('bearer');
@@ -104,6 +105,7 @@ const loadServers = async () => {
 const resetForm = () => {
   editingId.value = null;
   formName.value = '';
+  formDescription.value = '';
   formBaseUrl.value = '';
   formApiKey.value = '';
   formAuthType.value = 'bearer';
@@ -122,6 +124,7 @@ const openCreateForm = () => {
 const openEditForm = (server: MCPServerItem) => {
   editingId.value = server.id;
   formName.value = server.name;
+  formDescription.value = server.description ?? '';
   formBaseUrl.value = server.base_url;
   formApiKey.value = ''; // 留空 = 保留原 key
   formAuthType.value = (server.auth_type as 'none' | 'bearer' | 'oauth') || 'bearer';
@@ -149,6 +152,7 @@ const handleSaveServer = async () => {
   formSaving.value = true;
   const body = {
     name: formName.value.trim(),
+    description: formDescription.value.trim(),
     base_url: formBaseUrl.value.trim(),
     api_key: formApiKey.value, // 空 = 保留原值(编辑时)
     auth_type: formAuthType.value,
@@ -298,6 +302,7 @@ watch(
             </span>
             <span class="server-count">{{ toolCountText(server) }}</span>
           </div>
+          <div v-if="server.description" class="server-desc">{{ server.description }}</div>
           <div class="server-url">{{ server.base_url }}</div>
         </div>
         <!-- 操作区(常驻:连接开关 + 管理) -->
@@ -359,6 +364,18 @@ watch(
           type="text"
           placeholder="如 github"
         />
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="mcp-desc">能力概述 <span class="form-optional">选填</span></label>
+        <input
+          id="mcp-desc"
+          v-model="formDescription"
+          class="form-input"
+          type="text"
+          maxlength="256"
+          placeholder="如:高德地图,提供天气 / POI 检索 / 路径规划能力"
+        />
+        <div class="form-hint">一句话概述这个连接器能做什么,有助于助手更准地匹配到它的工具。</div>
       </div>
       <div class="form-field">
         <label class="form-label" for="mcp-url">服务地址</label>
@@ -631,6 +648,14 @@ watch(
   color: var(--label-caption);
   white-space: nowrap;
 }
+.server-desc {
+  font-size: 12px;
+  color: var(--label-primary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .server-url {
   font-size: 12px;
   color: var(--label-tertiary);
@@ -638,6 +663,11 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.form-optional {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--label-caption);
 }
 .server-detail {
   width: 100%;

@@ -263,6 +263,8 @@ export interface MCPServerItem {
   id: number;
   name: string;
   base_url: string;
+  /** 能力概述(选填,未填为空) */
+  description?: string;
   enabled: boolean;
   /** 是否配置了密钥(bearer 型) */
   has_api_key: boolean;
@@ -290,6 +292,8 @@ export interface ListMCPServersResponse {
  */
 export interface UpsertMCPServerRequest {
   name: string;
+  /** 能力概述(选填) */
+  description?: string;
   base_url: string;
   api_key?: string;
   /** none/bearer/oauth,空 = bearer */

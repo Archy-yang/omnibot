@@ -33,6 +33,7 @@ func (h *Handler) SetMCPManager(mgr MCPManager) {
 // upsertMCPServerRequest 创建/更新请求体(api_key/client_secret 空 = 保留原值)。
 type upsertMCPServerRequest struct {
 	Name              string `json:"name" binding:"required"`
+	Description       string `json:"description"` // 能力概述(选填)
 	BaseURL           string `json:"base_url" binding:"required"`
 	APIKey            string `json:"api_key"`
 	AuthType          string `json:"auth_type"` // none/bearer/oauth,空 = bearer
@@ -47,7 +48,7 @@ type upsertMCPServerRequest struct {
 // toInput 请求体 → service 入参。
 func (r *upsertMCPServerRequest) toInput() mcpsvc.MCPServerInput {
 	return mcpsvc.MCPServerInput{
-		Name: r.Name, BaseURL: r.BaseURL, APIKey: r.APIKey,
+		Name: r.Name, Description: r.Description, BaseURL: r.BaseURL, APIKey: r.APIKey,
 		AuthType: r.AuthType, Transport: r.Transport, OAuthClientID: r.OAuthClientID,
 		OAuthClientSecret: r.OAuthClientSecret, OAuthScopes: r.OAuthScopes,
 		Enabled: *r.Enabled, Shared: r.Shared,

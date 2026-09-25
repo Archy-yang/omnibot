@@ -22,8 +22,11 @@ const (
 type MCPServer struct {
 	ID       int64  `gorm:"primaryKey;autoIncrement"`
 	Name     string `gorm:"uniqueIndex;size:64;not null"` // 自定义名,连接器展示名
-	BaseURL  string `gorm:"size:512;not null"`            // Streamable HTTP 端点
-	APIKey   string `gorm:"size:1024"`                    // bearer: AES 密文;oauth: 空
+	// Description 一句话概述该连接器提供的能力(选填;连接器 UI 展示 + 拼入工具描述
+	// 向量化文本,改善语义匹配——工具描述干瘪时 server 级上下文补位)。
+	Description string `gorm:"size:256"`
+	BaseURL     string `gorm:"size:512;not null"` // Streamable HTTP 端点
+	APIKey      string `gorm:"size:1024"`         // bearer: AES 密文;oauth: 空
 	Enabled  bool   `gorm:"not null"`                     // false = 不连接、不同步、工具不可见
 	AuthType string `gorm:"size:16;not null;default:bearer"`
 
@@ -59,7 +62,9 @@ type ServerView struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
-	Enabled bool   `json:"enabled"`
+	// Description 能力概述(选填;空=未填)
+	Description string `json:"description,omitempty"`
+	Enabled     bool   `json:"enabled"`
 	// HasAPIKey 是否配置了密钥(bearer 型;掩码展示用,不回显明文)
 	HasAPIKey bool `json:"has_api_key"`
 	// AuthType 鉴权方式:none/bearer/oauth
