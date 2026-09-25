@@ -20,7 +20,7 @@
 |------|------|------|
 | ✅ [对话域/message-service.md](./对话域/message-service.md) | 消息服务（上下文记忆） | v1.2+ |
 | ✅ [对话域/memory-service.md](./对话域/memory-service.md) | 长期记忆服务 | v1.3+ |
-| [对话域/context-builder.md](./对话域/context-builder.md) | 上下文构建器 | v1.2+ |
+| ⏳ 对话域/context-builder.md（待补） | 上下文构建器（现行实现见 internal/service/chat 与 doc 16） | - |
 
 ### 接入层
 多通道接入抽象、各平台具体实现
@@ -37,15 +37,15 @@
 | 文档 | 说明 | 版本 |
 |------|------|------|
 | ✅ [基础设施层/llm-client.md](./基础设施层/llm-client.md) | LLM 客户端（同步+流式+降级） | v1.3+ |
-| [基础设施层/database.md](./基础设施层/database.md) | 数据库设计与迁移策略 | v1.0+ |
-| [基础设施层/config.md](./基础设施层/config.md) | 配置管理 | v1.0+ |
+| ⏳ 基础设施层/database.md（待补） | 数据库设计与迁移策略（现行见 internal/db/database.go） | - |
+| ⏳ 基础设施层/config.md（待补） | 配置管理（现行见 pkg/config） | - |
 
 ### 通用能力
 加密、工具类、跨领域通用能力
 
 | 文档 | 说明 | 版本 |
 |------|------|------|
-| [通用能力/crypto.md](./通用能力/crypto.md) | AES-256-GCM 加密模块 | v1.1+ |
+| ⏳ 通用能力/crypto.md（待补） | AES-256-GCM 加密模块（现行见 internal/pkg/crypto） | - |
 
 ---
 
