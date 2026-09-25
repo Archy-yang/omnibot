@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 	mcp "github.com/mark3labs/mcp-go/mcp"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 	agentpkg "omnibot/internal/service/agent"
 	memoryservice "omnibot/internal/service/memory"
 )
@@ -99,10 +99,10 @@ func (c *MCPToolCatalog) snapshot(userID int64) []*MCPToolInfo {
 	return out
 }
 
-// SkillService 上的目录装配与检索。
+// MCPService 上的目录装配与检索。
 
 // replaceServerCatalog 同步后整目录重建:ListTools 结果 → 向量化 → 替换。返回工具数。
-func (s *SkillService) replaceServerCatalog(serverRow *skilldomain.MCPServer, tools []mcp.Tool) int {
+func (s *MCPService) replaceServerCatalog(serverRow *mcpdomain.MCPServer, tools []mcp.Tool) int {
 	provider := s.providerFor(ptrDeref(serverRow.UserID))
 	infos := make([]*MCPToolInfo, 0, len(tools))
 	s.catalog.mu.Lock()
@@ -156,7 +156,7 @@ func marshalSchema(schema mcp.ToolInputSchema) string {
 }
 
 // matchTools 语义匹配用户可见且连接器开启的工具,余弦降序取 topK(只比同模型向量)。
-func (s *SkillService) matchTools(ctx context.Context, userID int64, query string, topK int) ([]*MCPToolInfo, error) {
+func (s *MCPService) matchTools(ctx context.Context, userID int64, query string, topK int) ([]*MCPToolInfo, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -204,7 +204,7 @@ func (s *SkillService) matchTools(ctx context.Context, userID int64, query strin
 }
 
 // resolveUserMCPTool mcp_call 的工具解析:用户作用域内按原始工具名查找(私有遮蔽共享)。
-func (s *SkillService) resolveUserMCPTool(userID int64, toolName string) (*MCPToolInfo, *skilldomain.MCPServer, error) {
+func (s *MCPService) resolveUserMCPTool(userID int64, toolName string) (*MCPToolInfo, *mcpdomain.MCPServer, error) {
 	candidates := s.catalog.snapshot(userID)
 	var found *MCPToolInfo
 	for _, info := range candidates {
@@ -229,12 +229,12 @@ func (s *SkillService) resolveUserMCPTool(userID int64, toolName string) (*MCPTo
 }
 
 // visibleServerRows 该用户可见的 server 行(共享 + 本人)。
-func (s *SkillService) visibleServerRows(userID int64) []*skilldomain.MCPServer {
+func (s *MCPService) visibleServerRows(userID int64) []*mcpdomain.MCPServer {
 	rows, err := s.serverRepo.List()
 	if err != nil {
 		return nil
 	}
-	out := make([]*skilldomain.MCPServer, 0, len(rows))
+	out := make([]*mcpdomain.MCPServer, 0, len(rows))
 	for _, r := range rows {
 		if r.UserID == nil || *r.UserID == userID {
 			out = append(out, r)
@@ -244,7 +244,7 @@ func (s *SkillService) visibleServerRows(userID int64) []*skilldomain.MCPServer 
 }
 
 // BuildMCPContextBlock 生成晚置注入的「MCP 连接器可用工具」system 消息文本。无命中返回空。
-func (s *SkillService) BuildMCPContextBlock(ctx context.Context, userID int64, query string) (string, error) {
+func (s *MCPService) BuildMCPContextBlock(ctx context.Context, userID int64, query string) (string, error) {
 	rows, err := s.matchTools(ctx, userID, query, mcpMatchTopK)
 	if err != nil {
 		return "", err
@@ -281,10 +281,10 @@ func compactSchema(schemaJSON string) string {
 }
 
 // specForServer 连接器行 → 客户端连接配置(解密 key;调用时现场握手用)。
-func (s *SkillService) specForServer(row *skilldomain.MCPServer) (*MCPServerSpec, error) {
+func (s *MCPService) specForServer(row *mcpdomain.MCPServer) (*MCPServerSpec, error) {
 	spec := &MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, Enabled: row.Enabled, AuthType: row.AuthType, Transport: row.Transport}
 	switch row.AuthType {
-	case skilldomain.AuthTypeOAuth:
+	case mcpdomain.AuthTypeOAuth:
 		return nil, fmt.Errorf("OAuth 连接器的工具调用走授权客户端路径,暂不支持 mcp_call 直调")
 	default: // bearer / none / query
 		apiKey, err := decryptSecret(row.APIKey)
@@ -311,7 +311,7 @@ func mcpContentText(result *mcp.CallToolResult) string {
 }
 
 // CreateMCPCallTool 构造 mcp_call 元工具(tools 参数恒定项,缓存稳定)。
-func (s *SkillService) CreateMCPCallTool() agentpkg.Tool {
+func (s *MCPService) CreateMCPCallTool() agentpkg.Tool {
 	return agentpkg.Tool{
 		Name:         "mcp_call",
 		DisplayLabel: "调用外部工具",
@@ -360,7 +360,7 @@ const mcpSearchDescription = `按语义搜索当前可用的 MCP 连接器工具
 纪律:每回合最多搜索 3 次;达到上限后必须停止重试,如实告知用户当前无法完成该操作。`
 
 // invokeMCPTool 现场握手建连调用(无常驻连接:重启/断线不漂移)。
-func (s *SkillService) invokeMCPTool(ctx context.Context, serverRow *skilldomain.MCPServer, toolName string, callArgs map[string]interface{}) (string, error) {
+func (s *MCPService) invokeMCPTool(ctx context.Context, serverRow *mcpdomain.MCPServer, toolName string, callArgs map[string]interface{}) (string, error) {
 	spec, err := s.specForServer(serverRow)
 	if err != nil {
 		return "", fmt.Errorf("连接器配置错误: %w", err)
@@ -397,7 +397,7 @@ func (s *SkillService) invokeMCPTool(ctx context.Context, serverRow *skilldomain
 }
 
 // CreateMCPSearchTool 构造 mcp_search 元工具(每回合 3 次上限由 runtime 计数器强制)。
-func (s *SkillService) CreateMCPSearchTool() agentpkg.Tool {
+func (s *MCPService) CreateMCPSearchTool() agentpkg.Tool {
 	return agentpkg.Tool{
 		Name:         "mcp_search",
 		DisplayLabel: "搜索外部工具",

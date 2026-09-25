@@ -6,21 +6,21 @@ import (
 	"strconv"
 
 	"omnibot/internal/middleware"
-	skilldomain "omnibot/internal/domain/skill"
-	skillsvc "omnibot/internal/service/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
+	mcpsvc "omnibot/internal/service/mcp"
 
 	"github.com/gin-gonic/gin"
 )
 
 // MCPManager MCP server 在线管理窄接口(web 层声明,service 层实现)。
 type MCPManager interface {
-	ListServers(userID int64) ([]skilldomain.ServerView, error)
-	AddServer(in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error)
-	UpdateServer(id int64, in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error)
+	ListServers(userID int64) ([]mcpdomain.ServerView, error)
+	AddServer(in mcpsvc.MCPServerInput, userID int64) (*mcpdomain.ServerView, error)
+	UpdateServer(id int64, in mcpsvc.MCPServerInput, userID int64) (*mcpdomain.ServerView, error)
 	DeleteServer(id int64) error
-	SyncServer(id int64, userID int64) (*skillsvc.SyncResult, error)
+	SyncServer(id int64, userID int64) (*mcpsvc.SyncResult, error)
 	// BeginOAuth 生成授权 URL(M4;state 挂起服务端等回调)。
-	BeginOAuth(ctx context.Context, id int64) (*skillsvc.OAuthBeginResult, error)
+	BeginOAuth(ctx context.Context, id int64) (*mcpsvc.OAuthBeginResult, error)
 	// HandleOAuthCallback 处理服务商重定向回调(state 校验+换 token 落库)。
 	HandleOAuthCallback(ctx context.Context, code, state string) error
 }
@@ -45,8 +45,8 @@ type upsertMCPServerRequest struct {
 }
 
 // toInput 请求体 → service 入参。
-func (r *upsertMCPServerRequest) toInput() skillsvc.MCPServerInput {
-	return skillsvc.MCPServerInput{
+func (r *upsertMCPServerRequest) toInput() mcpsvc.MCPServerInput {
+	return mcpsvc.MCPServerInput{
 		Name: r.Name, BaseURL: r.BaseURL, APIKey: r.APIKey,
 		AuthType: r.AuthType, Transport: r.Transport, OAuthClientID: r.OAuthClientID,
 		OAuthClientSecret: r.OAuthClientSecret, OAuthScopes: r.OAuthScopes,

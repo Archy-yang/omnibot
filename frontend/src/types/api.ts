@@ -226,7 +226,7 @@ export type UserLLMProvidersResponse = GetLLMProvidersResponse;
 /**
  * 技能条目(13-插件系统):助手当前具备的一项能力
  */
-export interface SkillItem {
+export interface ToolItem {
   /** 工具名(唯一标识) */
   name: string;
   /** 面向用户的中文名 */
@@ -242,16 +242,16 @@ export interface SkillItem {
 }
 
 /**
- * 技能清单响应类型
+ * 工具清单响应类型
  */
-export interface ListSkillsResponse {
-  skills: SkillItem[];
+export interface ListToolsResponse {
+  tools: ToolItem[];
 }
 
 /**
- * 技能启停响应类型
+ * 工具启停响应类型
  */
-export interface UpdateSkillResponse {
+export interface UpdateToolsResponse {
   name: string;
   enabled: boolean;
 }

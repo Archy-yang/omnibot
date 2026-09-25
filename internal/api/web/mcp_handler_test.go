@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	skilldomain "omnibot/internal/domain/skill"
-	skillsvc "omnibot/internal/service/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
+	mcpsvc "omnibot/internal/service/mcp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +17,7 @@ import (
 )
 
 type mockMCPManager struct {
-	views         []skilldomain.ServerView
+	views         []mcpdomain.ServerView
 	addName       string
 	addURL        string
 	addKey        string
@@ -26,7 +26,7 @@ type mockMCPManager struct {
 	updatedID     int64
 	deletedID     int64
 	syncedID      int64
-	syncResult    *skillsvc.SyncResult
+	syncResult    *mcpsvc.SyncResult
 	syncErr       error
 	updateErr     error
 	listErr       error
@@ -37,37 +37,37 @@ type mockMCPManager struct {
 	callbackState string
 }
 
-func (m *mockMCPManager) ListServers(userID int64) ([]skilldomain.ServerView, error) {
+func (m *mockMCPManager) ListServers(userID int64) ([]mcpdomain.ServerView, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	return m.views, nil
 }
 
-func (m *mockMCPManager) AddServer(in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+func (m *mockMCPManager) AddServer(in mcpsvc.MCPServerInput, userID int64) (*mcpdomain.ServerView, error) {
 	_ = userID
 	m.addName, m.addURL, m.addKey, m.addEnabled = in.Name, in.BaseURL, in.APIKey, in.Enabled
 	if m.addErr != nil {
 		return nil, m.addErr
 	}
-	return &skilldomain.ServerView{ID: 1, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled, HasAPIKey: in.APIKey != "", ToolCount: 2}, nil
+	return &mcpdomain.ServerView{ID: 1, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled, HasAPIKey: in.APIKey != "", ToolCount: 2}, nil
 }
 
-func (m *mockMCPManager) UpdateServer(id int64, in skillsvc.MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+func (m *mockMCPManager) UpdateServer(id int64, in mcpsvc.MCPServerInput, userID int64) (*mcpdomain.ServerView, error) {
 	_ = userID
 	m.updatedID = id
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
-	return &skilldomain.ServerView{ID: id, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled}, nil
+	return &mcpdomain.ServerView{ID: id, Name: in.Name, BaseURL: in.BaseURL, Enabled: in.Enabled}, nil
 }
 
-func (m *mockMCPManager) BeginOAuth(ctx context.Context, id int64) (*skillsvc.OAuthBeginResult, error) {
+func (m *mockMCPManager) BeginOAuth(ctx context.Context, id int64) (*mcpsvc.OAuthBeginResult, error) {
 	m.authorizedID = id
 	if m.authorizeErr != nil {
 		return nil, m.authorizeErr
 	}
-	return &skillsvc.OAuthBeginResult{AuthorizationURL: "https://auth.example.com/authorize?client_id=c", State: "st-1"}, nil
+	return &mcpsvc.OAuthBeginResult{AuthorizationURL: "https://auth.example.com/authorize?client_id=c", State: "st-1"}, nil
 }
 
 func (m *mockMCPManager) HandleOAuthCallback(ctx context.Context, code, state string) error {
@@ -83,14 +83,14 @@ func (m *mockMCPManager) DeleteServer(id int64) error {
 	return nil
 }
 
-func (m *mockMCPManager) SyncServer(id int64, userID int64) (*skillsvc.SyncResult, error) {
+func (m *mockMCPManager) SyncServer(id int64, userID int64) (*mcpsvc.SyncResult, error) {
 	_ = userID
 	m.syncedID = id
 	if m.syncErr != nil {
 		return nil, m.syncErr
 	}
 	if m.syncResult == nil {
-		m.syncResult = &skillsvc.SyncResult{ServerName: "github", ToolCount: 5}
+		m.syncResult = &mcpsvc.SyncResult{ServerName: "github", ToolCount: 5}
 	}
 	return m.syncResult, nil
 }
@@ -112,7 +112,7 @@ func setupMCPRouter(mgr MCPManager) *gin.Engine {
 }
 
 func TestHandleListMCPServers(t *testing.T) {
-	mgr := &mockMCPManager{views: []skilldomain.ServerView{
+	mgr := &mockMCPManager{views: []mcpdomain.ServerView{
 		{ID: 1, Name: "github", BaseURL: "https://x.com", Enabled: true, HasAPIKey: true, ToolCount: 3},
 	}}
 	r := setupMCPRouter(mgr)
@@ -123,7 +123,7 @@ func TestHandleListMCPServers(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Servers []skilldomain.ServerView `json:"servers"`
+			Servers []mcpdomain.ServerView `json:"servers"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

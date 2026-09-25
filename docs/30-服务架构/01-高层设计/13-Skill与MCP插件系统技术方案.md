@@ -1,11 +1,17 @@
-# Skill 与 MCP 插件系统技术方案
+# Tool 与 MCP 插件系统技术方案
+
+> **正名修订（2026-09-25）**：概念三分——**Tool（工具）**= function-call 可执行单元，
+> 定义落 `tools` 表（原 `skills` 表已迁移,`domain/skill`→`domain/tool`、`service/skill`→
+> `service/tool`+`service/mcp`、API `/api/v1/skills`→`/api/v1/tools`）；**MCP 连接器**= 外部
+> server,其工具目录只在内存缓存不入库（B2 按需加载）；**Skill（技能）**概念留白，未来 =
+> prompt+工具组合的能力包。本文其余章节中的 "skill" 均按此对照读作 "tool"（或连接器）。
 
 ## 文档信息
 
 | 项 | 内容 |
 |----|------|
-| 版本 | v1.0 |
-| 状态 | 已确认（2026-09-04） |
+| 版本 | v1.1 |
+| 状态 | 已确认（2026-09-04;2026-09-25 正名修订） |
 | PRD | [插件系统PRD-v1.0](../../20-产品PRD/in_progress/插件系统PRD-v1.0.md) |
 | 上游规划 | [15-后续能力演进规划.md](./15-后续能力演进规划.md) 阶段 3 / 阶段 4 |
 | 前置 | 08-后台Agent任务框架（能力白名单已落地）、11-Prompt管理 |

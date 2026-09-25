@@ -9,7 +9,7 @@ import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
 import SubscriptionDialog from '@/components/functional/SubscriptionDialog.vue';
 import TaskDialog from '@/components/functional/TaskDialog.vue';
-import SkillDrawer from '@/components/functional/SkillDrawer.vue';
+import ToolDrawer from '@/components/functional/ToolDrawer.vue';
 import Toast from '@/components/functional/Toast.vue';
 import type { Message } from '@/types/chat';
 
@@ -24,7 +24,7 @@ const isInitializing = ref(true);
 // 记忆/订阅/技能/任务弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
 const showSubscriptionDialog = ref(false);
-const showSkillDrawer = ref(false);
+const showToolDrawer = ref(false);
 const showTaskDialog = ref(false);
 // 任务卡片点击 → 打开任务中心并直达该任务详情;TaskDialog 消费后回吐置空
 const pendingTaskId = ref<number | null>(null);
@@ -39,10 +39,10 @@ const inputPlaceholder = computed(() =>
 );
 
 // 侧栏导航高亮:弹窗打开时高亮对应项,都没开时高亮「对话」
-const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings'>(() => {
+const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
   if (showSubscriptionDialog.value) return 'subscriptions';
-  if (showSkillDrawer.value) return 'skills';
+  if (showToolDrawer.value) return 'tools';
   if (showTaskDialog.value) return 'tasks';
   if (showSettingsPanel.value) return 'settings';
   return 'chat';
@@ -52,7 +52,7 @@ const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'ski
 const closeAllDrawers = () => {
   showMemoryDrawer.value = false;
   showSubscriptionDialog.value = false;
-  showSkillDrawer.value = false;
+  showToolDrawer.value = false;
   showTaskDialog.value = false;
   if (showSettingsPanel.value) toggleSettingsPanel();
 };
@@ -93,7 +93,7 @@ const handleSend = async (content: string) => {
       @open-tasks="showTaskDialog = true"
       @open-memory="showMemoryDrawer = true"
       @open-subscriptions="showSubscriptionDialog = true"
-      @open-skills="showSkillDrawer = true"
+      @open-tools="showToolDrawer = true"
       @open-settings="toggleSettingsPanel"
     />
 
@@ -168,9 +168,9 @@ const handleSend = async (content: string) => {
       @clear-initial="pendingTaskId = null"
     />
 
-    <SkillDrawer
-      :visible="showSkillDrawer"
-      @close="showSkillDrawer = false"
+    <ToolDrawer
+      :visible="showToolDrawer"
+      @close="showToolDrawer = false"
     />
 
     <Toast :toasts="toasts" />

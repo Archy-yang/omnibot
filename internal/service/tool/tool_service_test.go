@@ -1,4 +1,4 @@
-package skill
+package tool
 
 import (
 	"testing"
@@ -6,27 +6,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	skilldomain "omnibot/internal/domain/skill"
+	tooldomain "omnibot/internal/domain/tool"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
 )
 
 // ---- mock repo ----
 
-type mockSkillRepository struct {
-	upserted       []skilldomain.BuiltinDef
-	upsertErr      error
-	rows           []*skilldomain.Skill
-	listErr        error
-	enabledName    string
-	enabledValue   bool
-	setEnabledErr  error
-	upsertedMCP    []skilldomain.MCPToolDef
-	deletedNotIn   []string
-	deletedServers []string
+type mockToolRepository struct {
+	upserted      []tooldomain.ToolDef
+	upsertErr     error
+	rows          []*tooldomain.Tool
+	listErr       error
+	enabledName   string
+	enabledValue  bool
+	setEnabledErr error
 }
 
-func (m *mockSkillRepository) UpsertBuiltin(def skilldomain.BuiltinDef) error {
+func (m *mockToolRepository) UpsertBuiltin(def tooldomain.ToolDef) error {
 	if m.upsertErr != nil {
 		return m.upsertErr
 	}
@@ -34,14 +31,14 @@ func (m *mockSkillRepository) UpsertBuiltin(def skilldomain.BuiltinDef) error {
 	return nil
 }
 
-func (m *mockSkillRepository) List() ([]*skilldomain.Skill, error) {
+func (m *mockToolRepository) List() ([]*tooldomain.Tool, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	return m.rows, nil
 }
 
-func (m *mockSkillRepository) GetByName(name string) (*skilldomain.Skill, error) {
+func (m *mockToolRepository) GetByName(name string) (*tooldomain.Tool, error) {
 	for _, r := range m.rows {
 		if r.Name == name {
 			return r, nil
@@ -50,9 +47,7 @@ func (m *mockSkillRepository) GetByName(name string) (*skilldomain.Skill, error)
 	return nil, nil
 }
 
-func (m *mockSkillRepository) DeleteAllMCPSkills() (int64, error) { return 0, nil }
-
-func (m *mockSkillRepository) SetEnabled(name string, enabled bool) error {
+func (m *mockToolRepository) SetEnabled(name string, enabled bool) error {
 	if m.setEnabledErr != nil {
 		return m.setEnabledErr
 	}
@@ -74,8 +69,8 @@ func (m *mockSkillRepository) SetEnabled(name string, enabled bool) error {
 func timeBuilder() agentpkg.Tool { return agenttools.CreateGetCurrentTimeTool() }
 func calcBuilder() agentpkg.Tool { return agenttools.CreateCalculatorTool() }
 
-func newService(repo *mockSkillRepository) *SkillService {
-	svc := NewSkillService(repo)
+func newService(repo *mockToolRepository) *ToolService {
+	svc := NewToolService(repo)
 	svc.RegisterBuiltin(timeBuilder)
 	svc.RegisterBuiltin(calcBuilder)
 	return svc
@@ -92,13 +87,12 @@ func hasTool(r *agentpkg.ToolRegistry, name string) bool {
 	return ok
 }
 
-func skillRow(name string, enabled bool) *skilldomain.Skill {
-	return &skilldomain.Skill{
+func toolRow(name string, enabled bool) *tooldomain.Tool {
+	return &tooldomain.Tool{
 		Name:        name,
 		DisplayName: name,
 		Description: "desc",
-		Source:      skilldomain.SourceBuiltin,
-		Enabled:     enabled,
+			Enabled:     enabled,
 		MainVisible: true,
 	}
 }
@@ -107,14 +101,14 @@ func skillRow(name string, enabled bool) *skilldomain.Skill {
 
 // 测试 1:seed 把代码内定义 upsert 进 repo,定义字段与工厂函数一致(单一事实源)。
 func TestSeedBuiltins_UpsertsDefinitions(t *testing.T) {
-	repo := &mockSkillRepository{}
+	repo := &mockToolRepository{}
 	svc := newService(repo)
 
 	err := svc.SeedBuiltins()
 	require.NoError(t, err)
 	require.Len(t, repo.upserted, 2)
 
-	byName := map[string]skilldomain.BuiltinDef{}
+	byName := map[string]tooldomain.ToolDef{}
 	for _, d := range repo.upserted {
 		byName[d.Name] = d
 	}
@@ -129,9 +123,9 @@ func TestSeedBuiltins_UpsertsDefinitions(t *testing.T) {
 	assert.Contains(t, calcDef.Parameters, "properties")
 }
 
-// 测试 2:enabled 技能且执行体存在 → 进 main+global 两池,能力标签原样还原。
+// 测试 2:enabled 工具且执行体存在 → 进 main+global 两池,能力标签原样还原。
 func TestApplyTo_EnabledSkillInBothRegistries(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{skillRow("get_current_time", true)}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{toolRow("get_current_time", true)}}
 	svc := newService(repo)
 	main, global := newRegistries()
 
@@ -146,9 +140,9 @@ func TestApplyTo_EnabledSkillInBothRegistries(t *testing.T) {
 	assert.Equal(t, "获取当前的日期和时间", tool.Description)
 }
 
-// 测试 3:停用的技能不进任何池。
+// 测试 3:停用的工具不进任何池。
 func TestApplyTo_DisabledSkipped(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{skillRow("calculator", false)}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{toolRow("calculator", false)}}
 	svc := newService(repo)
 	main, global := newRegistries()
 
@@ -158,12 +152,12 @@ func TestApplyTo_DisabledSkipped(t *testing.T) {
 	assert.False(t, hasTool(global, "calculator"))
 }
 
-// 测试 3.5:子 Agent 专属技能(MainVisible=false,如抓取类 rss/web_read)只进 global 池,
+// 测试 3.5:子 Agent 专属工具(MainVisible=false,如抓取类 rss/web_read)只进 global 池,
 // 不进主 Agent 池(方向 B:主 Agent 是管家,联网抓取必须 delegate 派活)。
 func TestApplyTo_SubOnlySkill_NotInMain(t *testing.T) {
-	row := skillRow("rss_reader", true)
+	row := toolRow("rss_reader", true)
 	row.MainVisible = false
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{row}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{row}}
 	svc := newService(repo)
 	svc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateRSSReaderTool() })
 	main, global := newRegistries()
@@ -174,9 +168,9 @@ func TestApplyTo_SubOnlySkill_NotInMain(t *testing.T) {
 	assert.False(t, hasTool(main, "rss_reader"))
 }
 
-// 测试 4:执行体缺失的技能(builder 未注册)隐藏,不报错。
+// 测试 4:执行体缺失的工具(builder 未注册)隐藏,不报错。
 func TestApplyTo_MissingBuilderSkipped(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{skillRow("rss_reader", true)}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{toolRow("rss_reader", true)}}
 	svc := newService(repo)
 	main, global := newRegistries()
 
@@ -188,7 +182,7 @@ func TestApplyTo_MissingBuilderSkipped(t *testing.T) {
 // 测试 5:重跑 ApplyTo 是幂等重建——先关后开/先开后关都收敛到正确状态,
 // 且不碰注册在池里的框架工具(delegate 不属于 skill)。
 func TestApplyTo_RebuildIdempotentAndKeepsFrameworkTools(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{skillRow("calculator", true)}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{toolRow("calculator", true)}}
 	svc := newService(repo)
 	main, global := newRegistries()
 
@@ -213,7 +207,7 @@ func TestApplyTo_RebuildIdempotentAndKeepsFrameworkTools(t *testing.T) {
 
 // 测试 6:SetEnabled 落库后立即应用(停用即时生效,无需重启)。
 func TestSetEnabled_UpdatesRepoAndApplies(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{skillRow("calculator", true)}}
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{toolRow("calculator", true)}}
 	svc := newService(repo)
 	main, global := newRegistries()
 	require.NoError(t, svc.BindRegistries(main, global))
@@ -232,11 +226,11 @@ func TestSetEnabled_UpdatesRepoAndApplies(t *testing.T) {
 	require.NoError(t, svc2.SetEnabled("calculator", true))
 }
 
-// 测试 7:List 返回视图,含来源与启停状态;执行体缺失的技能 Available=false(M1 builtin 恒 true)。
+// 测试 7:List 返回视图,含来源与启停状态;执行体缺失的工具 Available=false(M1 builtin 恒 true)。
 func TestList_ReturnsViews(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{
-		skillRow("get_current_time", true),
-		skillRow("rss_reader", false), // 无 builder
+	repo := &mockToolRepository{rows: []*tooldomain.Tool{
+		toolRow("get_current_time", true),
+		toolRow("rss_reader", false), // 无 builder
 	}}
 	svc := newService(repo)
 
@@ -246,7 +240,6 @@ func TestList_ReturnsViews(t *testing.T) {
 	assert.Equal(t, "get_current_time", views[0].Name)
 	assert.True(t, views[0].Enabled)
 	assert.True(t, views[0].Available)
-	assert.Equal(t, skilldomain.SourceBuiltin, views[0].Source)
 	assert.Equal(t, "rss_reader", views[1].Name)
 	assert.False(t, views[1].Enabled)
 	assert.False(t, views[1].Available)

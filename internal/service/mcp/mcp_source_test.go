@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 
 	mcp "github.com/mark3labs/mcp-go/mcp"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 	agentpkg "omnibot/internal/service/agent"
 
 	"github.com/stretchr/testify/assert"
@@ -38,10 +38,6 @@ func (c *mockMCPClient) CallTool(ctx context.Context, req mcp.CallToolRequest) (
 	return &mcp.CallToolResult{}, nil
 }
 
-func mcpRow(name, server string, enabled bool) *skilldomain.Skill {
-	return &skilldomain.Skill{Name: name, Source: skilldomain.SourceMCP, MCPServer: server, Enabled: enabled, MainVisible: true}
-}
-
 func textTool(name, desc string) mcp.Tool {
 	return mcp.NewTool(name, mcp.WithDescription(desc))
 }
@@ -58,23 +54,11 @@ func mockFactory(clients ...*mockMCPClient) MCPClientFactory {
 	}
 }
 
-
-
-// 测试 15:B2 目录化——MCP 技能行不再进 registry(调用统一走 mcp_call)。
-func TestMCPSkill_MissingExecutorHidden(t *testing.T) {
-	repo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
-	svc := newService(repo)
-
-	main, global := newRegistries()
-	require.NoError(t, svc.ApplyTo(main, global))
-	assert.False(t, hasTool(global, "gh_search"))
-}
-
-// 测试 16:目录化后,即使行 enabled,registry 也只有 builtin;MCP 目录由同步填充。
+// 测试 16:目录化——replaceServerCatalog 填充内存目录,remove 即时失效;
+// MCP 工具不进 tools 表(与 service/tool 分家)。
 func TestMCPCatalog_ReplaceAndMatch(t *testing.T) {
-	repo := &mockSkillRepository{}
-	svc := newService(repo)
-	serverRow := &skilldomain.MCPServer{ID: 1, Name: "github", Enabled: true}
+	svc := NewMCPService()
+	serverRow := &mcpdomain.MCPServer{ID: 1, Name: "github", Enabled: true}
 
 	n := svc.replaceServerCatalog(serverRow, []mcp.Tool{textTool("gh_search", "搜索 GitHub 仓库")})
 	require.Equal(t, 1, n)
@@ -96,14 +80,12 @@ func TestMCPCatalog_ReplaceAndMatch(t *testing.T) {
 
 // 测试 17:mcp_call / mcp_search 注册为普通 registry 工具(恒定注入)。
 func TestMCPMetaTools_RegisteredAsTools(t *testing.T) {
-	repo := &mockSkillRepository{}
-	svc := newService(repo)
+	svc := NewMCPService()
 	call := svc.CreateMCPCallTool()
 	search := svc.CreateMCPSearchTool()
 	assert.Equal(t, "mcp_call", call.Name)
 	assert.Equal(t, "mcp_search", search.Name)
 	assert.Contains(t, call.Description, "mcp_search")
 	assert.Contains(t, search.Description, "3 次", "描述必须写明每回合搜索上限")
-	var _ = context.Background
 	var _ = agentpkg.Tool{}
 }

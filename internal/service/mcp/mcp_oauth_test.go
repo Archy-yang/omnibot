@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 )
 
 // newMockAuthServer 起一个模拟 OAuth 授权服务器:
@@ -54,10 +54,10 @@ func newMockAuthServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func oauthRow(tokens string) *skilldomain.MCPServer {
-	return &skilldomain.MCPServer{
+func oauthRow(tokens string) *mcpdomain.MCPServer {
+	return &mcpdomain.MCPServer{
 		ID: 1, Name: "github", BaseURL: "https://mcp.example.com",
-		AuthType: skilldomain.AuthTypeOAuth, Enabled: true,
+		AuthType: mcpdomain.AuthTypeOAuth, Enabled: true,
 		OAuthScopes: "repo", OAuthTokens: tokens,
 	}
 }
@@ -66,7 +66,7 @@ func oauthRow(tokens string) *skilldomain.MCPServer {
 func TestDBTokenStore_RoundtripEncrypted(t *testing.T) {
 	serverRepo := newMockServerRepo()
 	serverRepo.servers = append(serverRepo.servers, oauthRow(""))
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 
 	store := svc.newDBTokenStore(1)
@@ -90,7 +90,7 @@ func TestBeginOAuth_BuildsAuthorizationURL(t *testing.T) {
 
 	serverRepo := newMockServerRepo()
 	serverRepo.servers = append(serverRepo.servers, oauthRow(""))
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 	svc.SetOAuthRedirectBase("http://bot.local:8080")
 
@@ -121,7 +121,7 @@ func TestBeginOAuth_DynamicClientRegistration(t *testing.T) {
 	row := oauthRow("")
 	row.BaseURL = authSrv.URL // client_id 为空 → 触发动态注册
 	serverRepo.servers = append(serverRepo.servers, row)
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 	svc.SetOAuthRedirectBase("http://bot.local:8080")
 
@@ -143,7 +143,7 @@ func TestHandleOAuthCallback_ExchangesAndPersists(t *testing.T) {
 	row := oauthRow("")
 	row.BaseURL = authSrv.URL
 	serverRepo.servers = append(serverRepo.servers, row)
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 	svc.SetOAuthRedirectBase("http://bot.local:8080")
 
@@ -165,7 +165,7 @@ func TestHandleOAuthCallback_ExchangesAndPersists(t *testing.T) {
 // 测试 32:无效/过期 state 回调被拒(CSRF 防护)。
 func TestHandleOAuthCallback_InvalidState(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 
 	err := svc.HandleOAuthCallback(context.Background(), "code", "bogus-state")
@@ -181,7 +181,7 @@ func TestDBTokenStore_FeedsHandlerRefresh(t *testing.T) {
 	row := oauthRow("")
 	row.BaseURL = authSrv.URL
 	serverRepo.servers = append(serverRepo.servers, row)
-	svc := NewSkillService(&mockSkillRepository{})
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 
 	store := svc.newDBTokenStore(1)

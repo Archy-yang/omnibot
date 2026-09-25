@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	clienttransport "github.com/mark3labs/mcp-go/client/transport"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 )
 
 // oauthCallbackPath OAuth 回调固定路径(与 routes 注册、服务商登记的 redirect_uri 一致)。
@@ -35,14 +35,14 @@ type pendingOAuth struct {
 
 // SetOAuthRedirectBase 设置 OAuth 回调基址(如 https://bot.example.com)。
 // 完整 redirect_uri = <base>/api/v1/mcp/oauth/callback,须与服务商登记一致。
-func (s *SkillService) SetOAuthRedirectBase(base string) {
+func (s *MCPService) SetOAuthRedirectBase(base string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.oauthRedirectBase = strings.TrimRight(base, "/")
 }
 
 // oauthRedirectURI 完整回调地址。
-func (s *SkillService) oauthRedirectURI() string {
+func (s *MCPService) oauthRedirectURI() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.oauthRedirectBase + oauthCallbackPath
@@ -51,17 +51,17 @@ func (s *SkillService) oauthRedirectURI() string {
 // newDBTokenStore 构造绑定指定 server 的 DB token 存储:
 // token JSON 整体 AES 加密落 mcp_servers.oauth_tokens(enc: 前缀)。
 // 经 OAuthHandler 使用时,授权换新与 refresh 自动持久化,重启不丢。
-func (s *SkillService) newDBTokenStore(serverID int64) clienttransport.TokenStore {
+func (s *MCPService) newDBTokenStore(serverID int64) clienttransport.TokenStore {
 	return &dbTokenStore{svc: s, serverID: serverID}
 }
 
 type dbTokenStore struct {
-	svc      *SkillService
+	svc      *MCPService
 	serverID int64
 }
 
 // loadRow 读 server 行(带锁)。
-func (t *dbTokenStore) loadRow() (*skilldomain.MCPServer, error) {
+func (t *dbTokenStore) loadRow() (*mcpdomain.MCPServer, error) {
 	t.svc.mu.RLock()
 	repo := t.svc.serverRepo
 	t.svc.mu.RUnlock()
@@ -117,7 +117,7 @@ func (t *dbTokenStore) SaveToken(tok *clienttransport.Token) error {
 // BeginOAuth 发起 OAuth 授权:
 // 元数据发现 → (client_id 为空时)动态客户端注册 → 生成授权 URL(含 PKCE)。
 // state/verifier 挂起内存,回调时校验消费(CSRF 防护)。
-func (s *SkillService) BeginOAuth(ctx context.Context, id int64) (*OAuthBeginResult, error) {
+func (s *MCPService) BeginOAuth(ctx context.Context, id int64) (*OAuthBeginResult, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -128,7 +128,7 @@ func (s *SkillService) BeginOAuth(ctx context.Context, id int64) (*OAuthBeginRes
 	if err != nil || row == nil {
 		return nil, errors.New("服务不存在")
 	}
-	if row.AuthType != skilldomain.AuthTypeOAuth {
+	if row.AuthType != mcpdomain.AuthTypeOAuth {
 		return nil, errors.New("该服务不是 OAuth 鉴权类型")
 	}
 
@@ -186,7 +186,7 @@ func (s *SkillService) BeginOAuth(ctx context.Context, id int64) (*OAuthBeginRes
 
 // HandleOAuthCallback OAuth 服务商重定向回调:校验 state → 换 token(dbTokenStore 落库)。
 // state 一次性消费;无效/过期/重放均拒绝。
-func (s *SkillService) HandleOAuthCallback(ctx context.Context, code, state string) error {
+func (s *MCPService) HandleOAuthCallback(ctx context.Context, code, state string) error {
 	s.pendingMu.RLock()
 	p, ok := s.pendingOAuth[state]
 	s.pendingMu.RUnlock()
@@ -203,7 +203,7 @@ func (s *SkillService) HandleOAuthCallback(ctx context.Context, code, state stri
 }
 
 // refreshTokenIfExpired 连接前调用:token 过期且有 refresh_token 时自动刷新(结果落库)。
-func (s *SkillService) refreshTokenIfExpired(ctx context.Context, serverID int64) (*clienttransport.Token, error) {
+func (s *MCPService) refreshTokenIfExpired(ctx context.Context, serverID int64) (*clienttransport.Token, error) {
 	store := s.newDBTokenStore(serverID)
 	tok, err := store.GetToken()
 	if err != nil {

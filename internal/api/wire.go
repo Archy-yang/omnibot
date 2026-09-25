@@ -30,15 +30,17 @@ import (
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
 	memoryRepo "omnibot/internal/repository/memory"
-	skillRepo "omnibot/internal/repository/skill"
+	mcpRepo "omnibot/internal/repository/mcp"
+	toolRepo "omnibot/internal/repository/tool"
 	subscriptionRepo "omnibot/internal/repository/subscription"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
 	chatService "omnibot/internal/service/chat"
+	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
-	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
+	toolService "omnibot/internal/service/tool"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -254,49 +256,50 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// Web 聊天 API 路由
 	// 创建 Agent 服务
 	// globalToolRegistry:全量工具池(含抓取类),供子 Agent runner 按能力白名单选。
-	// 13-插件系统:能力工具由 SkillService 统一供给(定义落库可启停),框架工具另行注册。
+	// 13-插件系统:能力工具由 ToolService 统一供给(定义落库可启停),框架工具另行注册。
 	globalToolRegistry := agentpkg.NewToolRegistry()
 	// agentToolRegistry:主 Agent 工具集。方向B--抓取类(rss/web_read)对主 Agent 不可见,
-	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取技能
+	// 主 Agent 是管家不该亲自抓网页,联网需求必须走 delegate 派给子 Agent。抓取工具
 	// RegisterBuiltinSubOnly:只进 globalToolRegistry 供子 Agent 选。
 	agentToolRegistry := agentpkg.NewToolRegistry()
-	skillRepoImpl := skillRepo.NewSkillRepository(dbConn.GetGormDB())
-	mcpServerRepo := skillRepo.NewMCPServerRepository(dbConn.GetGormDB())
-	skillSvc := skillService.NewSkillService(skillRepoImpl)
-	skillSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
-	skillSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
+	toolRepoImpl := toolRepo.NewToolRepository(dbConn.GetGormDB())
+	mcpServerRepo := mcpRepo.NewMCPServerRepository(dbConn.GetGormDB())
+	toolSvc := toolService.NewToolService(toolRepoImpl)
+	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
+	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
 	// 订阅源管理(14 §6.1):主 Agent 管理订阅;子 Agent list 取清单选源(能力打标 research/memory)
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateManageSubscriptionsTool(subscriptionSvc) })
-	skillSvc.RegisterBuiltinSubOnly(agenttools.CreateRSSReaderTool)
-	skillSvc.RegisterBuiltinSubOnly(agenttools.CreateWebReadTool)
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateManageSubscriptionsTool(subscriptionSvc) })
+	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateRSSReaderTool)
+	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
-	skillSvc.RegisterBuiltin(func() agentpkg.Tool {
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateFeishuTool(agenttools.FeishuCLIConfig{
 			BinPath: cfg.Feishu.CLI.BinPath,
 			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
 		})
 	})
-	if err := skillSvc.SeedBuiltins(); err != nil {
-		logger.Error("技能定义 seed 失败: " + err.Error())
+	if err := toolSvc.SeedBuiltins(); err != nil {
+		logger.Error("工具定义 seed 失败: " + err.Error())
 	}
-	if err := skillSvc.BindRegistries(agentToolRegistry, globalToolRegistry); err != nil {
-		logger.Error("技能 registry 绑定失败: " + err.Error())
+	if err := toolSvc.BindRegistries(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("工具 registry 绑定失败: " + err.Error())
 	}
-	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
-		logger.Error("技能应用到工具池失败: " + err.Error())
+	if err := toolSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
+		logger.Error("工具应用到工具池失败: " + err.Error())
 	}
-	// B2:MCP 元工具恒定注入主 Agent tools 参数(mcp_call/mcp_search);
-	// 具体 MCP 工具走语义匹配晚置注入,不再全量进 registry。
-	agentToolRegistry.Register(skillSvc.CreateMCPCallTool())
-	agentToolRegistry.Register(skillSvc.CreateMCPSearchTool())
+	// MCP 连接器(13-插件系统,B2):server 配置 + 内存工具目录 + mcp_call/mcp_search 元工具。
+	// 元工具恒定注入主 Agent tools 参数;具体 MCP 工具走语义匹配晚置注入,不进 registry。
+	mcpSvc := mcpService.NewMCPService()
+	agentToolRegistry.Register(mcpSvc.CreateMCPCallTool())
+	agentToolRegistry.Register(mcpSvc.CreateMCPSearchTool())
 
 	// M3:MCP server 在线配置(DB 为单一事实源,config.yaml 仅首次启动 seed)。
-	skillSvc.SetMCPClientFactory(skillService.NewStreamableHTTPMCPClient)
-	skillSvc.SetMCPServerRepository(mcpServerRepo)
+	mcpSvc.SetMCPClientFactory(mcpService.NewStreamableHTTPMCPClient)
+	mcpSvc.SetMCPServerRepository(mcpServerRepo)
 	// B2:工具描述向量化 provider(用户级解析,与沉淀/召回同模式)
-	skillSvc.SetEmbeddingProvider(memoryEmbedding)
-	skillSvc.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
+	mcpSvc.SetEmbeddingProvider(memoryEmbedding)
+	mcpSvc.SetEmbeddingResolver(func(userID int64) memoryService.EmbeddingProvider {
 		return embeddingResolver.ResolveEmbeddingProvider(userID)
 	})
 	// M4:OAuth 回调基址(redirect_uri 须与服务商登记一致)
@@ -304,25 +307,22 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if oauthRedirectBase == "" {
 		oauthRedirectBase = fmt.Sprintf("http://localhost:%d", cfg.App.Port)
 	}
-	skillSvc.SetOAuthRedirectBase(oauthRedirectBase)
+	mcpSvc.SetOAuthRedirectBase(oauthRedirectBase)
 	if len(cfg.MCP.Servers) > 0 {
-		specs := make([]skillService.MCPServerSpec, 0, len(cfg.MCP.Servers))
+		specs := make([]mcpService.MCPServerSpec, 0, len(cfg.MCP.Servers))
 		for _, s := range cfg.MCP.Servers {
-			specs = append(specs, skillService.MCPServerSpec{
+			specs = append(specs, mcpService.MCPServerSpec{
 				Name: s.Name, BaseURL: s.BaseURL, APIKey: s.APIKey, Enabled: s.Enabled,
 			})
 		}
-		if n, err := skillSvc.SeedServersFromConfig(specs); err != nil {
+		if n, err := mcpSvc.SeedServersFromConfig(specs); err != nil {
 			logger.Error("MCP 配置 seed 失败: " + err.Error())
 		} else if n > 0 {
 			logger.Info(fmt.Sprintf("已从 config.yaml 导入 %d 个 MCP server(此后以数据库配置为准)", n))
 		}
 	}
-	if err := skillSvc.SyncAllServers(context.Background()); err != nil {
+	if err := mcpSvc.SyncAllServers(context.Background()); err != nil {
 		logger.Error("MCP server 启动同步失败: " + err.Error())
-	}
-	if err := skillSvc.ApplyTo(agentToolRegistry, globalToolRegistry); err != nil {
-		logger.Error("MCP 技能应用到工具池失败: " + err.Error())
 	}
 
 	// agentLLMClient 已在上方 newAgentLLMClient 创建(沉淀管线与主/子 Agent 共用系统默认模型)
@@ -377,12 +377,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		},
 	})
 	// B2:每轮按问题语义匹配 MCP 工具,以 system 消息晚置注入(Recent Raw 后/当前问题前)。
-	agentSvc.SetMCPContextProvider(skillSvc.BuildMCPContextBlock)
+	agentSvc.SetMCPContextProvider(mcpSvc.BuildMCPContextBlock)
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
-	webHandler.SetSkillService(skillSvc)
-	webHandler.SetMCPManager(skillSvc)
+	webHandler.SetToolService(toolSvc)
+	webHandler.SetMCPManager(mcpSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)

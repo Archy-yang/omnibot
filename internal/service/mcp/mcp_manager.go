@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -7,18 +7,18 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 	"omnibot/internal/pkg/crypto"
 )
 
 // MCPServerRepository MCP server 配置持久化窄接口(service 层声明,repository 层实现)。
 type MCPServerRepository interface {
-	Create(server *skilldomain.MCPServer) error
-	Update(server *skilldomain.MCPServer) error
+	Create(server *mcpdomain.MCPServer) error
+	Update(server *mcpdomain.MCPServer) error
 	Delete(id int64) error
-	GetByID(id int64) (*skilldomain.MCPServer, error)
-	GetByName(name string) (*skilldomain.MCPServer, error)
-	List() ([]*skilldomain.MCPServer, error)
+	GetByID(id int64) (*mcpdomain.MCPServer, error)
+	GetByName(name string) (*mcpdomain.MCPServer, error)
+	List() ([]*mcpdomain.MCPServer, error)
 	Count() (int64, error)
 }
 
@@ -55,7 +55,7 @@ func decryptSecret(stored string) (string, error) {
 }
 
 // SetMCPServerRepository 注入 server 配置仓储(M3 在线配置)。
-func (s *SkillService) SetMCPServerRepository(repo MCPServerRepository) {
+func (s *MCPService) SetMCPServerRepository(repo MCPServerRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.serverRepo = repo
@@ -93,8 +93,8 @@ type MCPServerInput struct {
 func normalizeAuthType(t string) (string, error) {
 	switch t {
 	case "":
-		return skilldomain.AuthTypeBearer, nil
-	case skilldomain.AuthTypeNone, skilldomain.AuthTypeBearer, skilldomain.AuthTypeOAuth, skilldomain.AuthTypeQuery:
+		return mcpdomain.AuthTypeBearer, nil
+	case mcpdomain.AuthTypeNone, mcpdomain.AuthTypeBearer, mcpdomain.AuthTypeOAuth, mcpdomain.AuthTypeQuery:
 		return t, nil
 	default:
 		return "", fmt.Errorf("不支持的鉴权方式 %q", t)
@@ -105,7 +105,7 @@ func normalizeAuthType(t string) (string, error) {
 // 只有用户显式选择 streamable 才固定协议、放弃回退。
 func normalizeTransport(t string) (string, error) {
 	switch t {
-	case "", skilldomain.TransportStreamable, skilldomain.TransportSSE:
+	case "", mcpdomain.TransportStreamable, mcpdomain.TransportSSE:
 		return t, nil
 	default:
 		return "", fmt.Errorf("不支持的传输协议 %q(可选 streamable / sse)", t)
@@ -113,7 +113,7 @@ func normalizeTransport(t string) (string, error) {
 }
 
 // AddServer 新增 MCP server:加密落库(归属创建者,NULL=共享)→ enabled 则立即同步。
-func (s *SkillService) AddServer(in MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+func (s *MCPService) AddServer(in MCPServerInput, userID int64) (*mcpdomain.ServerView, error) {
 	name := strings.TrimSpace(in.Name)
 	if err := validateServerInput(name, in.BaseURL); err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (s *SkillService) AddServer(in MCPServerInput, userID int64) (*skilldomain.
 	if !in.Shared {
 		owner = &userID
 	}
-	row := &skilldomain.MCPServer{
+	row := &mcpdomain.MCPServer{
 		Name: name, BaseURL: in.BaseURL, APIKey: cipher, Enabled: in.Enabled,
 		AuthType:          authType,
 		Transport:         transport,
@@ -166,7 +166,7 @@ func (s *SkillService) AddServer(in MCPServerInput, userID int64) (*skilldomain.
 }
 
 // UpdateServer 更新配置并按需重新同步(仅归属人可改;apiKey/client_secret 空 = 保留原值)。
-func (s *SkillService) UpdateServer(id int64, in MCPServerInput, userID int64) (*skilldomain.ServerView, error) {
+func (s *MCPService) UpdateServer(id int64, in MCPServerInput, userID int64) (*mcpdomain.ServerView, error) {
 	name := strings.TrimSpace(in.Name)
 	if err := validateServerInput(name, in.BaseURL); err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func (s *SkillService) UpdateServer(id int64, in MCPServerInput, userID int64) (
 }
 
 // DeleteServer 删除 server:目录即时失效(内存缓存,无库表残留)。
-func (s *SkillService) DeleteServer(id int64) error {
+func (s *MCPService) DeleteServer(id int64) error {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -254,7 +254,7 @@ func (s *SkillService) DeleteServer(id int64) error {
 }
 
 // SyncServer 手动同步单个 server(共享可同步;私有仅归属人)。失败以 SyncResult.Err 表达。
-func (s *SkillService) SyncServer(id int64, userID int64) (*SyncResult, error) {
+func (s *MCPService) SyncServer(id int64, userID int64) (*SyncResult, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -275,7 +275,7 @@ func (s *SkillService) SyncServer(id int64, userID int64) (*SyncResult, error) {
 }
 
 // ListServers 掩码视图列表(共享 + 本人私有,按 id 升序)。
-func (s *SkillService) ListServers(userID int64) ([]skilldomain.ServerView, error) {
+func (s *MCPService) ListServers(userID int64) ([]mcpdomain.ServerView, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -286,14 +286,14 @@ func (s *SkillService) ListServers(userID int64) ([]skilldomain.ServerView, erro
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]*skilldomain.MCPServer, 0, len(rows))
+	filtered := make([]*mcpdomain.MCPServer, 0, len(rows))
 	for _, r := range rows {
 		if r.UserID == nil || *r.UserID == userID {
 			filtered = append(filtered, r)
 		}
 	}
 	rows = filtered
-	views := make([]skilldomain.ServerView, 0, len(rows))
+	views := make([]mcpdomain.ServerView, 0, len(rows))
 	for _, row := range rows {
 		view, err := s.serverToView(row)
 		if err != nil {
@@ -305,8 +305,8 @@ func (s *SkillService) ListServers(userID int64) ([]skilldomain.ServerView, erro
 }
 
 // serverToView 行 → 掩码视图(工具数直接统计该 server 的 mcp 技能行,缺省 -1=从未同步成功)。
-func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.ServerView, error) {
-	view := &skilldomain.ServerView{
+func (s *MCPService) serverToView(row *mcpdomain.MCPServer) (*mcpdomain.ServerView, error) {
+	view := &mcpdomain.ServerView{
 		ID:         row.ID,
 		Name:       row.Name,
 		BaseURL:    row.BaseURL,
@@ -321,9 +321,9 @@ func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.Se
 		s.catalog.mu.RLock()
 		if tools, ok := s.catalog.byServer[row.ID]; ok {
 			view.ToolCount = len(tools) // 目录现实;未同步过仍为 -1
-			view.Tools = make([]skilldomain.MCPToolCard, 0, len(tools))
+			view.Tools = make([]mcpdomain.MCPToolCard, 0, len(tools))
 			for _, t := range tools {
-				view.Tools = append(view.Tools, skilldomain.MCPToolCard{Name: t.Name, Description: t.Description})
+				view.Tools = append(view.Tools, mcpdomain.MCPToolCard{Name: t.Name, Description: t.Description})
 			}
 		}
 		s.catalog.mu.RUnlock()
@@ -333,7 +333,7 @@ func (s *SkillService) serverToView(row *skilldomain.MCPServer) (*skilldomain.Se
 
 // SeedServersFromConfig 首次启动 seed:仅当库内无 server 时导入 yaml 配置(加密落库)。
 // 返回导入数;库非空时为 0(DB 是唯一事实源)。
-func (s *SkillService) SeedServersFromConfig(specs []MCPServerSpec) (int, error) {
+func (s *MCPService) SeedServersFromConfig(specs []MCPServerSpec) (int, error) {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -353,7 +353,7 @@ func (s *SkillService) SeedServersFromConfig(specs []MCPServerSpec) (int, error)
 		if err != nil {
 			return imported, err
 		}
-		if err := repo.Create(&skilldomain.MCPServer{
+		if err := repo.Create(&mcpdomain.MCPServer{
 			Name: spec.Name, BaseURL: spec.BaseURL, APIKey: cipher, Enabled: spec.Enabled,
 		}); err != nil {
 			return imported, err
@@ -363,14 +363,9 @@ func (s *SkillService) SeedServersFromConfig(specs []MCPServerSpec) (int, error)
 	return imported, nil
 }
 
-// SyncAllServers 启动同步:清废历史 mcp 技能行(目录化)→ 全部 enabled server 逐个同步。
+// SyncAllServers 启动同步:全部 enabled server 逐个同步(工具目录入内存缓存)。
 // 单个失败不阻塞(结果进日志)。
-func (s *SkillService) SyncAllServers(ctx context.Context) error {
-	if skillRepo := s.skillRepo(); skillRepo != nil {
-		if n, err := skillRepo.DeleteAllMCPSkills(); err == nil && n > 0 {
-			fmt.Printf("[skill] 已清废 %d 行历史 mcp 技能行(工具目录移入内存缓存)\n", n)
-		}
-	}
+func (s *MCPService) SyncAllServers(ctx context.Context) error {
 	s.mu.RLock()
 	repo := s.serverRepo
 	s.mu.RUnlock()
@@ -391,7 +386,7 @@ func (s *SkillService) SyncAllServers(ctx context.Context) error {
 }
 
 // syncServerRow 同步单个 server 行(解密 key → 连接 → 发现 → 落库/注册执行体)。
-func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
+func (s *MCPService) syncServerRow(row *mcpdomain.MCPServer) *SyncResult {
 	res := &SyncResult{ServerName: row.Name}
 	s.mu.RLock()
 	factory := s.mcpFactory
@@ -404,7 +399,7 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 
 	spec := MCPServerSpec{Name: row.Name, BaseURL: row.BaseURL, Enabled: true, AuthType: row.AuthType, Transport: row.Transport}
 	switch row.AuthType {
-	case skilldomain.AuthTypeOAuth:
+	case mcpdomain.AuthTypeOAuth:
 		// 未授权 → 不连接,提示先走授权流程
 		if row.OAuthTokens == "" {
 			res.Err = "尚未完成 OAuth 授权,请先点击「授权」"
@@ -450,18 +445,18 @@ func (s *SkillService) syncServerRow(row *skilldomain.MCPServer) *SyncResult {
 	// 自动回退(Transport 空值语义):主选 streamable 连接/初始化失败 → 依次尝试
 	// SSE / query 鉴权(key=URL 参数,高德惯例) / SSE+query,直到一组成功。
 	// 只在同步时发生(启动/保存/手动),不影响工具调用路径。
-	if resErr != "" && row.Transport == "" && row.AuthType != skilldomain.AuthTypeOAuth {
+	if resErr != "" && row.Transport == "" && row.AuthType != mcpdomain.AuthTypeOAuth {
 		apiKey := spec.APIKey
 		trials := []MCPServerSpec{
-			func() MCPServerSpec { sp := spec; sp.Transport = skilldomain.TransportSSE; return sp }(),
+			func() MCPServerSpec { sp := spec; sp.Transport = mcpdomain.TransportSSE; return sp }(),
 		}
-		if apiKey != "" && row.AuthType == skilldomain.AuthTypeBearer {
+		if apiKey != "" && row.AuthType == mcpdomain.AuthTypeBearer {
 			q := func(tp string) MCPServerSpec {
 				sp := MCPServerSpec{Name: spec.Name, BaseURL: spec.BaseURL, Enabled: true,
-					AuthType: skilldomain.AuthTypeQuery, Transport: tp, APIKey: apiKey}
+					AuthType: mcpdomain.AuthTypeQuery, Transport: tp, APIKey: apiKey}
 				return sp
 			}
-			trials = append(trials, q(skilldomain.TransportStreamable), q(skilldomain.TransportSSE))
+			trials = append(trials, q(mcpdomain.TransportStreamable), q(mcpdomain.TransportSSE))
 		}
 		for _, trial := range trials {
 			fmt.Printf("[skill] mcp server %q 主选失败(%s),回退重试: transport=%s auth=%s\n",

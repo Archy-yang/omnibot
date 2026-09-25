@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import "time"
 
@@ -21,10 +21,10 @@ const (
 // 接口只回显掩码。密钥不入日志(安全红线)。
 type MCPServer struct {
 	ID       int64  `gorm:"primaryKey;autoIncrement"`
-	Name     string `gorm:"uniqueIndex;size:64;not null"` // 自定义名,技能来源展示用
+	Name     string `gorm:"uniqueIndex;size:64;not null"` // 自定义名,连接器展示名
 	BaseURL  string `gorm:"size:512;not null"`            // Streamable HTTP 端点
 	APIKey   string `gorm:"size:1024"`                    // bearer: AES 密文;oauth: 空
-	Enabled  bool   `gorm:"not null"`                     // false = 不连接、不同步、技能隐藏
+	Enabled  bool   `gorm:"not null"`                     // false = 不连接、不同步、工具不可见
 	AuthType string `gorm:"size:16;not null;default:bearer"`
 
 	// Transport MCP 传输协议:"" = streamable(存量兼容,同步失败自动回退 SSE 重试一次)

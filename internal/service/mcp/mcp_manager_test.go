@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
@@ -16,7 +16,7 @@ import (
 // ---- mock MCPServerRepository ----
 
 type mockMCPServerRepository struct {
-	servers   []*skilldomain.MCPServer
+	servers   []*mcpdomain.MCPServer
 	nextID    int64
 	deletedID int64
 	deleted   bool
@@ -26,7 +26,7 @@ func newMockServerRepo() *mockMCPServerRepository {
 	return &mockMCPServerRepository{nextID: 1}
 }
 
-func (m *mockMCPServerRepository) Create(s *skilldomain.MCPServer) error {
+func (m *mockMCPServerRepository) Create(s *mcpdomain.MCPServer) error {
 	if existing, _ := m.GetByName(s.Name); existing != nil {
 		return assert.AnError // 唯一索引语义
 	}
@@ -37,7 +37,7 @@ func (m *mockMCPServerRepository) Create(s *skilldomain.MCPServer) error {
 	return nil
 }
 
-func (m *mockMCPServerRepository) Update(s *skilldomain.MCPServer) error {
+func (m *mockMCPServerRepository) Update(s *mcpdomain.MCPServer) error {
 	for i, r := range m.servers {
 		if r.ID == s.ID {
 			cp := *s
@@ -60,7 +60,7 @@ func (m *mockMCPServerRepository) Delete(id int64) error {
 	return assert.AnError
 }
 
-func (m *mockMCPServerRepository) GetByID(id int64) (*skilldomain.MCPServer, error) {
+func (m *mockMCPServerRepository) GetByID(id int64) (*mcpdomain.MCPServer, error) {
 	for _, r := range m.servers {
 		if r.ID == id {
 			cp := *r
@@ -70,7 +70,7 @@ func (m *mockMCPServerRepository) GetByID(id int64) (*skilldomain.MCPServer, err
 	return nil, nil
 }
 
-func (m *mockMCPServerRepository) GetByName(name string) (*skilldomain.MCPServer, error) {
+func (m *mockMCPServerRepository) GetByName(name string) (*mcpdomain.MCPServer, error) {
 	for _, r := range m.servers {
 		if r.Name == name {
 			cp := *r
@@ -80,8 +80,8 @@ func (m *mockMCPServerRepository) GetByName(name string) (*skilldomain.MCPServer
 	return nil, nil
 }
 
-func (m *mockMCPServerRepository) List() ([]*skilldomain.MCPServer, error) {
-	out := make([]*skilldomain.MCPServer, 0, len(m.servers))
+func (m *mockMCPServerRepository) List() ([]*mcpdomain.MCPServer, error) {
+	out := make([]*mcpdomain.MCPServer, 0, len(m.servers))
 	for _, r := range m.servers {
 		cp := *r
 		out = append(out, &cp)
@@ -91,8 +91,8 @@ func (m *mockMCPServerRepository) List() ([]*skilldomain.MCPServer, error) {
 
 func (m *mockMCPServerRepository) Count() (int64, error) { return int64(len(m.servers)), nil }
 
-func newManagerService(serverRepo *mockMCPServerRepository, skillRepo *mockSkillRepository, clients ...*mockMCPClient) *SkillService {
-	svc := NewSkillService(skillRepo)
+func newManagerService(serverRepo *mockMCPServerRepository, clients ...*mockMCPClient) *MCPService {
+	svc := NewMCPService()
 	svc.SetMCPServerRepository(serverRepo)
 	svc.SetMCPClientFactory(mockFactory(clients...))
 	return svc
@@ -107,8 +107,7 @@ func enabledClient(tool string) *mockMCPClient {
 // 测试 18:AddServer 加密落库(密文非明文)+立即同步发现工具,返回视图含掩码与工具数。
 func TestAddServer_EncryptsAndSyncs(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
+	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 
 	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "sk-secret-1", Enabled: true}, 42)
 	require.NoError(t, err)
@@ -129,7 +128,7 @@ func TestAddServer_EncryptsAndSyncs(t *testing.T) {
 // 测试 19:AddServer 校验:名称/地址必填,地址必须 http(s),重名拒绝。
 func TestAddServer_Validation(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	svc := newManagerService(serverRepo, &mockSkillRepository{}, enabledClient("t"))
+	svc := newManagerService(serverRepo, enabledClient("t"))
 
 	_, err := svc.AddServer(MCPServerInput{Name: "", BaseURL: "https://x.com", APIKey: "", Enabled: true}, 42)
 	require.Error(t, err)
@@ -147,15 +146,17 @@ func TestAddServer_Validation(t *testing.T) {
 // 测试 20:AddServer enabled=false 时只落库不连接。
 func TestAddServer_DisabledNoConnect(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo)
+	svc := newManagerService(serverRepo)
 	client := &mockMCPClient{}
 	svc.SetMCPClientFactory(mockFactory(client))
 
 	_, err := svc.AddServer(MCPServerInput{Name: "off", BaseURL: "https://x.com", APIKey: "", Enabled: false}, 42)
 	require.NoError(t, err)
 	assert.False(t, client.started, "停用的 server 不得发起连接")
-	assert.Empty(t, skillRepo.upsertedMCP)
+	svc.catalog.mu.RLock()
+	_, inCatalog := svc.catalog.byServer[serverRepo.servers[0].ID]
+	svc.catalog.mu.RUnlock()
+	assert.False(t, inCatalog, "停用 server 不得进工具目录")
 }
 
 // ---- UpdateServer ----
@@ -163,8 +164,7 @@ func TestAddServer_DisabledNoConnect(t *testing.T) {
 // 测试 21:UpdateServer 改地址/开关后立即重新同步;密钥留空=保留原 key。
 func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
+	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 	cipherKey := serverRepo.servers[0].APIKey
@@ -179,8 +179,7 @@ func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 // 测试 22:UpdateServer 改为 disabled → 目录即时失效(工具不可调用、不参与匹配)。
 func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
-	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
+		svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 
@@ -202,8 +201,7 @@ func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 // 测试 23:DeleteServer → 目录即时失效(内存缓存,无库表残留)。
 func TestDeleteServer_CascadesSkills(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{mcpRow("gh_search", "github", true)}}
-	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
+		svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)
 
 	err := svc.DeleteServer(view.ID)
@@ -217,8 +215,7 @@ func TestDeleteServer_CascadesSkills(t *testing.T) {
 // 测试 24:手动同步发现新工具落库;失败的 server 返回可读错误不 panic。
 func TestSyncServer_Manual(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{startErr: assert.AnError})
+	svc := newManagerService(serverRepo, &mockMCPClient{startErr: assert.AnError})
 	// 永远失败的工厂(回退链的每次尝试都失败,而非靠下一个 mock 意外成功)
 	svc.SetMCPClientFactory(func(spec MCPServerSpec) (MCPClient, error) {
 		return &mockMCPClient{startErr: assert.AnError}, nil
@@ -240,15 +237,10 @@ func TestSyncServer_Manual(t *testing.T) {
 
 // ---- ListServers ----
 
-// 测试 25:ListServers 回显掩码视图(无明文),工具数来自该 server 的技能行统计。
+// 测试 25:ListServers 回显掩码视图(无明文),工具数来自内存目录统计。
 func TestListServers_MaskedView(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{rows: []*skilldomain.Skill{
-		mcpRow("t1", "github", false),
-		mcpRow("t2", "github", false),
-		mcpRow("t3", "github", false),
-	}}
-	svc := newManagerService(serverRepo, skillRepo, &mockMCPClient{}) // 空工具列表,不干扰预置计数
+	svc := newManagerService(serverRepo, &mockMCPClient{}) // 空工具列表,不干扰预置计数
 	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-abc", Enabled: true}, 42)
 	require.NoError(t, err)
 
@@ -269,13 +261,12 @@ func TestListServers_MaskedView(t *testing.T) {
 // 测试 26:SyncAllServers 从 DB 读配置(解密 key)完成启动同步。
 func TestSyncAllServers_FromDB(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo, enabledClient("gh_search"))
+	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)
 	require.NoError(t, err)
 
 	// 新 service 实例模拟重启:执行体为空,SyncAllServers 重建
-	svc2 := NewSkillService(skillRepo)
+	svc2 := NewMCPService()
 	svc2.SetMCPServerRepository(serverRepo)
 	client := enabledClient("gh_search")
 	svc2.SetMCPClientFactory(mockFactory(client))
@@ -293,8 +284,7 @@ func TestSyncAllServers_FromDB(t *testing.T) {
 // 测试 27:SeedServersFromConfig 仅当库为空时导入 yaml 配置,返回导入数。
 func TestSeedServersFromConfig(t *testing.T) {
 	serverRepo := newMockServerRepo()
-	skillRepo := &mockSkillRepository{}
-	svc := newManagerService(serverRepo, skillRepo)
+	svc := newManagerService(serverRepo)
 
 	n, err := svc.SeedServersFromConfig([]MCPServerSpec{
 		{Name: "github", BaseURL: "https://x.com", APIKey: "sk-yaml", Enabled: true},

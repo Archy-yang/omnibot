@@ -1,21 +1,25 @@
-package skill
+package mcp
 
 import (
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 )
 
 func TestMCPServerRepo_CRUD(t *testing.T) {
-	db := setupSkillTestDB(t)
-	require.NoError(t, db.AutoMigrate(&skilldomain.MCPServer{}))
+	db := setupMCPServerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&mcpdomain.MCPServer{}))
 	repo := NewMCPServerRepository(db)
 
 	// Create
-	srv := &skilldomain.MCPServer{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "cipher-text", Enabled: true}
+	srv := &mcpdomain.MCPServer{Name: "github", BaseURL: "https://mcp.example.com/mcp", APIKey: "cipher-text", Enabled: true}
 	require.NoError(t, repo.Create(srv))
 	require.NotZero(t, srv.ID)
 
@@ -41,7 +45,7 @@ func TestMCPServerRepo_CRUD(t *testing.T) {
 	assert.Equal(t, "https://new.example.com/mcp", got.BaseURL)
 
 	// List / Count
-	require.NoError(t, repo.Create(&skilldomain.MCPServer{Name: "notion", BaseURL: "https://n.example.com", Enabled: false}))
+	require.NoError(t, repo.Create(&mcpdomain.MCPServer{Name: "notion", BaseURL: "https://n.example.com", Enabled: false}))
 	rows, err := repo.List()
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
@@ -54,4 +58,12 @@ func TestMCPServerRepo_CRUD(t *testing.T) {
 	gone, err := repo.GetByID(srv.ID)
 	require.NoError(t, err)
 	assert.Nil(t, gone)
+}
+
+// setupMCPServerTestDB 独立内存库(与 tool 包测试分离后自持)。
+func setupMCPServerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	return db
 }

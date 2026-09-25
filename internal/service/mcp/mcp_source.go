@@ -1,4 +1,4 @@
-package skill
+package mcp
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	clienttransport "github.com/mark3labs/mcp-go/client/transport"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 
-	skilldomain "omnibot/internal/domain/skill"
+	mcpdomain "omnibot/internal/domain/mcp"
 )
 
 // MCPClient MCP 客户端窄接口(service 层声明;mark3labs/mcp-go 的 *client.Client 实现)。
@@ -46,24 +46,24 @@ type MCPClientFactory func(spec MCPServerSpec) (MCPClient, error)
 //   - AuthType=query:  APIKey 以 key=<key> 追加到 URL 参数(高德惯例),两种传输都支持
 //   - 其余:            Streamable HTTP,APIKey 走 Bearer 头;oauth 走 OAuthHandler
 func NewStreamableHTTPMCPClient(spec MCPServerSpec) (MCPClient, error) {
-	if spec.AuthType == skilldomain.AuthTypeQuery {
+	if spec.AuthType == mcpdomain.AuthTypeQuery {
 		baseURL, err := withQueryParam(spec.BaseURL, "key", spec.APIKey)
 		if err != nil {
 			return nil, err
 		}
 		spec = MCPServerSpec{Name: spec.Name, BaseURL: baseURL, Enabled: spec.Enabled}
-		if spec.BaseURL != "" && spec.Transport == skilldomain.TransportSSE {
+		if spec.BaseURL != "" && spec.Transport == mcpdomain.TransportSSE {
 			return newSSEMCPClient(spec)
 		}
 		return client.NewStreamableHttpClient(spec.BaseURL)
 	}
-	if spec.Transport == skilldomain.TransportSSE {
+	if spec.Transport == mcpdomain.TransportSSE {
 		return newSSEMCPClient(spec)
 	}
 	opts := []clienttransport.StreamableHTTPCOption{
 		clienttransport.WithHTTPTimeout(MCPToolTimeout),
 	}
-	if spec.AuthType == skilldomain.AuthTypeOAuth {
+	if spec.AuthType == mcpdomain.AuthTypeOAuth {
 		return client.NewOAuthStreamableHttpClient(spec.BaseURL, clienttransport.OAuthConfig{
 			ClientID:     spec.OAuthClientID,
 			ClientSecret: spec.OAuthClientSecret,

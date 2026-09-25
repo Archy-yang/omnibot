@@ -126,11 +126,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	// 技能管理路由(13-插件系统):清单 + 启停
-	skillAPIGroup := r.Group("/api/v1/skills")
-	skillAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	toolAPIGroup := r.Group("/api/v1/tools")
+	toolAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
 	{
-		skillAPIGroup.GET("", d.webHandler.HandleListSkills)
-		skillAPIGroup.PUT("/:name", d.webHandler.HandleUpdateSkill)
+		toolAPIGroup.GET("", d.webHandler.HandleListTools)
+		toolAPIGroup.PUT("/:name", d.webHandler.HandleUpdateTool)
 	}
 
 	// MCP server 在线管理路由(M3):增删改查 + 手动同步 + OAuth 授权(M4)

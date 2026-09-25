@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/memory"
-	"omnibot/internal/domain/skill"
+	"omnibot/internal/domain/mcp"
 	"omnibot/internal/domain/subscription"
+	"omnibot/internal/domain/tool"
 	"omnibot/internal/domain/user"
 	"omnibot/pkg/config"
 	zaplogger "omnibot/pkg/logger"
@@ -119,6 +121,11 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 		return nil, fmt.Errorf("%w: migration failed: %v", ErrInitFailed, err)
 	}
 
+	// 一次性数据迁移:skills 表 → tools 表(2026-09 正名,skills 概念留白给未来能力包)
+	if err := migrateSkillsToTools(db); err != nil {
+		return nil, fmt.Errorf("%w: skills→tools migration failed: %v", ErrInitFailed, err)
+	}
+
 	// 种子数据:内置 main agent(idempotent,已存在则跳过)
 	if err := ensureMainAgent(db); err != nil {
 		return nil, fmt.Errorf("%w: seed main agent failed: %v", ErrInitFailed, err)
@@ -172,8 +179,8 @@ func autoMigrate(db *gorm.DB) error {
 		&agent.AgentTask{},
 		&agent.Artifact{},            // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{},           // #22 任务事件流(状态变化历史,供审计/未来推送)
-		&skill.Skill{},               // 13-插件系统:技能定义+启停(单一事实源)
-		&skill.MCPServer{},           // M3:MCP server 在线配置(DB 为事实源,yaml 仅首次 seed)
+		&tool.Tool{},                 // 13-插件系统:工具定义+启停(单一事实源)
+		&mcp.MCPServer{},             // M3:MCP server 在线配置(DB 为事实源,yaml 仅首次 seed)
 		&subscription.Subscription{}, // 14-订阅源管理:RSS 信息源登记簿(查询时按需取)
 	)
 }
@@ -183,6 +190,38 @@ func ensurePostgresExtensions(db *gorm.DB) error {
 }
 
 // ensureMainAgent 幂等写入内置 main agent(agents 表种子)。
+
+// migrateSkillsToTools 一次性正名迁移:旧 skills 表(2026-09 前承载工具定义)→ tools 表。
+// 只搬 builtin 工具行的启停状态与定义列(mcp 行在目录化时已清废,不搬);完成后 drop 旧表。
+// 幂等:skills 表不存在即跳过。AutoMigrate 已先建好 tools 表,这里只做数据搬运。
+// 迁移后 SeedBuiltins 会以代码内定义 upsert 刷新定义字段,Enabled 不被覆盖。
+func migrateSkillsToTools(db *gorm.DB) error {
+	if !db.Migrator().HasTable("skills") {
+		return nil
+	}
+	copySQL := `INSERT INTO tools
+		(name, display_name, description, capabilities, params_schema, enabled, main_visible, created_at, updated_at)
+		SELECT name, display_name, description, capabilities, params_schema, enabled, main_visible, created_at, updated_at
+		FROM skills WHERE source = 'builtin'`
+	if db.Dialector.Name() == "sqlite" {
+		copySQL = strings.Replace(copySQL, "INSERT INTO tools", "INSERT OR IGNORE INTO tools", 1)
+	} else {
+		copySQL += " ON CONFLICT (name) DO NOTHING"
+	}
+	if err := db.Exec(copySQL).Error; err != nil {
+		return fmt.Errorf("copy skills→tools: %w", err)
+	}
+	var copied int64
+	db.Model(&tool.Tool{}).Count(&copied)
+	if err := db.Migrator().DropTable("skills"); err != nil {
+		return fmt.Errorf("drop legacy skills table: %w", err)
+	}
+	zaplogger.InfoWithFields("skills→tools 正名迁移完成(启停状态已保留)",
+		zap.Int64("tools_count", copied),
+	)
+	return nil
+}
+
 // 目前系统唯一对话方;将来多 Agent 时在此追加各自种子。
 func ensureMainAgent(db *gorm.DB) error {
 	var count int64

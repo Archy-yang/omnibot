@@ -17,7 +17,7 @@ import { useSettingsStore } from '@/stores/settings';
 
 const props = defineProps<{
   /** 当前高亮的导航项：弹窗打开时对应高亮，都没开时为 chat */
-  current?: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings';
+  current?: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings';
 }>();
 
 const emit = defineEmits<{
@@ -25,7 +25,7 @@ const emit = defineEmits<{
   'open-tasks': [];
   'open-memory': [];
   'open-subscriptions': [];
-  'open-skills': [];
+  'open-tools': [];
   'open-settings': [];
 }>();
 
@@ -39,17 +39,17 @@ const navItems = [
   { key: 'tasks', label: '任务' },
   { key: 'memory', label: '记忆' },
   { key: 'subscriptions', label: '订阅' },
-  { key: 'skills', label: '技能' },
+  { key: 'tools', label: '工具' },
   { key: 'settings', label: '设置' },
 ] as const;
 
-const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills' | 'settings') => {
+const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings') => {
   switch (key) {
     case 'chat': emit('open-chat'); break;
     case 'tasks': emit('open-tasks'); break;
     case 'memory': emit('open-memory'); break;
     case 'subscriptions': emit('open-subscriptions'); break;
-    case 'skills': emit('open-skills'); break;
+    case 'tools': emit('open-tools'); break;
     case 'settings': emit('open-settings'); break;
   }
 };
@@ -113,7 +113,7 @@ const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'skills'
             <circle cx="5" cy="19" r="1"/>
           </svg>
           <!-- 技能 -->
-          <svg v-else-if="item.key === 'skills'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-else-if="item.key === 'tools'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
           </svg>
           <!-- 设置 -->

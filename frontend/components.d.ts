@@ -21,10 +21,10 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SettingsDrawer: typeof import('./src/components/functional/SettingsDrawer.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
-    SkillDrawer: typeof import('./src/components/functional/SkillDrawer.vue')['default']
     SubscriptionDialog: typeof import('./src/components/functional/SubscriptionDialog.vue')['default']
     TaskChip: typeof import('./src/components/chat/TaskChip.vue')['default']
     TaskDialog: typeof import('./src/components/functional/TaskDialog.vue')['default']
     Toast: typeof import('./src/components/functional/Toast.vue')['default']
+    ToolDrawer: typeof import('./src/components/functional/ToolDrawer.vue')['default']
   }
 }

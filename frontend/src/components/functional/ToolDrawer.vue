@@ -1,17 +1,17 @@
 <script setup lang="ts">
 /**
- * SkillDrawer — 技能抽屉(13-插件系统 M3)
+ * ToolDrawer — 工具抽屉(13-插件系统 M3)
  *
  * 两个 section:
  *   1. MCP 服务:在线增删改查外部能力服务(地址+密钥),保存即同步发现工具;
  *      手动「同步」可重新拉取工具列表。密钥不明文回显(只显示是否已配置)。
- *   2. 技能:助手当前具备的全部技能(内置/外部接入),逐个启停,即时生效。
+ *   2. 工具:助手当前具备的全部工具(内置/外部接入),逐个启停,即时生效。
  *      (自 SettingsDrawer 迁入,设置抽屉不再展示。)
  */
 import { ref, watch } from 'vue';
 import { useToast } from '@/composables/useToast';
-import type { MCPServerItem, SkillItem } from '@/types/api';
-import { skillService } from '@/services/skill';
+import type { MCPServerItem, ToolItem } from '@/types/api';
+import { toolService } from '@/services/tool';
 import { mcpServerService } from '@/services/mcpServer';
 import DialogShell from '@/components/layout/DialogShell.vue';
 
@@ -25,44 +25,41 @@ const emit = defineEmits<{
 
 const { success, error } = useToast();
 
-// ===== 技能清单 =====
-const skills = ref<SkillItem[]>([]);
-const skillsLoading = ref(false);
-const togglingSkills = ref<Set<string>>(new Set());
+// ===== 工具清单 =====
+const tools = ref<ToolItem[]>([]);
+const toolsLoading = ref(false);
+const togglingTools = ref<Set<string>>(new Set());
 
-const loadSkills = async () => {
-  skillsLoading.value = true;
+const loadTools = async () => {
+  toolsLoading.value = true;
   try {
-    const data = await skillService.listSkills();
-    skills.value = data.skills;
+    const data = await toolService.listTools();
+    tools.value = data.tools;
   } catch (err) {
-    console.error('Failed to load skills:', err);
+    console.error('Failed to load tools:', err);
   } finally {
-    skillsLoading.value = false;
+    toolsLoading.value = false;
   }
 };
 
-const handleSkillToggle = async (skill: SkillItem, event: Event) => {
+const handleToolToggle = async (tool: ToolItem, event: Event) => {
   const enabled = (event.target as HTMLInputElement).checked;
-  if (togglingSkills.value.has(skill.name)) {
+  if (togglingTools.value.has(tool.name)) {
     (event.target as HTMLInputElement).checked = !enabled;
     return;
   }
-  togglingSkills.value.add(skill.name);
+  togglingTools.value.add(tool.name);
   try {
-    await skillService.updateSkill(skill.name, enabled);
-    skill.enabled = enabled;
-    success(enabled ? `已启用「${skill.display_name || skill.name}」` : `已停用「${skill.display_name || skill.name}」`);
+    await toolService.updateTool(tool.name, enabled);
+    tool.enabled = enabled;
+    success(enabled ? `已启用「${tool.display_name || tool.name}」` : `已停用「${tool.display_name || tool.name}」`);
   } catch (err) {
     (event.target as HTMLInputElement).checked = !enabled;
-    error(err instanceof Error ? err.message : '更新技能状态失败');
+    error(err instanceof Error ? err.message : '更新工具状态失败');
   } finally {
-    togglingSkills.value.delete(skill.name);
+    togglingTools.value.delete(tool.name);
   }
 };
-
-const skillSourceLabel = (source: string): string =>
-  source === 'mcp' ? '外部接入' : '内置';
 
 // ===== MCP 服务管理 =====
 const servers = ref<MCPServerItem[]>([]);
@@ -164,13 +161,13 @@ const handleSaveServer = async () => {
   try {
     if (editingId.value === null) {
       await mcpServerService.createServer(body);
-      success('服务已保存并同步,发现的新技能默认关闭,请到下方逐个开启');
+      success('服务已保存并同步,发现的新工具默认关闭,请到下方逐个开启');
     } else {
       await mcpServerService.updateServer(editingId.value, body);
       success('服务已更新并重新同步');
     }
     resetForm();
-    await Promise.all([loadServers(), loadSkills()]);
+    await Promise.all([loadServers(), loadTools()]);
   } catch (err) {
     error(err instanceof Error ? err.message : '保存失败,请检查地址与密钥');
   } finally {
@@ -179,14 +176,14 @@ const handleSaveServer = async () => {
 };
 
 const handleDeleteServer = async (server: MCPServerItem) => {
-  if (!window.confirm(`确定删除服务「${server.name}」?它带来的 ${server.tool_count < 0 ? 0 : server.tool_count} 个外部技能将一并移除。`)) {
+  if (!window.confirm(`确定删除服务「${server.name}」?它带来的 ${server.tool_count < 0 ? 0 : server.tool_count} 个外部工具将一并移除。`)) {
     return;
   }
   busyServerId.value = server.id;
   try {
     await mcpServerService.deleteServer(server.id);
     success(`已删除服务「${server.name}」`);
-    await Promise.all([loadServers(), loadSkills()]);
+    await Promise.all([loadServers(), loadTools()]);
   } catch (err) {
     error(err instanceof Error ? err.message : '删除失败');
   } finally {
@@ -203,7 +200,7 @@ const handleSyncServer = async (server: MCPServerItem) => {
     } else {
       success(`同步完成,发现 ${res.tool_count} 个工具`);
     }
-    await Promise.all([loadServers(), loadSkills()]);
+    await Promise.all([loadServers(), loadTools()]);
   } catch (err) {
     error(err instanceof Error ? err.message : '同步失败');
   } finally {
@@ -234,7 +231,7 @@ watch(
   () => props.visible,
   (visible) => {
     if (visible) {
-      loadSkills();
+      loadTools();
       loadServers();
     }
   }
@@ -254,7 +251,7 @@ watch(
     <!-- ===== 连接器 tab(MCP) ===== -->
     <div v-show="activeTab === 'connectors'">
     <div class="section-title">连接器</div>
-    <p class="section-hint">接入 MCP 服务后,它提供的技能会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
+    <p class="section-hint">接入 MCP 服务后,它提供的工具会出现在下方清单中(默认关闭)。密钥加密保存,不会明文显示。</p>
 
     <div v-if="serversLoading" class="hint-text">加载中...</div>
     <div v-else-if="servers.length === 0 && !showServerForm" class="hint-text">
@@ -417,38 +414,35 @@ watch(
     >+ 接入新服务</button>
     </div><!-- /连接器 tab -->
 
-    <!-- ===== 工具 tab(内置 function call 技能) ===== -->
-    <div v-show="activeTab === 'tools'" class="section-skills">
+    <!-- ===== 工具 tab(内置 function call 工具) ===== -->
+    <div v-show="activeTab === 'tools'" class="section-tools">
       <div class="section-title">工具</div>
 
-      <div v-if="skillsLoading" class="hint-text">加载中...</div>
-      <div v-else-if="skills.length === 0" class="hint-text">暂无可用技能</div>
-      <ul v-else class="skill-list">
+      <div v-if="toolsLoading" class="hint-text">加载中...</div>
+      <div v-else-if="tools.length === 0" class="hint-text">暂无可用工具</div>
+      <ul v-else class="tool-list">
         <li
-          v-for="skill in skills"
-          :key="skill.name"
-          class="skill-item"
-          :class="{ 'is-disabled': !skill.available }"
+          v-for="tool in tools"
+          :key="tool.name"
+          class="tool-item"
+          :class="{ 'is-disabled': !tool.available }"
         >
-          <div class="skill-info">
-            <div class="skill-name-row">
-              <span class="skill-name">{{ skill.display_name || skill.name }}</span>
-              <span class="skill-source-badge" :class="`is-${skill.source}`">
-                {{ skillSourceLabel(skill.source) }}
-              </span>
+          <div class="tool-info">
+            <div class="tool-name-row">
+              <span class="tool-name">{{ tool.display_name || tool.name }}</span>
             </div>
-            <div class="skill-desc">{{ skill.description }}</div>
+            <div class="tool-desc">{{ tool.description }}</div>
           </div>
-          <label class="skill-switch" :title="skill.available ? '' : '该技能暂不可用'">
+          <label class="tool-switch" :title="tool.available ? '' : '该工具暂不可用'">
             <input
               type="checkbox"
               role="switch"
-              :aria-label="`启用${skill.display_name || skill.name}`"
-              :checked="skill.enabled"
-              :disabled="!skill.available || togglingSkills.has(skill.name)"
-              @change="handleSkillToggle(skill, $event)"
+              :aria-label="`启用${tool.display_name || tool.name}`"
+              :checked="tool.enabled"
+              :disabled="!tool.available || togglingTools.has(tool.name)"
+              @change="handleToolToggle(tool, $event)"
             />
-            <span class="skill-switch-slider"></span>
+            <span class="tool-switch-slider"></span>
           </label>
         </li>
       </ul>
@@ -715,60 +709,48 @@ watch(
   color: var(--accent);
 }
 
-/* ===== 技能清单 ===== */
-.section-skills {
+/* ===== 工具清单 ===== */
+.section-tools {
   margin-top: 24px;
   padding-top: 16px;
   border-top: 1px solid var(--border-l1);
 }
-.skill-list {
+.tool-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
 }
-.skill-item {
+.tool-item {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 0;
   border-bottom: 0.5px solid var(--border-l1);
 }
-.skill-item:last-child {
+.tool-item:last-child {
   border-bottom: none;
 }
-.skill-item.is-disabled .skill-name,
-.skill-item.is-disabled .skill-desc {
+.tool-item.is-disabled .tool-name,
+.tool-item.is-disabled .tool-desc {
   color: var(--label-caption);
 }
-.skill-info {
+.tool-info {
   flex: 1;
   min-width: 0;
 }
-.skill-name-row {
+.tool-name-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.skill-name {
+.tool-name {
   font-size: 14px;
   font-weight: 500;
   color: var(--label-primary);
 }
-.skill-source-badge {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--code-bg);
-  color: var(--label-tertiary);
-  white-space: nowrap;
-}
-.skill-source-badge.is-mcp {
-  background: var(--accent-light);
-  color: var(--accent-hover);
-}
-.skill-desc {
+.tool-desc {
   font-size: 12px;
   color: var(--label-tertiary);
   margin-top: 2px;
@@ -780,14 +762,14 @@ watch(
 }
 
 /* 开关(checkbox + slider) */
-.skill-switch {
+.tool-switch {
   position: relative;
   flex-shrink: 0;
   width: 36px;
   height: 20px;
   cursor: pointer;
 }
-.skill-switch input {
+.tool-switch input {
   position: absolute;
   opacity: 0;
   width: 100%;
@@ -795,10 +777,10 @@ watch(
   margin: 0;
   cursor: pointer;
 }
-.skill-switch input:disabled {
+.tool-switch input:disabled {
   cursor: not-allowed;
 }
-.skill-switch-slider {
+.tool-switch-slider {
   position: absolute;
   inset: 0;
   border-radius: 10px;
@@ -806,7 +788,7 @@ watch(
   transition: background 150ms ease;
   pointer-events: none;
 }
-.skill-switch-slider::before {
+.tool-switch-slider::before {
   content: '';
   position: absolute;
   width: 16px;
@@ -818,13 +800,13 @@ watch(
   transition: transform 150ms ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-.skill-switch input:checked + .skill-switch-slider {
+.tool-switch input:checked + .tool-switch-slider {
   background: var(--accent);
 }
-.skill-switch input:checked + .skill-switch-slider::before {
+.tool-switch input:checked + .tool-switch-slider::before {
   transform: translateX(16px);
 }
-.skill-switch input:disabled + .skill-switch-slider {
+.tool-switch input:disabled + .tool-switch-slider {
   opacity: 0.5;
 }
 
