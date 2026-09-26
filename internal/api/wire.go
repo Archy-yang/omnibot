@@ -110,7 +110,6 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 初始化消息服务
 	// 12-记忆系统技术方案 §5.3:向量化 provider 按配置装配,未配置=子串降级(记忆照常存取)。
 	memoryEmbedding := buildEmbeddingProvider(cfg)
-	digestRepository := memoryRepo.NewDigestRepository(dbConn.GetGormDB())
 	msgRepo := chatRepo.NewMessageRepository(dbConn.GetGormDB())
 	// 14-订阅源管理:RSS 信息源登记簿(查询时按需取,无定时抓取)
 	subscriptionSvc := subscriptionService.NewSubscriptionService(
@@ -148,7 +147,6 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		}
 		digestPipeline = memoryService.NewDigestPipeline(
 			memoryRepo.NewWatermarkRepository(dbConn.GetGormDB()),
-			digestRepository,
 			memoryRepository,
 			memoryRepo.NewMatterRepository(dbConn.GetGormDB()), // M6:事项层
 			msgRepo, // chat 仓储实现 ConversationSource

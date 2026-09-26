@@ -73,7 +73,7 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}); err != nil {
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	// 默认返回:纪要 + 无记忆候选
@@ -82,7 +82,6 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	source := &fakeConversationSource{latest: 0}
 	p := NewDigestPipeline(
 		memoryrepo.NewWatermarkRepository(db),
-		memoryrepo.NewDigestRepository(db),
 		memoryrepo.NewMemoryRepository(db),
 		memoryrepo.NewMatterRepository(db),
 		source,
@@ -122,11 +121,10 @@ func TestDigestPipeline_BelowThreshold(t *testing.T) {
 	if llm.calls != 0 {
 		t.Errorf("阈值未到不应调 LLM, got %d 次", llm.calls)
 	}
-	var digestCount, wmCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
+	var wmCount int64
 	db.Model(&memorydomain.DigestWatermark{}).Count(&wmCount)
-	if digestCount != 0 || wmCount != 0 {
-		t.Errorf("digests=%d watermarks=%d, want 0/0", digestCount, wmCount)
+	if wmCount != 0 {
+		t.Errorf("watermarks=%d, want 0", wmCount)
 	}
 }
 
@@ -145,13 +143,6 @@ func TestDigestPipeline_SingleCall(t *testing.T) {
 	if llm.lastUserID != 42 {
 		t.Errorf("LLM 调用应携带 userID=42(按用户解析配置), got %d", llm.lastUserID)
 	}
-	// M6:digests 退役,不再写入
-	var digestCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
-	if digestCount != 0 {
-		t.Errorf("digests 已退役,不应写入, got %d", digestCount)
-	}
-
 	// 水位推进到 3
 	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm.LastDigestMsgID != 3 {
@@ -434,11 +425,6 @@ func TestDigestPipeline_LLMFailureRetriesSameRange(t *testing.T) {
 	if err := p.RunOnce(context.Background(), 42); err == nil {
 		t.Fatal("LLM 失败应返回 error 供调用方记录")
 	}
-	var digestCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
-	if digestCount != 0 {
-		t.Errorf("LLM 失败不应落纪要, got %d", digestCount)
-	}
 	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm != nil && wm.LastDigestMsgID != 0 {
 		t.Errorf("LLM 失败水位不应推进, got %d", wm.LastDigestMsgID)
@@ -467,11 +453,10 @@ func TestDigestPipeline_SchemaInvalidDropsBatch(t *testing.T) {
 	if err := p.RunOnce(context.Background(), 42); err == nil {
 		t.Fatal("schema 非法应返回 error(整批作废,下轮重试)")
 	}
-	var digestCount, memCount int64
-	db.Model(&memorydomain.ConversationDigest{}).Count(&digestCount)
+	var memCount int64
 	db.Model(&memorydomain.Memory{}).Count(&memCount)
-	if digestCount != 0 || memCount != 0 {
-		t.Errorf("schema 非法应整批作废, digests=%d mems=%d", digestCount, memCount)
+	if memCount != 0 {
+		t.Errorf("schema 非法应整批作废, mems=%d", memCount)
 	}
 	wm, _ := memoryrepo.NewWatermarkRepository(db).GetByUserID(42)
 	if wm.LastDigestMsgID != 0 {
@@ -765,7 +750,8 @@ func TestReconcile_MatterUpdateAndNew(t *testing.T) {
 	require.Equal(t, "fact", byContent["用户注重性价比"].Kind)
 	require.NotNil(t, byContent["用户注重性价比"].MatterID)
 	require.Equal(t, mattersByID["十一旅行"].ID, *byContent["用户注重性价比"].MatterID)
-	require.Equal(t, "episode", byContent["9/4 在奥北森林公园充电"].Kind)
+	// M8.4:episode 已断源,LLM 仍输出 episode 时归一为 fact(§14.2.3)
+	require.Equal(t, "fact", byContent["9/4 在奥北森林公园充电"].Kind)
 	require.Equal(t, "loop", byContent["待核实实时票价"].Kind)
 	require.Nil(t, byContent["待核实实时票价"].MatterID, "matter_title 为空不应挂靠")
 }

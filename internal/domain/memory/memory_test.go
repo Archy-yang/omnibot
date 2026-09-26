@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewMemory(t *testing.T) {
@@ -20,4 +21,14 @@ func TestNewMemory(t *testing.T) {
 
 func TestMemory_TableName(t *testing.T) {
 	assert.Equal(t, "memories", Memory{}.TableName())
+}
+
+// TestNormalizeKind_EpisodeLegacyMapping M8.4 §14.2.3:episode 断源后显式归一 fact;
+// MemoryKindEpisode 常量保留为历史兼容值(存量迁移可追溯),未知 kind 仍兜底 fact。
+func TestNormalizeKind_EpisodeLegacyMapping(t *testing.T) {
+	require.Equal(t, MemoryKindFact, NormalizeKind(MemoryKindEpisode))
+	require.Equal(t, MemoryKindFact, NormalizeKind("bogus"))
+	require.Equal(t, MemoryKindFact, NormalizeKind(""))
+	require.Equal(t, MemoryKindFact, NormalizeKind(MemoryKindFact))
+	require.Equal(t, MemoryKindLoop, NormalizeKind(MemoryKindLoop))
 }

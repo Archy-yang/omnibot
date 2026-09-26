@@ -46,27 +46,3 @@ func TestNewAutoMemory(t *testing.T) {
 		t.Errorf("UserID/Content = %d/%q, want 42/用户是后端工程师", m.UserID, m.Content)
 	}
 }
-
-// TestNewConversationDigest 纪要构造:覆盖区间 + 消息数 + active 初始状态(技术方案 §4.2)。
-func TestNewConversationDigest(t *testing.T) {
-	d := NewConversationDigest(42, "聊了租房与工作规划", 100, 150, 51)
-
-	if d.UserID != 42 {
-		t.Errorf("UserID = %d, want 42", d.UserID)
-	}
-	if d.Summary != "聊了租房与工作规划" {
-		t.Errorf("Summary = %q", d.Summary)
-	}
-	if d.FromMessageID != 100 || d.ToMessageID != 150 {
-		t.Errorf("区间 = [%d, %d], want [100, 150]", d.FromMessageID, d.ToMessageID)
-	}
-	if d.MsgCount != 51 {
-		t.Errorf("MsgCount = %d, want 51", d.MsgCount)
-	}
-	if d.Status != DigestStatusActive {
-		t.Errorf("Status = %q, want %q", d.Status, DigestStatusActive)
-	}
-	if d.CreatedAt.IsZero() {
-		t.Error("CreatedAt should be set")
-	}
-}

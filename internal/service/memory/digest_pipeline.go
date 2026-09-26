@@ -46,7 +46,6 @@ type PipelineLLM interface {
 // DigestPipeline 沉淀管线。
 type DigestPipeline struct {
 	watermarkRepo memoryrepo.WatermarkRepository
-	digestRepo    memoryrepo.DigestRepository // M6 起停止写入(digests 退役只读);保留注入供旧数据读取路径
 	memoryRepo    memoryrepo.MemoryRepository
 	matterRepo    memoryrepo.MatterRepository // M6:事项层(对账式沉淀的核心)
 	source        ConversationSource
@@ -89,7 +88,6 @@ func (p *DigestPipeline) embeddingFor(userID int64) EmbeddingProvider {
 
 func NewDigestPipeline(
 	watermarkRepo memoryrepo.WatermarkRepository,
-	digestRepo memoryrepo.DigestRepository,
 	memoryRepo memoryrepo.MemoryRepository,
 	matterRepo memoryrepo.MatterRepository,
 	source ConversationSource,
@@ -107,7 +105,6 @@ func NewDigestPipeline(
 	return &DigestPipeline{
 		maxBatchMessages: digestMaxBatchMessages,
 		watermarkRepo:    watermarkRepo,
-		digestRepo:       digestRepo,
 		memoryRepo:       memoryRepo,
 		matterRepo:       matterRepo,
 		source:           source,

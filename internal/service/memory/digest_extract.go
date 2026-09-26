@@ -47,6 +47,11 @@ func (p *DigestPipeline) createAutoMemory(
 ) {
 	m := memorydomain.NewAutoMemory(userID, content, sourceMsgID)
 	m.Kind = memorydomain.NormalizeKind(kind)
+	// M8.4 §14.2.3:episode 已断源,若 LLM 仍输出(旧上下文/漂移)显式 warn——可见,不静默降级
+	if kind == memorydomain.MemoryKindEpisode {
+		logger.WarnWithFields("memory: LLM 输出已断源的 episode kind,已归一为 fact",
+			zap.Int64("user_id", userID), zap.String("content_prefix", content[:min(30, len(content))]))
+	}
 	m.MatterID = matterID
 	if vec != nil {
 		m.Embedding = vec

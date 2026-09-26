@@ -90,16 +90,12 @@ func TestMigration_DigestTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&memorydomain.ConversationDigest{}, &memorydomain.DigestWatermark{}); err != nil {
+	if err := db.AutoMigrate(&memorydomain.DigestWatermark{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 
-	// digest: 覆盖区间落库
-	d := memorydomain.NewConversationDigest(42, "纪要A", 1, 20, 20)
-	if err := db.Create(d).Error; err != nil {
-		t.Fatalf("create digest: %v", err)
-	}
-	// watermark: 单用户单行(主键即 user_id),Upsert 语义不产生第二行
+	// watermark: 单用户单行(主键即 user_id),Upsert 语义不产生第二行。
+	// M8.4:ConversationDigest 已删,digest_watermarks 表保留——它是沉淀管线自身的水位存储(遗留命名)。
 	wm := &memorydomain.DigestWatermark{UserID: 42, LastDigestMsgID: 20}
 	if err := db.Create(wm).Error; err != nil {
 		t.Fatalf("create watermark: %v", err)

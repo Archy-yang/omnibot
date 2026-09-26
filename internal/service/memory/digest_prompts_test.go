@@ -10,7 +10,9 @@ import (
 func TestPipelinePrompt_ReconcileConstraints(t *testing.T) {
 	for _, want := range []string{
 		"世界观快照", "增量对账", "matter_updates", "facts",
-		`"fact"`, `"episode"`, `"loop"`, "覆写", "宁可漏记", "只输出 JSON", "source_message_ids",
+		`"fact"`, `"loop"`, "覆写", "宁可漏记", "只输出 JSON", "source_message_ids",
+		// M8.4:episode 断源守护——prompt 不得再引导输出 episode
+		"loop_closes", "loop_reopens", "kind 二选一",
 		// 助理人语气(M7 期间确认):记自己的笔记,禁"用户"开头
 		"严禁以\"用户\"开头", "你怎么称呼对方",
 		// facts 三条红线(2026-09-15 事故:新闻快照/任务进度/待核实传闻被抽成记忆,
@@ -24,8 +26,8 @@ func TestPipelinePrompt_ReconcileConstraints(t *testing.T) {
 			t.Errorf("沉淀 prompt 缺少关键约束 %q", want)
 		}
 	}
-	// 旧版措辞不应回归(切片流水账/摘要式)
-	for _, banned := range []string{"概括聊了什么主题", "把这段对话压缩成一段纪要", "把这段对话沉淀成"} {
+	// 旧版措辞不应回归(切片流水账/摘要式/已断源的 episode 分层)
+	for _, banned := range []string{"概括聊了什么主题", "把这段对话压缩成一段纪要", "把这段对话沉淀成", `"episode"`, "三选一"} {
 		if strings.Contains(pipelineSystemPrompt, banned) {
 			t.Errorf("沉淀 prompt 回归了旧版措辞 %q", banned)
 		}

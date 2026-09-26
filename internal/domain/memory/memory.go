@@ -46,10 +46,14 @@ func (Memory) TableName() string {
 }
 
 // NormalizeKind 归一记忆分层:非法/空 → fact。
+// M8.4 §14.2.3:episode 经历层被 conversation_chunks 取代,沉淀断源;
+// MemoryKindEpisode 保留为历史兼容值,显式归一为 fact(调用侧打 warn,不静默)。
 func NormalizeKind(s string) string {
 	switch s {
-	case MemoryKindFact, MemoryKindEpisode, MemoryKindLoop:
+	case MemoryKindLoop:
 		return s
+	case MemoryKindEpisode:
+		return MemoryKindFact
 	default:
 		return MemoryKindFact
 	}
