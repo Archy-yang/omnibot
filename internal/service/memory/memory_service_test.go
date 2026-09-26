@@ -64,6 +64,14 @@ func (m *mockMemoryRepository) TransitionLoopStatus(int64, int64, string, string
 	return false, nil
 }
 
+func (m *mockMemoryRepository) ListPinnedAutoByUserID(int64) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepository) SetPinned(int64, int64, bool) (bool, error) {
+	return false, nil
+}
+
 func (m *mockMemoryRepository) ListByUserID(userID int64) ([]*memorydomain.Memory, error) {
 	return m.memories, m.listErr
 }

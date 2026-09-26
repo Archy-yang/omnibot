@@ -33,10 +33,12 @@ type Memory struct {
 	MatterID        *int64    `gorm:"index"`           // M6:可选挂靠事项;独立事实/闲聊经历为 NULL
 	Embedding       []float32 `gorm:"serializer:json"` // JSON 向量列,SQLite/PG 通吃;NULL=未嵌入(检索走子串降级)
 	EmbeddingModel  string    `gorm:"size:100"`        // 生成向量的模型标识,检索只比同模型向量(§6.3)
-	Category        string    `gorm:"size:50"`         // 预留列,本期恒空
-	Importance      int       // 预留列,本期恒 0
-	CreatedAt       time.Time `gorm:"not null"`
-	UpdatedAt       time.Time `gorm:"not null"`
+	Category        string     `gorm:"size:50"` // 预留列,本期恒空
+	Importance      int        // 预留列,本期恒 0
+	Pinned          bool       `gorm:"not null;default:false"` // M8.3 §14.2.4:常驻 core 人工置顶(manual ∪ pinned auto 进常驻注入)
+	PinnedAt        *time.Time // 置顶时间(取消置顶置 NULL;截断按 pinned_at DESC 新近优先)
+	CreatedAt       time.Time  `gorm:"not null"`
+	UpdatedAt       time.Time  `gorm:"not null"`
 }
 
 func (Memory) TableName() string {

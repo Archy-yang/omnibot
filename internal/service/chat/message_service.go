@@ -11,6 +11,7 @@ import (
 	agentdomain "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	chatrepo "omnibot/internal/repository/chat"
+	memorysvc "omnibot/internal/service/memory"
 	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
@@ -23,6 +24,10 @@ const (
 	ContextMessagesPerRound = 2  // 每轮 2 条消息（user + assistant）
 	MaxContextMessages      = ContextRounds * ContextMessagesPerRound
 	MaxContextMemories      = 10
+
+	// DefaultMemoryBlockMaxTokens 长期记忆常驻块 token 预算(M8.3 §14.2.4):
+	// manual 全量优先保留,置顶自动记忆超预算截断(按 pinned_at DESC)。
+	DefaultMemoryBlockMaxTokens = 2000
 )
 
 // 错误定义
@@ -63,10 +68,10 @@ type MessageService interface {
 	ListByUser(ctx context.Context, userID int64, limit int, before int64) ([]*conversation.Message, error)
 }
 
-// MemoryInjectionProvider 常驻注入数据提供者(注入分层,§6.5 修订):
-// 手动记忆全量常驻 + 自动记忆只出存在性提示(内容走 search_memories 工具检索)。
+// MemoryInjectionProvider 常驻注入数据提供者(注入分层,§6.5 修订 + M8.3 §14.2.4):
+// 手动记忆全量常驻 + 置顶自动记忆常驻 + 其余自动记忆只出存在性提示(内容走 search_memories 工具检索)。
 type MemoryInjectionProvider interface {
-	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
+	GetMemoryInjection(ctx context.Context, userID int64) (*memorysvc.MemoryInjection, error)
 }
 
 // TurnSink 对话轮次结束的观察者(12-记忆系统技术方案 §7 沉淀管线 NotifyTurn)。
@@ -87,6 +92,9 @@ type messageService struct {
 	compactTriggerTokens int
 	// Phase 3(§8):Conversation Recall(Recent Raw 之后注入,补偿 Compact 有损)
 	recall RecallSearcher
+	// memoryBlockMaxTokens 长期记忆常驻块的 token 预算(M8.3 §14.2.4):
+	// manual 全量优先保留,pinned auto 超预算截断(按 pinned_at DESC 序)。
+	memoryBlockMaxTokens int
 	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
 	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
 	turnSinks []TurnSink
@@ -134,6 +142,9 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, deps MessageServiceDe
 	}
 	if service.compactTriggerTokens <= 0 {
 		service.compactTriggerTokens = DefaultCompactTriggerTokens
+	}
+	if service.memoryBlockMaxTokens <= 0 {
+		service.memoryBlockMaxTokens = DefaultMemoryBlockMaxTokens
 	}
 	return service
 }
@@ -252,9 +263,11 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 		return nil
 	}
 
-	// 注入分层(§6.5 修订):手动记忆全量常驻(用户意志,小而有界);
-	// 自动记忆不进 prompt(量无界+噪声风险),只出一行存在性提示,内容走 search_memories 工具检索。
-	manual, autoCount, err := s.memorySvc.GetMemoryInjection(ctx, userID)
+	// 注入分层(§6.5 修订 + M8.3 §14.2.4):常驻 = 手动全量(用户意志,小而有界)
+	// ∪ 置顶自动记忆(唯一例外,新近置顶优先);其余自动记忆不进 prompt,
+	// 只出一行存在性提示,内容走 search_memories 工具检索。
+	// 截断优先级:manual 全量保留,pinned auto 按 pinned_at DESC 超预算丢弃(§14.2.4 D6)。
+	inj, err := s.memorySvc.GetMemoryInjection(ctx, userID)
 	if err != nil {
 		logger.ErrorWithFields("Failed to get memory injection, degraded to short-term context only",
 			zap.Int64("user_id", userID),
@@ -262,25 +275,51 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 		)
 		return nil
 	}
-	if len(manual) == 0 && autoCount == 0 {
+	if inj == nil || (len(inj.Manual) == 0 && len(inj.PinnedAuto) == 0 && inj.AutoCount == 0) {
+		return nil
+	}
+
+	// 预算内组装:manual 全量 → pinned auto 依次保留,超预算截断
+	kept := make([]string, 0, len(inj.Manual)+len(inj.PinnedAuto))
+	truncated := 0
+	used := 0
+	appendItem := func(item string) bool {
+		cost := EstimateTokens(item) + 2 // 编号与换行开销
+		if used+cost > s.memoryBlockMaxTokens {
+			return false
+		}
+		used += cost
+		kept = append(kept, item)
+		return true
+	}
+	for _, m := range inj.Manual {
+		appendItem(m) // manual 全量优先:超预算也不截断(继续尝试下一条)
+	}
+	for _, p := range inj.PinnedAuto {
+		if !appendItem(p) {
+			truncated++
+		}
+	}
+
+	if len(kept) == 0 && inj.AutoCount == 0 {
 		return nil
 	}
 
 	var builder strings.Builder
-	builder.WriteString("以下是用户主动交代的长期信息，请在回答时自然参考，不要主动提及“我参考了记忆”：\n\n")
-	for i, memory := range manual {
+	builder.WriteString("以下是用户的长期记忆（用户主动交代 + 用户置顶的自动沉淀），请在回答时自然参考，不要主动提及“我参考了记忆”：\n\n")
+	for i, memory := range kept {
 		builder.WriteString(fmt.Sprintf("%d. %s", i+1, memory))
-		if i < len(manual)-1 {
+		if i < len(kept)-1 {
 			builder.WriteString("\n")
 		}
 	}
-	if autoCount > 0 {
-		if len(manual) > 0 {
+	if remaining := inj.AutoCount - len(inj.PinnedAuto) + truncated; remaining > 0 {
+		if len(kept) > 0 {
 			builder.WriteString("\n\n")
 		}
 		fmt.Fprintf(&builder,
 			"另有 %d 条从对话中自动沉淀的记忆未列出，当用户提及过往内容而上面没有时，用 search_memories 工具检索。",
-			autoCount)
+			remaining)
 	}
 
 	return []llm.ChatMessage{{Role: conversation.RoleSystem, Content: builder.String()}}

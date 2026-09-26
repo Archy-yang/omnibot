@@ -30,6 +30,10 @@ type mockMemoryService struct {
 	listUserID      int64
 	clearUserID     int64
 	clearCalled     bool
+	pinUserID       int64
+	pinMemoryID     int64
+	pinPinned       bool
+	pinNotFound     bool
 }
 
 func (m *mockMemoryService) Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error) {
@@ -116,6 +120,7 @@ func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserSe
 	router.DELETE("/api/v1/memories", handler.HandleClearMemories)
 	router.DELETE("/api/v1/memories/:id", handler.HandleDeleteMemory)
 	router.PUT("/api/v1/memories/:id", handler.HandleUpdateMemory)
+	router.PUT("/api/v1/memories/:id/pin", handler.HandlePinMemory)
 	return router, userSvc
 }
 
@@ -401,8 +406,16 @@ func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ s
 }
 
 // GetMemoryInjection 注入分层桩(web handler 测试不涉及注入,返回空)。
-func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
-	return nil, 0, nil
+func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) (*memorysvc.MemoryInjection, error) {
+	return &memorysvc.MemoryInjection{}, nil
+}
+
+// SetPinned 置顶桩(M8.3)。
+func (m *mockMemoryService) SetPinned(_ context.Context, userID int64, memoryID int64, pinned bool) (bool, error) {
+	m.pinUserID = userID
+	m.pinMemoryID = memoryID
+	m.pinPinned = pinned
+	return !m.pinNotFound, nil
 }
 
 // ClearSource 按 source 清空桩:记录调用供断言。
@@ -464,4 +477,49 @@ func TestHandleClearMemories_NoSource(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "", mock.clearedSource, "不带 source 应走全量清空")
 	assert.Equal(t, int64(42), mock.clearUserID)
+}
+
+// ===== M8.3 pinned 常驻 core =====
+
+func TestHandlePinMemory_Success(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/7/pin", strings.NewReader(`{"pinned":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已置顶")
+	assert.Equal(t, int64(7), memorySvc.pinMemoryID)
+	assert.True(t, memorySvc.pinPinned)
+	assert.Equal(t, int64(42), memorySvc.pinUserID)
+}
+
+func TestHandlePinMemory_Unpin(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/7/pin", strings.NewReader(`{"pinned":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已取消置顶")
+	assert.False(t, memorySvc.pinPinned)
+}
+
+func TestHandlePinMemory_NotFound(t *testing.T) {
+	memorySvc := &mockMemoryService{pinNotFound: true}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/999/pin", strings.NewReader(`{"pinned":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "记忆不存在或不属于当前用户。")
 }

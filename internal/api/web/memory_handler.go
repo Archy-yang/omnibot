@@ -21,6 +21,7 @@ type MemoryDTO struct {
 	ID        int64  `json:"id"`
 	Content   string `json:"content"`
 	Source    string `json:"source"` // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
+	Pinned    bool   `json:"pinned"` // M8.3:置顶(常驻 core,进常驻注入)
 	CreatedAt string `json:"created_at"`
 }
 
@@ -71,6 +72,7 @@ func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
 		ID:        memory.ID,
 		Content:   memory.Content,
 		Source:    source,
+		Pinned:    memory.Pinned,
 		CreatedAt: memory.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -279,6 +281,71 @@ func (h *Handler) HandleUpdateMemory(c *gin.Context) {
 		"data": UpdateMemoryResponse{
 			Message: "已更新记忆。",
 			Memory:  toMemoryDTO(memory),
+		},
+	})
+}
+
+// ========== M8.3 置顶接口 ==========
+
+type PinMemoryURIRequest struct {
+	MemoryID int64 `uri:"id" binding:"required,min=1"`
+}
+
+type PinMemoryRequest struct {
+	Pinned bool `json:"pinned"`
+}
+
+type PinMemoryResponse struct {
+	Message string `json:"message"`
+}
+
+// HandlePinMemory 置顶/取消置顶一条记忆(M8.3 §14.2.4:置顶的自动记忆进常驻注入)。
+// 记忆不存在或不属于当前用户 → 404(越权不可探测)。
+func (h *Handler) HandlePinMemory(c *gin.Context) {
+	var uriReq PinMemoryURIRequest
+	if err := c.ShouldBindUri(&uriReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的记忆 ID。",
+		})
+		return
+	}
+
+	var req PinMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误",
+		})
+		return
+	}
+
+	userID := c.GetInt64(middleware.AuthUserIDKey)
+
+	ok, err := h.memoryService.SetPinned(c.Request.Context(), userID, uriReq.MemoryID, req.Pinned)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "记忆不存在或不属于当前用户。",
+		})
+		return
+	}
+
+	message := "已取消置顶。"
+	if req.Pinned {
+		message = "已置顶，将常驻出现在长期记忆中。"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": PinMemoryResponse{
+			Message: message,
 		},
 	})
 }

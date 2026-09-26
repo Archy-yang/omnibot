@@ -164,6 +164,8 @@ export interface MemoryItem {
   content: string;
   /** 来源:manual=用户交代 / auto=沉淀管线提取(注入分层,双 tab 管理) */
   source?: string;
+  /** M8.3:置顶(常驻 core,置顶的自动记忆进常驻注入) */
+  pinned?: boolean;
   created_at: string;
 }
 
@@ -200,6 +202,20 @@ export interface ClearMemoriesResponse {
  * 删除单条长期记忆响应类型
  */
 export interface DeleteMemoryResponse {
+  message: string;
+}
+
+/**
+ * 置顶/取消置顶记忆请求类型(M8.3)
+ */
+export interface PinMemoryRequest {
+  pinned: boolean;
+}
+
+/**
+ * 置顶/取消置顶记忆响应类型(M8.3)
+ */
+export interface PinMemoryResponse {
   message: string;
 }
 

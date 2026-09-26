@@ -6,6 +6,7 @@ import type {
   CreateMemoryResponse,
   DeleteMemoryResponse,
   GetMemoriesResponse,
+  PinMemoryResponse,
   UpdateMemoryRequest,
   UpdateMemoryResponse,
 } from '../types/api';
@@ -60,6 +61,17 @@ export const memoryService = {
       return response.data.data;
     } catch (error) {
       console.error('Failed to update memory:', error);
+      throw error;
+    }
+  },
+
+  // M8.3:置顶/取消置顶(置顶的自动记忆进常驻注入)
+  async pinMemory(id: number, pinned: boolean): Promise<PinMemoryResponse> {
+    try {
+      const response = await request.put<ApiResponse<PinMemoryResponse>>(`/memories/${id}/pin`, { pinned });
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to pin memory:', error);
       throw error;
     }
   },

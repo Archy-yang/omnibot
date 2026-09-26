@@ -6,7 +6,11 @@ import (
 	"testing"
 
 	"omnibot/internal/db"
+	"omnibot/internal/domain/conversation"
+	memorysvc "omnibot/internal/service/memory"
 	"omnibot/internal/repository/chat"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TurnSink 钩子测试(12-记忆系统技术方案 §7):助手消息落库后通知沉淀管线,异步不阻塞。
@@ -97,12 +101,13 @@ func TestTurnSink_UserMessageNoNotify(t *testing.T) {
 // ===== 注入分层测试(PRD 修订:手动常驻+自动存在提示,自动记忆不进 prompt) =====
 
 type fakeInjectionMemory struct {
-	manual    []string
-	autoCount int
+	manual     []string
+	pinnedAuto []string
+	autoCount  int
 }
 
-func (f *fakeInjectionMemory) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
-	return f.manual, f.autoCount, nil
+func (f *fakeInjectionMemory) GetMemoryInjection(_ context.Context, _ int64) (*memorysvc.MemoryInjection, error) {
+	return &memorysvc.MemoryInjection{Manual: f.manual, PinnedAuto: f.pinnedAuto, AutoCount: f.autoCount}, nil
 }
 
 func injectionSetup(t *testing.T, mem *fakeInjectionMemory) MessageService {
@@ -167,4 +172,60 @@ func TestInjection_ManualEmptyAutoExists(t *testing.T) {
 	if sys == "" || !strings.Contains(sys, "5") || !strings.Contains(sys, "search_memories") {
 		t.Errorf("应仅注入存在性提示:\n%s", sys)
 	}
+}
+
+// ===== M8.3 pinned 常驻注入(§14.2.4) =====
+
+// TestBuildContextMessages_PinnedAutoResident 置顶自动记忆进常驻注入,
+// 提示行条数 = 自动总数 − 已列出置顶数。
+func TestBuildContextMessages_PinnedAutoResident(t *testing.T) {
+	mem := &fakeInjectionMemory{
+		manual:     []string{"我偏好简洁回答"},
+		pinnedAuto: []string{"老爷在跟踪十一旅行"},
+		autoCount:  3, // 置顶 1 + 未置顶 2
+	}
+	service := injectionSetup(t, mem)
+
+	msgs, err := service.BuildContextMessages(context.Background(), 123, "hi")
+	require.NoError(t, err)
+
+	var memoryBlock string
+	for _, m := range msgs {
+		if m.Role == conversation.RoleSystem && strings.Contains(m.Content, "长期记忆") {
+			memoryBlock = m.Content
+		}
+	}
+	require.NotEmpty(t, memoryBlock, "应有记忆注入块")
+	require.Contains(t, memoryBlock, "我偏好简洁回答")
+	require.Contains(t, memoryBlock, "老爷在跟踪十一旅行", "置顶自动记忆常驻")
+	require.Contains(t, memoryBlock, "另有 2 条", "提示=总数−已列出置顶")
+}
+
+// TestBuildContextMessages_PinnedBudgetTruncation 预算超限:manual 全量保留,
+// pinned auto 按序截断,被截断条数并入提示行。
+func TestBuildContextMessages_PinnedBudgetTruncation(t *testing.T) {
+	mem := &fakeInjectionMemory{
+		manual:     []string{"手动记忆A"},
+		pinnedAuto: []string{"置顶一", "置顶二", "置顶三"},
+		autoCount:  10,
+	}
+	service := injectionSetup(t, mem).(*messageService)
+	// 确定性预算:恰好容纳 manual + 第 1 条置顶,后续两条超预算
+	pinCost := EstimateTokens("置顶一") + 2
+	manualCost := EstimateTokens("手动记忆A") + 2
+	service.memoryBlockMaxTokens = manualCost + pinCost + 1
+
+	msgs, err := service.BuildContextMessages(context.Background(), 123, "hi")
+	require.NoError(t, err)
+
+	var memoryBlock string
+	for _, m := range msgs {
+		if m.Role == conversation.RoleSystem && strings.Contains(m.Content, "长期记忆") {
+			memoryBlock = m.Content
+		}
+	}
+	require.Contains(t, memoryBlock, "手动记忆A", "manual 全量优先保留")
+	require.Contains(t, memoryBlock, "置顶一", "pinned 按 DESC 序保留")
+	require.NotContains(t, memoryBlock, "置顶三", "超预算置顶被截断")
+	require.Contains(t, memoryBlock, "另有", "截断后保留存在性提示")
 }

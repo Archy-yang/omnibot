@@ -9,6 +9,7 @@ import (
 	"omnibot/internal/db"
 	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
+	memorysvc "omnibot/internal/service/memory"
 	"omnibot/internal/repository/chat"
 
 	"github.com/stretchr/testify/assert"
@@ -107,9 +108,9 @@ func (m *mockContextMemoryService) Clear(ctx context.Context, userID int64) erro
 	return nil
 }
 
-func (m *mockContextMemoryService) GetMemoryInjection(ctx context.Context, userID int64) ([]string, int, error) {
+func (m *mockContextMemoryService) GetMemoryInjection(ctx context.Context, userID int64) (*memorysvc.MemoryInjection, error) {
 	m.userID = userID
-	return m.manual, m.autoCount, m.err
+	return &memorysvc.MemoryInjection{Manual: m.manual, AutoCount: m.autoCount}, m.err
 }
 
 func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing.T) {
@@ -125,7 +126,7 @@ func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing
 	require.NoError(t, err)
 	require.Len(t, ctxMsgs, 2)
 	assert.Equal(t, conversation.RoleSystem, ctxMsgs[0].Role)
-	assert.Contains(t, ctxMsgs[0].Content, "用户主动交代的长期信息")
+	assert.Contains(t, ctxMsgs[0].Content, "用户的长期记忆")
 	assert.Contains(t, ctxMsgs[0].Content, "1. 我偏好简洁回答")
 	assert.Contains(t, ctxMsgs[0].Content, "2. 我正在开发 OmniBot")
 	assert.Equal(t, conversation.RoleUser, ctxMsgs[1].Role)

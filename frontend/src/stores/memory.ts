@@ -56,6 +56,15 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
+  // M8.3:置顶/取消置顶(置顶的自动记忆进常驻注入)
+  const setPinned = async (id: number, pinned: boolean): Promise<void> => {
+    await memoryService.pinMemory(id, pinned);
+    const index = memories.value.findIndex((m) => m.id === id);
+    if (index !== -1) {
+      memories.value[index] = { ...memories.value[index], pinned };
+    }
+  };
+
   return {
     memories,
     isLoading,
@@ -66,5 +75,6 @@ export const useMemoryStore = defineStore('memory', () => {
     clearMemories,
     deleteMemory,
     updateMemory,
+    setPinned,
   };
 });

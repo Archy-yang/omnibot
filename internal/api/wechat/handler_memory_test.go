@@ -279,8 +279,12 @@ func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ s
 }
 
 // GetMemoryInjection 注入分层桩(wechat handler 测试不涉及注入,返回空)。
-func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) ([]string, int, error) {
-	return nil, 0, nil
+func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) (*memorysvc.MemoryInjection, error) {
+	return &memorysvc.MemoryInjection{}, nil
+}
+
+func (m *mockMemoryService) SetPinned(_ context.Context, _ int64, _ int64, _ bool) (bool, error) {
+	return false, nil
 }
 
 // ClearSource 按 source 清空桩(wechat handler 测试不涉及,记录调用)。

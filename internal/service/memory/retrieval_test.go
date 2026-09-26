@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -351,24 +352,24 @@ func TestGetMemoryInjection_ManualOnly(t *testing.T) {
 		t.Fatalf("seed auto: %v", err)
 	}
 
-	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
+	inj, err := svc.GetMemoryInjection(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("GetMemoryInjection: %v", err)
 	}
-	if len(manuals) != 1 || manuals[0] != "用户偏好简洁回复" {
-		t.Errorf("manual = %v, want 仅手动记忆", manuals)
+	if len(inj.Manual) != 1 || inj.Manual[0] != "用户偏好简洁回复" {
+		t.Errorf("manual = %v, want 仅手动记忆", inj.Manual)
 	}
-	if autoCount != 1 {
-		t.Errorf("autoCount = %d, want 1", autoCount)
+	if inj.AutoCount != 1 {
+		t.Errorf("autoCount = %d, want 1", inj.AutoCount)
 	}
 }
 
 // TestGetMemoryInjection_Empty 空库返回零值不报错。
 func TestGetMemoryInjection_Empty(t *testing.T) {
 	svc, _ := retrievalSetup(t)
-	manuals, autoCount, err := svc.GetMemoryInjection(context.Background(), 42)
-	if err != nil || len(manuals) != 0 || autoCount != 0 {
-		t.Errorf("空库应返回零值, got %v/%d/%v", manuals, autoCount, err)
+	inj, err := svc.GetMemoryInjection(context.Background(), 42)
+	if err != nil || len(inj.Manual) != 0 || inj.AutoCount != 0 {
+		t.Errorf("空库应返回零值, got %v/%d/%v", inj, 0, err)
 	}
 }
 
@@ -437,4 +438,77 @@ func TestSearchMatters_Semantic(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hits, 1)
 	require.InDelta(t, 1.0, hits[0].Score, 0.001)
+}
+
+// ===== M8.3 pinned 常驻 core(§14.2.4) =====
+
+func pinAt(t *time.Time, d time.Duration) *time.Time {
+	tt := t.Add(d)
+	return &tt
+}
+
+// TestGetMemoryInjection_PinnedAutoResident 常驻注入 = manual 全量 ∪ pinned auto;
+// autoCount 仍为自动记忆总数(未列出的存在性提示由注入端换算)。
+func TestGetMemoryInjection_PinnedAutoResident(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	require.NoError(t, db.Create(memorydomain.NewMemory(42, "用户偏好简洁回复")).Error)
+	base := time.Now()
+	pinned := memorydomain.NewAutoMemory(42, "老爷在跟踪十一旅行", nil)
+	pinned.Pinned = true
+	pinned.PinnedAt = pinAt(&base, time.Minute)
+	require.NoError(t, db.Create(pinned).Error)
+	require.NoError(t, db.Create(memorydomain.NewAutoMemory(42, "普通自动记忆", nil)).Error)
+
+	inj, err := svc.GetMemoryInjection(context.Background(), 42)
+	require.NoError(t, err)
+	require.Equal(t, []string{"用户偏好简洁回复"}, inj.Manual)
+	require.Equal(t, []string{"老爷在跟踪十一旅行"}, inj.PinnedAuto, "置顶自动记忆进常驻")
+	require.Equal(t, 2, inj.AutoCount, "自动记忆总数不变")
+}
+
+// TestGetMemoryInjection_PinnedAutoOrderNewestFirst 置顶自动记忆按 pinned_at 倒序(新近置顶优先保留)。
+func TestGetMemoryInjection_PinnedAutoOrderNewestFirst(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	base := time.Now()
+	for i, d := range []time.Duration{time.Hour, 2 * time.Hour, 3 * time.Hour} {
+		m := memorydomain.NewAutoMemory(42, fmt.Sprintf("置顶记忆%d", i+1), nil)
+		m.Pinned = true
+		m.PinnedAt = pinAt(&base, d)
+		require.NoError(t, db.Create(m).Error)
+	}
+	inj, err := svc.GetMemoryInjection(context.Background(), 42)
+	require.NoError(t, err)
+	require.Equal(t, []string{"置顶记忆3", "置顶记忆2", "置顶记忆1"}, inj.PinnedAuto)
+}
+
+// TestSetPinned 置顶/取消置顶;越权或不存在返回 false。
+func TestSetPinned(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	m := memorydomain.NewAutoMemory(42, "待置顶记忆", nil)
+	require.NoError(t, db.Create(m).Error)
+
+	ok, err := svc.SetPinned(context.Background(), 42, m.ID, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+	var got memorydomain.Memory
+	require.NoError(t, db.First(&got, m.ID).Error)
+	require.True(t, got.Pinned)
+	require.NotNil(t, got.PinnedAt)
+
+	// 取消置顶:PinnedAt 清空
+	ok, err = svc.SetPinned(context.Background(), 42, m.ID, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, db.First(&got, m.ID).Error)
+	require.False(t, got.Pinned)
+	// 注意:GORM Scan 对 NULL 列跳过赋值,复用旧 struct 不会清掉已读出的值——
+	// 必须用全新 struct 读取(下方 pinned_at 断言依赖这一点)
+	var repinned memorydomain.Memory
+	require.NoError(t, db.First(&repinned, m.ID).Error)
+	require.Nil(t, repinned.PinnedAt)
+
+	// 他人操作 → false(404 语义)
+	ok, err = svc.SetPinned(context.Background(), 43, m.ID, true)
+	require.NoError(t, err)
+	require.False(t, ok)
 }

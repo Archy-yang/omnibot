@@ -37,6 +37,10 @@ type MemoryRepository interface {
 	// TransitionLoopStatus loop 生命周期迁移(M8 §14.2.2):仅当当前状态=fromStatus 时置为
 	// toStatus(只对 kind=loop 生效)。返回是否发生迁移(幂等:重复关闭/重开返回 false)。
 	TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error)
+	// ListPinnedAutoByUserID 置顶的自动记忆(M8.3 常驻 core;pinned_at 倒序,新近置顶优先)。
+	ListPinnedAutoByUserID(userID int64) ([]*memorydomain.Memory, error)
+	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false)。
+	SetPinned(id int64, userID int64, pinned bool) (bool, error)
 }
 
 type memoryRepository struct {
@@ -201,6 +205,37 @@ func (r *memoryRepository) TransitionLoopStatus(id int64, userID int64, fromStat
 	res := r.db.Model(&memorydomain.Memory{}).
 		Where("id = ? AND user_id = ? AND kind = ? AND loop_status = ?", id, userID, memorydomain.MemoryKindLoop, fromStatus).
 		Update("loop_status", toStatus)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// ListPinnedAutoByUserID 置顶的自动记忆(M8.3 常驻 core;pinned_at 倒序)。
+func (r *memoryRepository) ListPinnedAutoByUserID(userID int64) ([]*memorydomain.Memory, error) {
+	var memories []*memorydomain.Memory
+	err := r.db.Where("user_id = ? AND source = ? AND pinned = ?", userID, memorydomain.MemorySourceAuto, true).
+		Order("pinned_at DESC").
+		Find(&memories).Error
+	return memories, err
+}
+
+// SetPinned 置顶/取消置顶(M8.3):置顶记录时间,取消置 NULL。返回是否命中。
+// 取消置 NULL 须用 gorm.Expr("NULL"):typed nil 指针在本驱动下会被更新跳过。
+func (r *memoryRepository) SetPinned(id int64, userID int64, pinned bool) (bool, error) {
+	now := time.Now()
+	var pinnedAt interface{} = gorm.Expr("NULL")
+	if pinned {
+		pinnedAt = now
+	}
+	res := r.db.Model(&memorydomain.Memory{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Select("pinned", "pinned_at", "updated_at").
+		Updates(map[string]interface{}{
+			"pinned":     pinned,
+			"pinned_at":  pinnedAt,
+			"updated_at": now,
+		})
 	if res.Error != nil {
 		return false, res.Error
 	}

@@ -37,9 +37,19 @@ type MemoryService interface {
 	// SearchRecentMessages 中期记忆检索(M7 §10.6):消息级向量 + 时间加权,原文直达。
 	// embedding 未配置/无向量时返回空(中期层静默缺失,不报错)。
 	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error)
-	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订):
-	// 手动记忆全量(用户意志,按时间正序) + 自动记忆条数(只出存在性提示,内容走工具检索)。
-	GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error)
+	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订 + M8.3 §14.2.4):
+	// Manual=手动全量(用户意志,时间正序);PinnedAuto=置顶自动记忆(pinned_at 倒序,
+	// 唯一进常驻的自动记忆);AutoCount=自动记忆总数(注入端换算未列出条数)。
+	GetMemoryInjection(ctx context.Context, userID int64) (*MemoryInjection, error)
+	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false,handler 映射 404)。
+	SetPinned(ctx context.Context, userID int64, memoryID int64, pinned bool) (bool, error)
+}
+
+// MemoryInjection 常驻注入数据(§6.5 + M8.3 §14.2.4)。
+type MemoryInjection struct {
+	Manual     []string // 手动记忆全量(用户主动交代)
+	PinnedAuto []string // 置顶自动记忆(常驻 core 例外,新近置顶优先)
+	AutoCount  int      // 自动记忆总数
 }
 
 // RecentMessageSource 中期记忆原文回表(M7 §10.6):命中消息向量后取 content+时间。
@@ -122,25 +132,60 @@ func (s *memoryService) List(ctx context.Context, userID int64) ([]*memorydomain
 	return s.repo.ListByUserID(userID)
 }
 
-// GetMemoryInjection 常驻注入数据:手动记忆全量 + 自动记忆条数。
-// 注入分层(§6.5 修订):手动=用户意志,常驻;自动=助手笔记,量无界且有噪声风险,只提示存在,内容走 search_memories。
-func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (manual []string, autoCount int, err error) {
+// GetMemoryInjection 常驻注入数据:手动全量 ∪ 置顶自动(M8.3),自动计数供存在性提示。
+// 注入分层(§6.5 修订):手动=用户意志,常驻;自动=助手笔记,默认只提示存在、内容走
+// search_memories;唯一例外是 pinned=true 的自动记忆(用户标记常驻,§14.2.4)。
+func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*MemoryInjection, error) {
 	manuals, err := s.repo.ListManualByUserID(userID)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	manual = make([]string, 0, len(manuals))
+	manual := make([]string, 0, len(manuals))
 	for _, m := range manuals {
 		manual = append(manual, m.Content)
 	}
+	pinned, err := s.repo.ListPinnedAutoByUserID(userID)
+	if err != nil {
+		// 置顶列表读取失败降级为无置顶,不阻断手动注入
+		logger.WarnWithFields("memory: 置顶自动记忆读取失败,本轮常驻缺置顶层",
+			zap.Int64("user_id", userID), zap.Error(err))
+		pinned = nil
+	}
+	pinnedAuto := make([]string, 0, len(pinned))
+	for _, m := range pinned {
+		pinnedAuto = append(pinnedAuto, m.Content)
+	}
 	auto, err := s.repo.CountByUserIDAndSource(userID, memorydomain.MemorySourceAuto)
 	if err != nil {
-		// 计数失败不影响手动注入,只不出提示行
+		// 计数失败不影响常驻注入,只不出提示行
 		logger.WarnWithFields("memory: 自动记忆计数失败,注入缺存在性提示",
 			zap.Int64("user_id", userID), zap.Error(err))
-		return manual, 0, nil
+		return &MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto}, nil
 	}
-	return manual, int(auto), nil
+	return &MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto, AutoCount: int(auto)}, nil
+}
+
+// SetPinned 置顶/取消置顶(M8.3 §14.2.4):用户在记忆抽屉把某条自动记忆标记常驻。
+func (s *memoryService) SetPinned(ctx context.Context, userID int64, memoryID int64, pinned bool) (bool, error) {
+	ok, err := s.repo.SetPinned(memoryID, userID, pinned)
+	if err != nil {
+		logger.ErrorWithFields("Failed to set memory pinned",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.Bool("pinned", pinned),
+			zap.Error(err),
+		)
+		return false, err
+	}
+	if ok {
+		logger.InfoWithFields("Memory pinned state changed",
+			zap.Int64("user_id", userID),
+			zap.Int64("memory_id", memoryID),
+			zap.Bool("pinned", pinned),
+			zap.String("operation", "memory_pin"),
+		)
+	}
+	return ok, nil
 }
 
 func (s *memoryService) Clear(ctx context.Context, userID int64) error {

@@ -65,6 +65,8 @@ type MemoryService interface {
 	ClearSource(ctx context.Context, userID int64, source string) error
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
+	// SetPinned 置顶/取消置顶(M8.3 §14.2.4:置顶的自动记忆进常驻注入)。
+	SetPinned(ctx context.Context, userID int64, memoryID int64, pinned bool) (bool, error)
 }
 
 // AgentService Agent 服务接口

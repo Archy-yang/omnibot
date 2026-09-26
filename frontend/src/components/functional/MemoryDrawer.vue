@@ -35,6 +35,7 @@ const {
   clearMemories,
   deleteMemory,
   updateMemory,
+  setPinned,
 } = useMemory();
 const { success, error } = useToast();
 
@@ -140,6 +141,20 @@ const handleDeleteMemory = async (id: number): Promise<void> => {
     success('已删除记忆。');
   } catch (err) {
     error(getErrorMessage(err));
+  }
+};
+
+// M8.3:置顶/取消置顶(仅「自动沉淀的」tab 有意义——手动记忆本就常驻)
+const isPinning = ref<boolean>(false);
+const handleTogglePin = async (id: number, pinned: boolean): Promise<void> => {
+  isPinning.value = true;
+  try {
+    await setPinned(id, pinned);
+    success(pinned ? '已置顶,将常驻出现在长期记忆中。' : '已取消置顶。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  } finally {
+    isPinning.value = false;
   }
 };
 
@@ -288,7 +303,7 @@ const formatTime = (iso: string): string => {
           v-for="(memory, index) in activeMemories"
           :key="memory.id"
           class="memory-card"
-          :class="{ editing: editingId === memory.id }"
+          :class="{ editing: editingId === memory.id, pinned: memory.pinned }"
         >
           <!-- 序号 -->
           <div
@@ -307,6 +322,21 @@ const formatTime = (iso: string): string => {
               </div>
             </div>
             <div class="memory-actions">
+              <!-- M8.3:置顶开关(仅自动沉淀 tab;手动记忆本就常驻) -->
+              <button
+                v-if="activeTab === 'auto'"
+                type="button"
+                class="memory-action-btn pin-btn"
+                :class="{ 'is-pinned': memory.pinned }"
+                :title="memory.pinned ? '取消置顶' : '置顶(常驻记忆)'"
+                :disabled="isPinning"
+                @click="handleTogglePin(memory.id, !memory.pinned)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" :fill="memory.pinned ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"/>
+                  <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+                </svg>
+              </button>
               <button
                 type="button"
                 class="memory-action-btn edit-btn"
@@ -583,6 +613,11 @@ const formatTime = (iso: string): string => {
   background: var(--bg-tip);
   border-color: var(--border-l2);
 }
+/* M8.3:置顶卡片高亮 */
+.memory-card.pinned {
+  border-color: var(--accent);
+  background: var(--bg-tip);
+}
 
 .memory-index {
   width: 20px;
@@ -637,6 +672,13 @@ const formatTime = (iso: string): string => {
 .memory-action-btn.edit-btn:hover {
   color: var(--label-tertiary);
   background: var(--bg-hover);
+}
+.memory-action-btn.pin-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+.memory-action-btn.pin-btn.is-pinned {
+  color: var(--accent);
 }
 .memory-action-btn.delete-btn:hover {
   color: var(--error);
