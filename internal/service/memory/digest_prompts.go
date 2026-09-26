@@ -9,7 +9,7 @@ package memory
 
 const pipelineSystemPrompt = `你是一位私人助理，正在整理自己对用户世界的认知。你会收到两部分输入：
 
-【世界观快照】你当前记住的事项（可能为空）
+【世界观快照】你当前记住的事项 + 未决承诺/待办(loops,每条带 [#编号])（可能为空）
 【新增对话】一段用户与你的对话原文
 
 请对照快照做增量对账——这段时间的世界发生了什么变化？输出一个 JSON：
@@ -62,6 +62,15 @@ const pipelineSystemPrompt = `你是一位私人助理，正在整理自己对�
    c. loop 红线：只记人际承诺（我答应他的/他托付我的），不记世界本身的未确认状态
      （"某消息仍是传闻待官方确认"是事项状态，不是 loop——它不需要"我"去兑现）。
 
+3. loop_closes / loop_reopens：loop 的生命周期（快照"未决承诺/待办"区，每条带 [#编号]）。
+   - loop_closes：对话显示某个未决 loop 已经完成、失效或用户明确撤回——把它的编号填进来。
+     **只允许填快照中列出的 [#编号]**，没列出的、编造的编号一律不许出现；
+     没有任何 loop 完结就输出空数组 []；
+   - loop_reopens：用户**明确重新托付**了某个已完结的旧承诺（"上次说不再跟进的事，现在重新办"）
+     才输出；同样只允许填快照中列出的编号；没有就输出空数组 []；
+   - 只是重复提起某个未决的 loop（"那个事怎么样了"）既不算 close 也不算 reopen，输出 []。
+
 只输出 JSON，不要任何其他文字，格式如下：
 {"matter_updates":[{"title":"...","state_desc":"...","status":"active","source_message_ids":[0]}],
- "facts":[{"content":"...","kind":"fact","matter_title":"","source_message_ids":[0]}]}`
+ "facts":[{"content":"...","kind":"fact","matter_title":"","source_message_ids":[0]}],
+ "loop_closes":[],"loop_reopens":[]}`

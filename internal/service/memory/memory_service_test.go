@@ -56,6 +56,14 @@ func (m *mockMemoryRepository) ListByUserIDAndMatter(int64, int64) ([]*memorydom
 	return nil, nil
 }
 
+func (m *mockMemoryRepository) ListOpenLoops(int64, int) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepository) TransitionLoopStatus(int64, int64, string, string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockMemoryRepository) ListByUserID(userID int64) ([]*memorydomain.Memory, error) {
 	return m.memories, m.listErr
 }

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -16,9 +17,13 @@ import (
 // 复用 M5 的全部机制:溯源区间校验/余弦去重/唯一索引幂等/留痕计数。
 
 // reconcileResult LLM 对账输出的 schema(与 pipelineSystemPrompt 对齐)。
+// M8 §14.2.2:loop 生命周期——loop_closes 关闭快照中列出的未决 loop,
+// loop_reopens 重开明确重新托付的 closed loop(仅快照可引用,防幻觉)。
 type reconcileResult struct {
 	MatterUpdates []matterUpdate  `json:"matter_updates"`
 	Facts         []factCandidate `json:"facts"`
+	LoopCloses    []int64         `json:"loop_closes"`
+	LoopReopens   []int64         `json:"loop_reopens"`
 }
 
 type matterUpdate struct {
@@ -35,36 +40,73 @@ type factCandidate struct {
 	SourceMessageIDs []int64 `json:"source_message_ids"`
 }
 
-// buildWorldViewSnapshot 世界观快照:活跃事项清单(标题+当前状态)。
-// LLM 必须看到已有事项才能做增量更新,title 从快照里引用以防同事项裂名。
+// 快照上限(§14.2.2 成本护栏):防事项/loop 累积后快照无限膨胀推高沉淀 token。
+const (
+	snapshotMaxMatters = 50
+	snapshotMaxLoops   = 20
+)
+
+// buildWorldViewSnapshot 世界观快照:活跃事项清单(标题+当前状态,updated_at 倒序、
+// 超窗截断并提示)+ 未决 loops(带 ID,最旧优先)。
+// LLM 必须看到已有事项才能做增量更新,title 从快照里引用以防同事项裂名;
+// loop 关闭/重开指令只允许引用快照中列出的 [#id]。
 func (p *DigestPipeline) buildWorldViewSnapshot(userID int64) string {
-	const noSnapshot = "【世界观快照】\n(当前没有记住任何事项)"
+	var b strings.Builder
+	b.WriteString("【世界观快照】\n")
+
+	b.WriteString("当前记住的事项:\n")
 	matters, err := p.matterRepo.ListActiveByUserID(userID)
 	if err != nil {
-		return noSnapshot // 快照读失败按空处理,不阻断沉淀
+		b.WriteString("(读取失败,按无事项处理)\n") // 快照读失败不阻断沉淀
+	} else if len(matters) == 0 {
+		b.WriteString("(无)\n")
+	} else {
+		shown := matters
+		if len(shown) > snapshotMaxMatters {
+			shown = shown[:snapshotMaxMatters]
+		}
+		for _, m := range shown {
+			b.WriteString("- ")
+			b.WriteString(m.Title)
+			b.WriteString(": ")
+			b.WriteString(m.StateDesc)
+			b.WriteString("\n")
+		}
+		if remaining := len(matters) - len(shown); remaining > 0 {
+			fmt.Fprintf(&b, "(另有 %d 个事项未列出)\n", remaining)
+		}
 	}
-	if len(matters) == 0 {
-		return noSnapshot
-	}
-	var b strings.Builder
-	b.WriteString("【世界观快照】当前记住的事项:\n")
-	for _, m := range matters {
-		b.WriteString("- ")
-		b.WriteString(m.Title)
-		b.WriteString(": ")
-		b.WriteString(m.StateDesc)
-		b.WriteString("\n")
+
+	b.WriteString("未决承诺/待办(loops):\n")
+	loops, err := p.memoryRepo.ListOpenLoops(userID, snapshotMaxLoops)
+	if err != nil {
+		b.WriteString("(读取失败)\n")
+	} else if len(loops) == 0 {
+		b.WriteString("(无)\n")
+	} else {
+		for _, l := range loops {
+			fmt.Fprintf(&b, "- [#%d] %s\n", l.ID, l.Content)
+		}
 	}
 	return b.String()
 }
 
-// reconcile 执行对账:先 upsert 事项(建立 title→id 映射),再落 facts。
-// 返回 (事项更新数, 记忆新增数, 记忆更新数) 供留痕。
+// reconcileStats 对账执行统计(留痕用)。
+type reconcileStats struct {
+	MattersUpserted int
+	MemoriesCreated int
+	MemoriesUpdated int
+	LoopsClosed     int
+	LoopsReopened   int
+}
+
+// reconcile 执行对账:先 upsert 事项(建立 title→id 映射),再落 facts,最后处理 loop 生命周期。
 func (p *DigestPipeline) reconcile(
 	userID int64,
 	result reconcileResult,
 	fromID, toID int64,
-) (mattersUpserted, created, updated int) {
+) reconcileStats {
+	var stats reconcileStats
 	// 事项层:覆写式更新。title→id 映射供 facts 挂靠(快照已有 + 本轮新建/更新)
 	titleToID := make(map[string]int64)
 	existingMatters, _ := p.matterRepo.ListActiveByUserID(userID)
@@ -104,7 +146,7 @@ func (p *DigestPipeline) reconcile(
 				zap.Int64("user_id", userID), zap.String("title", title), zap.Error(err))
 			continue
 		}
-		mattersUpserted++
+		stats.MattersUpserted++
 		// upsert 后重新取行拿 ID(新建时由 DB 生成;已有时映射可能原本没有——
 		// 例如之前 done/archived 的事项重新活跃,不在 ListActive 里)
 		if m, err := p.matterRepo.GetByTitle(userID, title); err == nil && m != nil {
@@ -113,8 +155,21 @@ func (p *DigestPipeline) reconcile(
 	}
 
 	// 原子层:分层落库(复用余弦去重/冲突更新/links)
-	created, updated = p.applyFacts(context.Background(), userID, result.Facts, titleToID, fromID, toID)
-	return mattersUpserted, created, updated
+	stats.MemoriesCreated, stats.MemoriesUpdated = p.applyFacts(context.Background(), userID, result.Facts, titleToID, fromID, toID)
+
+	// loop 生命周期(M8 §14.2.2):关闭/重开只认 DB 中的真实状态(CAS 迁移),
+	// 不存在的 ID、他人的 ID、状态不符的指令一律静默忽略(幂等,防幻觉关闭)
+	for _, id := range result.LoopCloses {
+		if ok, err := p.memoryRepo.TransitionLoopStatus(id, userID, memorydomain.MemoryLoopStatusOpen, memorydomain.MemoryLoopStatusClosed); err == nil && ok {
+			stats.LoopsClosed++
+		}
+	}
+	for _, id := range result.LoopReopens {
+		if ok, err := p.memoryRepo.TransitionLoopStatus(id, userID, memorydomain.MemoryLoopStatusClosed, memorydomain.MemoryLoopStatusOpen); err == nil && ok {
+			stats.LoopsReopened++
+		}
+	}
+	return stats
 }
 
 // applyFacts 原子信息落库:过滤 → 溯源校验 → 挂 matter → 嵌入 → 去重裁决 → 落库。

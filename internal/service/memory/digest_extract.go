@@ -95,9 +95,10 @@ func classifyCandidate(
 		}
 		score := CosineSimilarity(vec, e.Embedding)
 		if score >= duplicateSkipThreshold {
-			return e.ID, candidateSkip
+			return e.ID, candidateSkip // 重复提及:closed loop 也不恢复(§14.2.2 ①),重新托付走 loop_reopens
 		}
-		if score >= conflictUpdateThreshold && score > updateScore {
+		// closed loop 不得被冲突更新链改写(§14.2.2 ③):排除出更新候选
+		if score >= conflictUpdateThreshold && score > updateScore && !e.IsClosedLoop() {
 			updateID, updateScore = e.ID, score
 		}
 	}

@@ -364,8 +364,8 @@ func TestDigestPipeline_AuditSuccess(t *testing.T) {
 		t.Errorf("step1 应为 digest.persist/success, got %+v", audit.steps[1])
 	}
 	if len(audit.ends) != 1 || audit.ends[0].status != "completed" ||
-		audit.ends[0].artifact != "事项更新 0,新增记忆 1,更新记忆 0" {
-		t.Errorf("EndTask 应为 completed+纪要, got %+v", audit.ends)
+		audit.ends[0].artifact != "事项更新 0,新增记忆 1,更新记忆 0,关闭 loop 0,重开 loop 0" {
+		t.Errorf("EndTask 应为 completed+对账统计, got %+v", audit.ends)
 	}
 }
 
@@ -964,4 +964,136 @@ func TestDigestPipeline_SilenceBoundaryAdvancesWatermark(t *testing.T) {
 	var wm memorydomain.DigestWatermark
 	require.NoError(t, db.Where("user_id = ?", 42).First(&wm).Error)
 	require.Equal(t, int64(3), wm.LastDigestMsgID, "水位=批尾(段落边界处)")
+}
+
+// ---- M8.2 loop 生命周期(12-记忆系统技术方案 §14.2.2) ----
+
+// seedLoop 直接种子一条 loop 记忆,返回其 ID。
+func seedLoop(t *testing.T, db *gorm.DB, userID int64, content, loopStatus string) int64 {
+	t.Helper()
+	m := memorydomain.NewAutoMemory(userID, content, nil)
+	m.Kind = memorydomain.MemoryKindLoop
+	m.LoopStatus = loopStatus
+	require.NoError(t, db.Create(m).Error)
+	return m.ID
+}
+
+func TestNormalizeLoopStatus(t *testing.T) {
+	require.Equal(t, "open", memorydomain.NormalizeLoopStatus(""))
+	require.Equal(t, "open", memorydomain.NormalizeLoopStatus("bogus"))
+	require.Equal(t, "closed", memorydomain.NormalizeLoopStatus("closed"))
+}
+
+func TestReconcile_LoopClose(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	loopID := seedLoop(t, db, 42, "帮用户核实实时票价", memorydomain.MemoryLoopStatusOpen)
+	llm.resp = fmt.Sprintf(`{"matter_updates":[],"facts":[],"loop_closes":[%d]}`, loopID)
+
+	require.NoError(t, p.RunOnce(context.Background(), 42))
+	var m memorydomain.Memory
+	require.NoError(t, db.First(&m, loopID).Error)
+	require.Equal(t, memorydomain.MemoryLoopStatusClosed, m.LoopStatus, "快照中的 loop 应被关闭")
+}
+
+func TestReconcile_LoopCloseIgnoresUnknownID(t *testing.T) {
+	// 仅允许关闭快照中列出的 ID:不存在/他人的 ID 静默忽略,不报错、不动数据
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	loopID := seedLoop(t, db, 42, "帮用户订蛋糕", memorydomain.MemoryLoopStatusOpen)
+	llm.resp = `{"matter_updates":[],"facts":[],"loop_closes":[999]}`
+
+	require.NoError(t, p.RunOnce(context.Background(), 42))
+	var m memorydomain.Memory
+	require.NoError(t, db.First(&m, loopID).Error)
+	require.Equal(t, memorydomain.MemoryLoopStatusOpen, m.LoopStatus)
+}
+
+func TestReconcile_LoopReopen(t *testing.T) {
+	p, db, llm, source := pipelineSetup(t)
+	seedPipelineMessages(t, db, 42, 3)
+	source.latest = 3
+	loopID := seedLoop(t, db, 42, "陪用户去充电桩", memorydomain.MemoryLoopStatusClosed)
+	llm.resp = fmt.Sprintf(`{"matter_updates":[],"facts":[],"loop_reopens":[%d]}`, loopID)
+
+	require.NoError(t, p.RunOnce(context.Background(), 42))
+	var m memorydomain.Memory
+	require.NoError(t, db.First(&m, loopID).Error)
+	require.Equal(t, memorydomain.MemoryLoopStatusOpen, m.LoopStatus, "明确重新托付应重开")
+}
+
+func TestClassifyCandidate_ClosedLoopInteractions(t *testing.T) {
+	// §14.2.2:①余弦≥0.92 重复提及不恢复(跳过);③[0.80,0.92)冲突更新不动 closed;
+	// 对照:同分值的 open loop 仍走更新链
+	vec := []float32{1, 0, 0}
+	closed := &memorydomain.Memory{ID: 7, Kind: memorydomain.MemoryKindLoop, LoopStatus: memorydomain.MemoryLoopStatusClosed,
+		Content: "旧承诺", Embedding: []float32{1, 0, 0}, EmbeddingModel: "m"}
+
+	// ① 高相似:closed → skip(不恢复、不新建)
+	id, action := classifyCandidate([]*memorydomain.Memory{closed}, vec, "m", "x")
+	require.Equal(t, int64(7), id)
+	require.Equal(t, candidateSkip, action)
+
+	// ③ 中相似(cos≈0.85,余弦只看方向,需带角度的向量):closed 不作为冲突更新目标 → 新增
+	midVec := []float32{0.85, 0.53, 0}
+	mid := &memorydomain.Memory{ID: 9, Kind: memorydomain.MemoryKindLoop, LoopStatus: memorydomain.MemoryLoopStatusClosed,
+		Content: "旧承诺", Embedding: midVec, EmbeddingModel: "m"}
+	_, action = classifyCandidate([]*memorydomain.Memory{mid}, vec, "m", "x")
+	require.Equal(t, candidateCreate, action, "closed 不得被冲突更新链改写")
+
+	// 对照:open loop 同样 ≈0.85 分值 → 照常进更新链
+	openMid := &memorydomain.Memory{ID: 10, Kind: memorydomain.MemoryKindLoop, LoopStatus: memorydomain.MemoryLoopStatusOpen,
+		Content: "进行中承诺", Embedding: []float32{0.85, 0.53, 0}, EmbeddingModel: "m"}
+	_, action = classifyCandidate([]*memorydomain.Memory{openMid}, vec, "m", "x")
+	require.Equal(t, candidateUpdate, action, "open loop 仍走冲突更新链")
+}
+
+func TestWorldViewSnapshot_IncludesOpenLoopsExcludesClosed(t *testing.T) {
+	p, db, _, _ := pipelineSetup(t)
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+		UserID: 42, Title: "十一旅行", StateDesc: "机票已订", Status: memorydomain.MatterStatusActive,
+	}))
+	openID := seedLoop(t, db, 42, "帮用户核实实时票价", memorydomain.MemoryLoopStatusOpen)
+	seedLoop(t, db, 42, "已完成的旧承诺", memorydomain.MemoryLoopStatusClosed)
+
+	snap := p.buildWorldViewSnapshot(42)
+	require.Contains(t, snap, "十一旅行")
+	require.Contains(t, snap, fmt.Sprintf("#%d", openID), "未决 loop 带 ID 进快照")
+	require.Contains(t, snap, "帮用户核实实时票价")
+	require.NotContains(t, snap, "已完成的旧承诺", "closed 不进快照")
+}
+
+func TestWorldViewSnapshot_MattersCapped(t *testing.T) {
+	// matters 快照上限 50:超出部分不列出并提示(成本护栏,§14.2.2 D7)
+	p, db, _, _ := pipelineSetup(t)
+	matterRepo := memoryrepo.NewMatterRepository(db)
+	for i := 0; i < 53; i++ {
+		require.NoError(t, matterRepo.UpsertByTitle(&memorydomain.Matter{
+			UserID: 42, Title: fmt.Sprintf("事项%02d", i), StateDesc: "进行中", Status: memorydomain.MatterStatusActive,
+		}))
+	}
+	snap := p.buildWorldViewSnapshot(42)
+	require.Contains(t, snap, "事项52", "updated_at 倒序,最新在前")
+	require.Contains(t, snap, "事项03", "窗口内最旧边界")
+	require.NotContains(t, snap, "事项02", "超窗事项不列出")
+	require.NotContains(t, snap, "事项00", "超窗事项不列出")
+	require.Contains(t, snap, "另有 3 个事项未列出")
+}
+
+func TestSearchMemories_ExcludesClosedLoops(t *testing.T) {
+	svc, db := retrievalSetup(t)
+	seedLoop(t, db, 42, "已关闭的承诺事项", memorydomain.MemoryLoopStatusClosed)
+	mOpen := memorydomain.NewAutoMemory(42, "开放中的承诺事项", nil)
+	mOpen.Kind = memorydomain.MemoryKindLoop
+	require.NoError(t, db.Create(mOpen).Error)
+
+	hits, err := svc.SearchMemories(context.Background(), 42, "承诺事项", 10)
+	require.NoError(t, err)
+	for _, h := range hits {
+		require.NotEqual(t, memorydomain.MemoryLoopStatusClosed, h.Memory.LoopStatus, "closed loop 不进检索")
+	}
+	require.NotEmpty(t, hits, "open loop 命中不受影响")
 }

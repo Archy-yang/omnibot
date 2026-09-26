@@ -232,12 +232,14 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		return fmt.Errorf("对账结果 schema 非法,整批作废: %w", err)
 	}
 
-	// 对账执行(M6):事项 upsert(覆写状态)+ 原子记忆分层落库。
+	// 对账执行(M6/M8):事项 upsert(覆写状态)+ 原子记忆分层落库 + loop 生命周期。
 	// digests 表退役(只读保留),不再写入切片纪要。
-	mattersUpserted, created, updated := p.reconcile(userID, parsed, fromID, toID)
+	stats := p.reconcile(userID, parsed, fromID, toID)
 	if p.audit != nil && taskID != 0 {
 		respJSON, _ := json.Marshal(map[string]int{
-			"matters": mattersUpserted, "created": created, "updated": updated,
+			"matters": stats.MattersUpserted, "created": stats.MemoriesCreated,
+			"updated": stats.MemoriesUpdated, "loops_closed": stats.LoopsClosed,
+			"loops_reopened": stats.LoopsReopened,
 		})
 		if stepErr := p.audit.RecordStep(taskID, userID, 1, "tool_call", "digest.persist",
 			fmt.Sprintf("区间 (%d,%d] 消息 %d 条", fromID, toID, len(messages)),
@@ -249,11 +251,12 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 
 	// 推进水位
 	if err := p.watermarkRepo.Upsert(userID, toID); err != nil {
-		p.endAuditTask(taskID, "failed", fmt.Sprintf("事项 %d,新增 %d,更新 %d", mattersUpserted, created, updated),
+		p.endAuditTask(taskID, "failed", fmt.Sprintf("事项 %d,新增 %d,更新 %d", stats.MattersUpserted, stats.MemoriesCreated, stats.MemoriesUpdated),
 			fmt.Sprintf("推进水位: %v", err))
 		return fmt.Errorf("推进水位: %w", err)
 	}
-	artifact := fmt.Sprintf("事项更新 %d,新增记忆 %d,更新记忆 %d", mattersUpserted, created, updated)
+	artifact := fmt.Sprintf("事项更新 %d,新增记忆 %d,更新记忆 %d,关闭 loop %d,重开 loop %d",
+		stats.MattersUpserted, stats.MemoriesCreated, stats.MemoriesUpdated, stats.LoopsClosed, stats.LoopsReopened)
 	p.endAuditTask(taskID, "completed", artifact, "")
 	return nil
 }

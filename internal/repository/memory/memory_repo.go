@@ -31,6 +31,12 @@ type MemoryRepository interface {
 	ReplaceLinksForMemory(memoryID int64, messageIDs []int64) error
 	// ListByUserIDAndMatter 某事项挂靠的记忆(M6.2 事项全景检索用;创建时间升序)。
 	ListByUserIDAndMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
+	// ListOpenLoops 未决 loop(M8 世界观快照用):kind=loop 且 loop_status=open,
+	// created_at 升序最旧优先(窗口随关闭动作轮转覆盖),最多 limit 条。
+	ListOpenLoops(userID int64, limit int) ([]*memorydomain.Memory, error)
+	// TransitionLoopStatus loop 生命周期迁移(M8 §14.2.2):仅当当前状态=fromStatus 时置为
+	// toStatus(只对 kind=loop 生效)。返回是否发生迁移(幂等:重复关闭/重开返回 false)。
+	TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error)
 }
 
 type memoryRepository struct {
@@ -175,4 +181,28 @@ func (r *memoryRepository) ListByUserIDAndMatter(userID int64, matterID int64) (
 		Order("id ASC").
 		Find(&memories).Error
 	return memories, err
+}
+
+// ListOpenLoops 未决 loop(M8 世界观快照用):最旧优先,最多 limit 条。
+func (r *memoryRepository) ListOpenLoops(userID int64, limit int) ([]*memorydomain.Memory, error) {
+	var memories []*memorydomain.Memory
+	q := r.db.Where("user_id = ? AND kind = ? AND loop_status = ?", userID, memorydomain.MemoryKindLoop, memorydomain.MemoryLoopStatusOpen).
+		Order("created_at ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Find(&memories).Error
+	return memories, err
+}
+
+// TransitionLoopStatus loop 生命周期迁移(M8):CAS 语义,仅 fromStatus → toStatus。
+// 只对 kind=loop 生效;返回是否发生迁移(幂等)。
+func (r *memoryRepository) TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error) {
+	res := r.db.Model(&memorydomain.Memory{}).
+		Where("id = ? AND user_id = ? AND kind = ? AND loop_status = ?", id, userID, memorydomain.MemoryKindLoop, fromStatus).
+		Update("loop_status", toStatus)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }

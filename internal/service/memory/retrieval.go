@@ -94,6 +94,9 @@ func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query 
 	lowered := strings.ToLower(query)
 	hits := make([]memorydomain.MemoryHit, 0, len(memories))
 	for _, m := range memories {
+		if m.IsClosedLoop() {
+			continue // closed 的 loop 不进检索(§14.2.2),管理面可见可重开
+		}
 		score := 0.0
 		if qvec != nil && len(m.Embedding) > 0 && m.EmbeddingModel == currentModel {
 			score = CosineSimilarity(qvec, m.Embedding)
