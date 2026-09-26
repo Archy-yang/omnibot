@@ -57,6 +57,7 @@ type DigestPipeline struct {
 	embeddingResolver func(userID int64) EmbeddingProvider
 	threshold         int         // pending 消息数阈值
 	maxBatchMessages  int         // 单轮最多沉淀的消息数(积压分块,防巨包请求)
+	silenceGap        time.Duration // 段落边界静默阈值(M8.1 §14.2.1):相邻非 report 消息间隔 ≥ 此值视为段落边界
 	audit             DigestAudit // 留痕(M5.3):task+step 可观测,nil=仅日志
 	inflight          sync.Map    // userID → struct{} (per-user 单飞标记)
 }
@@ -67,6 +68,9 @@ func (p *DigestPipeline) SetAudit(a DigestAudit) {
 }
 
 const digestMaxBatchMessages = 40 // 单轮块上限:两倍默认阈值,兼顾摊销与请求体积
+
+// digestDefaultSilenceGap 段落边界静默阈值默认值(M8.1):相邻消息间隔 ≥ 10 分钟视为话题自然收尾。
+const digestDefaultSilenceGap = 10 * time.Minute
 
 // SetEmbeddingResolver 注入用户级向量解析器(装配点调用;复用用户向量配置缓存)。
 func (p *DigestPipeline) SetEmbeddingResolver(r func(userID int64) EmbeddingProvider) {
@@ -92,9 +96,13 @@ func NewDigestPipeline(
 	llm PipelineLLM,
 	embedding EmbeddingProvider,
 	threshold int,
+	silenceGap time.Duration,
 ) *DigestPipeline {
 	if threshold <= 0 {
 		threshold = 20 // 攒批越大摊销越低,且更贴近"按对话段落"语义(§7 修订)
+	}
+	if silenceGap <= 0 {
+		silenceGap = digestDefaultSilenceGap
 	}
 	return &DigestPipeline{
 		maxBatchMessages: digestMaxBatchMessages,
@@ -106,6 +114,7 @@ func NewDigestPipeline(
 		llm:              llm,
 		embedding:        embedding,
 		threshold:        threshold,
+		silenceGap:       silenceGap,
 	}
 }
 
@@ -164,12 +173,17 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 		// 消息可能被清理:直接推进水位避免死循环
 		return p.watermarkRepo.Upsert(userID, toID)
 	}
-	// 积压分块(M5.1 硬化):首次沉淀/长期停用后的全量积压,不把巨包打给 LLM。
-	// 每轮只沉淀一块,水位推进到块尾,下一轮继续。
-	if len(messages) > p.maxBatchMessages {
-		messages = messages[:p.maxBatchMessages]
-		toID = messages[len(messages)-1].ID
+	// 延批切分(M8.1 §14.2.1):批尾收在段落边界(相邻非 report 消息间隔 ≥ silenceGap),
+	// 优先段落边界、其次块上限;无边界且未达上限 → 尾部悬挂,水位不动,
+	// 等下次出现静默间隔或累计顶到上限时一并沉淀(宁可延迟,不切碎话题)。
+	n := selectBatchCount(messages, p.threshold, p.maxBatchMessages, p.silenceGap)
+	if n == 0 {
+		return nil // 尾部悬挂:预期行为,非缺陷(§14.5 #1)
 	}
+	if n < len(messages) {
+		messages = messages[:n]
+	}
+	toID = messages[len(messages)-1].ID
 	transcript := buildTranscript(messages)
 	// 对账式输入(M6):世界观快照 + 新增对话——LLM 必须看到已有事项才能增量更新
 	userPayload := p.buildWorldViewSnapshot(userID) + "\n\n" + transcript
@@ -253,6 +267,52 @@ func (p *DigestPipeline) endAuditTask(taskID int64, status, artifact, errMsg str
 		logger.WarnWithFields("memory: 沉淀留痕收尾失败",
 			zap.Int64("task_id", taskID), zap.Error(err))
 	}
+}
+
+// selectBatchCount 延批切分(§14.2.1):返回本批应收口的消息条数,0=尾部悬挂不收口。
+//
+//   - 扫描窗口上限 maxBatch(超出部分留待下一轮积压分块);
+//   - 段落边界:相邻两条**非 report** 消息的时间间隔 ≥ silenceGap——report 由后台任务
+//     异步回填(16-路线图 §5.5),落库时间晚于逻辑归属 Turn,不得参与间隔判定;
+//   - 取窗口内**最后一个**满足"批尾 ≥ threshold"的边界收口(批尾落段落边界,摊销最大);
+//   - 无此类边界:窗口打满 maxBatch(积压分块)→ 无条件收口 maxBatch;否则悬挂返回 0。
+func selectBatchCount(messages []*conversation.Message, threshold, maxBatch int, silenceGap time.Duration) int {
+	if silenceGap <= 0 {
+		// 无边界逻辑(旧契约):整窗收口。供"不测切分"的调用方与测试显式关闭。
+		if len(messages) > maxBatch {
+			return maxBatch
+		}
+		return len(messages)
+	}
+	window := messages
+	if len(window) > maxBatch {
+		window = window[:maxBatch]
+	}
+	n := lastSilenceBoundary(window, threshold, silenceGap)
+	if n == 0 && len(messages) > maxBatch {
+		return maxBatch
+	}
+	return n
+}
+
+// lastSilenceBoundary 找窗口内最后一个段落边界(返回批尾条数,1-based;无则 0)。
+func lastSilenceBoundary(messages []*conversation.Message, threshold int, silenceGap time.Duration) int {
+	last := 0
+	prevNonReport := -1
+	for i := range messages {
+		if messages[i].Kind == conversation.KindReport {
+			continue // report 时间戳不可靠,不参与间隔判定(B1)
+		}
+		if prevNonReport >= 0 &&
+			messages[i].CreatedAt.Sub(messages[prevNonReport].CreatedAt) >= silenceGap &&
+			i >= threshold {
+			// 边界在 prevNonReport 与 i 之间:批尾收在 i-1(边界前最后一条),
+			// 夹在两者之间的 report 消息(异步回填,逻辑归属前段)随前段一并收口
+			last = i
+		}
+		prevNonReport = i
+	}
+	return last
 }
 
 // buildTranscript 把区间消息拼成 LLM 可读的对话原文。

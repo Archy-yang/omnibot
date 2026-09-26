@@ -68,6 +68,7 @@ memory:
   extraction:
     enabled: true
     batch_size: 20
+    silence_gap: "10m"   # M8.1:段落边界静默阈值,相邻消息间隔≥此值视为话题收尾(沉淀批尾落在此处)
 
   # 向量化服务(12-记忆系统技术方案 §5.3)
   # provider 留空 = 关闭语义检索,记忆检索降级为子串匹配(记忆照常存取)

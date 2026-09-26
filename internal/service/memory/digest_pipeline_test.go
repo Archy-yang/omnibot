@@ -89,7 +89,9 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 		llm,
 		nil, // embedding: 无向量也能落纪要
 		3,   // threshold
+		0,   // silenceGap:0 → 默认 10m
 	)
+	p.silenceGap = 0 // 本套测试聚焦对账逻辑,关闭切分边界(切分行为见 M8.1 专属测试)
 	return p, db, llm, source
 }
 
@@ -802,4 +804,164 @@ func TestWorldViewSnapshot(t *testing.T) {
 	require.Contains(t, snap, "十一旅行")
 	require.Contains(t, snap, "机票已订")
 	require.NotContains(t, snap, "旧租房", "非活跃事项不进快照")
+}
+
+// ---- M8.1 延批切分(12-记忆系统技术方案 §14.2.1) ----
+
+// msgSpec 消息种子规格:offsetSec=距基准时间的秒偏移;kind 空=普通/"report"=汇报。
+type msgSpec struct {
+	offsetSec int
+	kind      string
+}
+
+// seedMsgsAt 按时间规格种子消息(真实落 DB,同时挂 sourceMsgs 供 fake source 读取)。
+func seedMsgsAt(t *testing.T, db *gorm.DB, userID int64, specs []msgSpec) {
+	t.Helper()
+	base := time.Now().Add(-24 * time.Hour)
+	for i, s := range specs {
+		role := "user"
+		if s.kind == conversation.KindReport {
+			role = "assistant"
+		}
+		m := &conversation.Message{
+			UserID:    userID,
+			Role:      role,
+			Kind:      s.kind,
+			Content:   fmt.Sprintf("消息%d", i+1),
+			CreatedAt: base.Add(time.Duration(s.offsetSec) * time.Second),
+		}
+		if err := db.Create(m).Error; err != nil {
+			t.Fatalf("seed message: %v", err)
+		}
+		sourceMsgs = append(sourceMsgs, m)
+	}
+}
+
+// setupWithGap 构造指定 silenceGap 的管线(threshold=3)。
+func setupWithGap(t *testing.T, gap time.Duration) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *fakeConversationSource) {
+	t.Helper()
+	p, db, llm, source := pipelineSetup(t)
+	p.silenceGap = gap
+	return p, db, llm, source
+}
+
+func TestSelectBatchCount_SilenceBoundary(t *testing.T) {
+	// 5 条消息,第 4→5 条间隔 170s ≥ 60s → 批尾收在第 4 条(最后边界)
+	msgs := make([]*conversation.Message, 5)
+	base := time.Now()
+	for i := range msgs {
+		offset := time.Duration(i*10) * time.Second
+		if i == 4 {
+			offset = 200 * time.Second
+		}
+		msgs[i] = &conversation.Message{ID: int64(i + 1), CreatedAt: base.Add(offset)}
+	}
+	require.Equal(t, 4, selectBatchCount(msgs, 3, 40, 60*time.Second))
+}
+
+func TestSelectBatchCount_TailHang(t *testing.T) {
+	// 5 条消息全部紧凑,无边界 → 尾部悬挂(0),水位不动
+	msgs := make([]*conversation.Message, 5)
+	base := time.Now()
+	for i := range msgs {
+		msgs[i] = &conversation.Message{ID: int64(i + 1), CreatedAt: base.Add(time.Duration(i*10) * time.Second)}
+	}
+	require.Zero(t, selectBatchCount(msgs, 3, 40, 60*time.Second))
+}
+
+func TestSelectBatchCount_BoundaryBelowThresholdHangs(t *testing.T) {
+	// 唯一边界在第 2 条后(< threshold 3)→ 悬挂,不按小批收口
+	msgs := make([]*conversation.Message, 5)
+	base := time.Now()
+	for i := range msgs {
+		offset := time.Duration(i*10) * time.Second
+		if i == 2 {
+			offset = 300 * time.Second
+		}
+		if i == 3 {
+			offset = 310 * time.Second
+		}
+		if i == 4 {
+			offset = 320 * time.Second
+		}
+		msgs[i] = &conversation.Message{ID: int64(i + 1), CreatedAt: base.Add(offset)}
+	}
+	// 边界:1→2(10s),2→3(290s≥60s,批尾=2 < 3),3→4,4→4 紧凑 → 悬挂
+	require.Zero(t, selectBatchCount(msgs, 3, 40, 60*time.Second))
+}
+
+func TestSelectBatchCount_CapOverridesHang(t *testing.T) {
+	// 45 条紧凑消息:无边界但超出 40 上限 → 积压分块收口 40
+	msgs := make([]*conversation.Message, 45)
+	base := time.Now()
+	for i := range msgs {
+		msgs[i] = &conversation.Message{ID: int64(i + 1), CreatedAt: base.Add(time.Duration(i) * time.Second)}
+	}
+	require.Equal(t, 40, selectBatchCount(msgs, 3, 40, 60*time.Second))
+}
+
+func TestSelectBatchCount_CapWithBoundary(t *testing.T) {
+	// 50 条,第 22→23 条有大间隔 → 收口 22(优先段落边界,而非顶满 40)
+	msgs := make([]*conversation.Message, 50)
+	base := time.Now()
+	for i := range msgs {
+		offset := time.Duration(i) * time.Second
+		if i >= 22 {
+			offset += 300 * time.Second
+		}
+		msgs[i] = &conversation.Message{ID: int64(i + 1), CreatedAt: base.Add(offset)}
+	}
+	require.Equal(t, 22, selectBatchCount(msgs, 3, 40, 60*time.Second))
+}
+
+func TestSelectBatchCount_ReportSkippedInGap(t *testing.T) {
+	// Kind=report 的落库时间不可靠(异步回填,可晚于后续消息,§5.5),
+	// 间隔判定必须只看相邻非 report 消息:u@0,u@10,report@7200,u@20 → 无边界悬挂
+	base := time.Now()
+	msgs := []*conversation.Message{
+		{ID: 1, CreatedAt: base},
+		{ID: 2, CreatedAt: base.Add(10 * time.Second)},
+		{ID: 3, Kind: conversation.KindReport, CreatedAt: base.Add(2 * time.Hour)},
+		{ID: 4, CreatedAt: base.Add(20 * time.Second)},
+	}
+	require.Zero(t, selectBatchCount(msgs, 3, 40, 60*time.Second))
+
+	// 正例:u@0,u@10,report@15,u@300,u@310 → 非 report 相邻间隔 10→300 为边界,
+	// 批尾=第 3 条(report 随前段一并收口)
+	msgs2 := []*conversation.Message{
+		{ID: 1, CreatedAt: base},
+		{ID: 2, CreatedAt: base.Add(10 * time.Second)},
+		{ID: 3, Kind: conversation.KindReport, CreatedAt: base.Add(15 * time.Second)},
+		{ID: 4, CreatedAt: base.Add(300 * time.Second)},
+		{ID: 5, CreatedAt: base.Add(310 * time.Second)},
+	}
+	require.Equal(t, 3, selectBatchCount(msgs2, 3, 40, 60*time.Second))
+}
+
+func TestDigestPipeline_TailHangNoProgress(t *testing.T) {
+	// 积压 ≥ threshold 但无静默边界、未达上限 → 悬挂:不调 LLM、水位不动(§14.5 #1)
+	p, db, llm, source := setupWithGap(t, time.Hour)
+	seedPipelineMessages(t, db, 42, 4)
+	source.latest = 4
+
+	require.NoError(t, p.RunOnce(context.Background(), 42))
+	require.Zero(t, llm.calls, "悬挂批不应调 LLM")
+	var wmCount int64
+	db.Model(&memorydomain.DigestWatermark{}).Count(&wmCount)
+	require.Zero(t, wmCount, "悬挂批不应推进水位")
+}
+
+func TestDigestPipeline_SilenceBoundaryAdvancesWatermark(t *testing.T) {
+	// 4 条消息,第 3→4 条间隔 ≥ 静默阈值 → 只沉淀前 3 条,水位=第 3 条 ID
+	p, db, llm, source := setupWithGap(t, time.Minute)
+	seedMsgsAt(t, db, 42, []msgSpec{
+		{offsetSec: 0}, {offsetSec: 10}, {offsetSec: 20}, {offsetSec: 300},
+	})
+	source.latest = 4
+
+	require.NoError(t, p.RunOnce(context.Background(), 42))
+	require.Equal(t, 1, llm.calls)
+	var wm memorydomain.DigestWatermark
+	require.NoError(t, db.Where("user_id = ?", 42).First(&wm).Error)
+	require.Equal(t, int64(3), wm.LastDigestMsgID, "水位=批尾(段落边界处)")
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -143,8 +144,9 @@ type EmbeddingAPIConfig struct {
 
 // ExtractionConfig 记忆提取配置
 type ExtractionConfig struct {
-	Enabled   bool `mapstructure:"enabled"`
-	BatchSize int  `mapstructure:"batch_size"`
+	Enabled    bool          `mapstructure:"enabled"`
+	BatchSize  int           `mapstructure:"batch_size"`
+	SilenceGap time.Duration `mapstructure:"silence_gap"` // M8.1:段落边界静默阈值,空/0 → 默认 10m
 }
 
 // StorageConfig 记忆存储配置

@@ -158,6 +158,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			})},
 			memoryEmbedding,
 			digestThreshold,
+			cfg.Memory.Extraction.SilenceGap, // M8.1:段落边界静默阈值(0 → 管线默认 10m)
 		)
 		digestPipeline.SetEmbeddingResolver(embeddingResolver.ResolveEmbeddingProvider)
 		// 留痕(M5.3):task+step 可观测,静默不进回执;留痕失败管线自动降级为仅日志
