@@ -76,25 +76,33 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 		"推算",
 		"沿用历史编号",
 		"当场穿帮",
-		// B2 直调/派活边界(2026-09-25:游玩规划被主 Agent 连查带算直调,未派活)
-		"多步检索、跨来源汇总",
+		// 判断原则(2026-10-07 重构:由场景枚举改为「能力+量级」两问,枚举追不上能力演进——
+		// 先是游玩规划被直调,后是计算请求被答"没有python环境",都是枚举漏项)
+		"先问能力,再问量级",
+		"单点查询",
+		"你没有的执行能力",
+		"你自己没有代码执行能力",
+		"替它宣布无能",
+		"多步检索跨来源汇总",
 		"即使手上连接器工具能查",
-		"什么时候不派",
+		"直调的样子",
+		"派活的样子",
 		"查个天气",
+		"拿不准时回到上面两问重新判断",
 		// 派活自检 + 例子(2026-09-25 二次漏派:餐饮追问被 10 连发 mcp_call 直调)
 		"派活自检",
 		"追问不豁免",
-		"并发一次发多个查询也算多处",
+		"并发一次发多个查询也算",
 		"对照感受量级",
 	} {
 		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少关键句 %q", want)
 	}
 	// 铁律必须是规则体的第一段(优先级最高,不允许被其他段落稀释)
 	first := strings.Index(MainDelegationRulesPrompt, "【铁律")
-	second := strings.Index(MainDelegationRulesPrompt, "【什么时候派】")
+	second := strings.Index(MainDelegationRulesPrompt, "【判断原则")
 	require.NotEqual(t, -1, first)
 	require.NotEqual(t, -1, second)
-	assert.Less(t, first, second, "铁律段必须位于「什么时候派」之前")
+	assert.Less(t, first, second, "铁律段必须位于「判断原则」之前")
 }
 
 // TestMainResponseStylePrompt_ButlerVoice 表达方式守护:管家口吻、不叙述工具调用过程
