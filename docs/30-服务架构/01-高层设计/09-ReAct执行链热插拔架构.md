@@ -46,10 +46,13 @@ ReActAgent.RunStream (纯推理循环,~90行)
   └── 在固定切点调 hooks 链                                              ← 机制,可插拔
 
 hook 链 (RoundHook 接口, 4 切点):
-  ├── BeforeRound      链式过滤  -> CircuitBreakerHook(移除已禁工具)
+  ├── BeforeRound      链式过滤  -> CircuitBreakerHook(移除已禁工具) / ToolBudgetHook(预算耗尽移除全部工具)
   ├── OnLLMResult      预留      -> (当前无内置实现,审计/拦截扩展点)
   ├── OnToolExecute    短路拦截  -> CircuitBreakerHook(拦截已禁工具)
   └── OnMaxExhausted   取首个非空 -> ForceSummaryHook(无工具 LLM 汇总)
+
+子 Agent 额外装配:ToolBudgetHook(工具调用总数硬上限) + NoteInjectionHook(running 态
+update_task 补充信息注入,见 sub_agent_runner.go)
 
 Runtime(共享状态): Ctx / Messages / Tools / FailStreak / FinalAnswer / Emit / Step
 ```
@@ -207,12 +210,12 @@ svc := NewAgentService(AgentServiceConfig{
 
 子 Agent 后台跑,熔断+汇总是必要硬约束(抑制循环 + 兜底出报告)。
 
-### 6.2 主 Agent(`routes.go`)
+### 6.2 主 Agent(`internal/api/wire.go`,显式 DI 装配点)
 
 ```go
-agentSvc := NewAgentService(AgentServiceConfig{
+agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
     ...
-    Hooks: []RoundHook{
+    Hooks: []agentpkg.RoundHook{
         agentpkg.NewCircuitBreakerHook(agentpkg.ToolFailureThreshold),
         agentpkg.NewForceSummaryHook(agentLLMClient),
     },
@@ -220,6 +223,9 @@ agentSvc := NewAgentService(AgentServiceConfig{
 ```
 
 主 Agent 同样装配(MaxSteps 兜底不吐废话)。
+
+> 注:装配点已由早期 `routes.go` 迁至 `wire.go`(显式 DI 重构);子 Agent 装配在
+> `sub_agent_runner.go` 内(见 §6.1 注记)。
 
 ### 6.3 配置链路
 
@@ -236,6 +242,8 @@ internal/service/agent/
 ├── agent_runtime.go          Runtime + RoundHook 接口 + hookChain + noopRoundHook
 ├── circuit_breaker_hook.go   CircuitBreakerHook(熔断)
 ├── force_summary_hook.go     ForceSummaryHook(强制汇总)
+├── tool_budget_hook.go       ToolBudgetHook(子 Agent 工具调用总数上限)
+├── note_injection_hook.go    NoteInjectionHook(子 Agent notes 注入)
 ├── tool_breaker_filter_test.go  filterToolsByCircuitBreaker helper + 单测(熔断过滤)
 ├── agent_runtime_test.go     hook 链组合规则单测
 ├── circuit_breaker_hook_test.go  熔断 hook 单测

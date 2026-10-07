@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 |----|------|
-| 版本 | v1.0(框架第一版) |
-| 状态 | 🟡 设计中(待开发) |
+| 版本 | v1.1(框架第一版 v1.0 + 去角色化/能力白名单/汇报锚定/WS 推送修订) |
+| 状态 | 🟢 已落地(全链路运行中;Task Runtime 可靠性演进——CAS/Control Signal/事件事务化——见 [16-路线图](./16-架构迭代路线图-V1-对话与上下文演进.md) Phase 5/6/7a) |
 | 决策 | 完整异步任务 + C 延迟汇报 + 框架配 1 示例子 Agent |
 | 关联 | 路线图 v3.0「统一异步任务抽象」/ v1.5.4 消息表预留「异步任务独立表」 |
 
@@ -121,18 +121,25 @@ type AgentTask struct {
 
 状态机:`pending -> running -> completed | failed`。`reported` 独立 bool,completed 后等主 Agent 汇报才置 true。
 
+> 注(Phase 5 落地修订):正式状态机增 `input_required`(子 Agent 要输入)与 `cancelled`,
+> 并含 `pending→failed`(启动期 panic 落终态防僵尸)。所有迁移走 CAS(`UPDATE...WHERE status=from`),
+> 唯一事实源为 `internal/domain/agent` 合法迁移表。详见 16 号路线图 Phase 5/7a。
+
 ### 3.3 委托调用协议
 
-主 Agent 通过 **delegate 工具**(Function Calling)派活,工具参数:
+主 Agent 通过 **delegate 工具**(Function Calling)派活,工具参数(去角色化后:goal 必填,
+sub_agent_type 必填已废除;可选 persona_hint 作任务级角色提示):
 ```json
 {
-  "sub_agent_type": "researcher",
-  "goal": "研究 2026 年 Go 1.24 的新特性,总结要点"
+  "goal": "研究 2026 年 Go 1.24 的新特性,总结要点",
+  "deliverables": ["要点清单(≤10条)"],
+  "completion_criteria": ["每条要点附官方链接"],
+  "persona_hint": "严谨的技术调研员"
 }
 ```
 delegate 工具 Execute **立即返回**(异步):
 ```json
-{"task_id": 123, "status": "pending", "message": "已安排研究员处理,稍后汇报"}
+{"task_id": 123, "status": "pending", "message": "已安排后台处理,稍后汇报"}
 ```
 主 Agent LLM 收到这个工具结果,生成自然语言确认回用户("好的,我让研究员去查一下 Go 1.24 新特性,稍后告诉你")。
 
@@ -160,8 +167,9 @@ delegate 工具 Execute **立即返回**(异步):
 
 ### 4.1 Domain 层
 
-- `internal/domain/agent/sub_agent_card.go` -- SubAgentCard
+- ~~`internal/domain/agent/sub_agent_card.go` -- SubAgentCard~~(**v1.10 已删**,见 §5.7)
 - `internal/domain/agent/agent_task.go` -- AgentTask + 状态常量 + TableName
+- `internal/domain/agent/task_spec.go` -- TaskSpec(Goal/Deliverables/Criteria/Background/Constraints/PersonaHint/Type)
 
 ### 4.2 Repository 层
 
@@ -175,10 +183,10 @@ delegate 工具 Execute **立即返回**(异步):
 
 ### 4.3 Service 层
 
-- `internal/service/agent/registry.go` -- SubAgentRegistry:注册/查询 SubAgentCard
+- ~~`internal/service/agent/registry.go` -- SubAgentRegistry~~(**v1.10 已删**,见 §5.7)
 - `internal/service/agent/sub_agent_service.go` -- SubAgentService:
-  - `StartTask(ctx, userID, subAgentType, goal) (taskID, error)` -- 建任务 + 起 goroutine 执行
-  - `executeTask(task)` -- 私有:用子 Agent 的 prompt+工具跑 AgentService.Run,写 Artifact
+  - `StartTask(ctx, userID, taskSpec, source, notifyTarget) (taskID, error)` -- 建任务 + 起执行(不再校验角色注册)
+  - `executeTask(task)` -- 私有:用任务合同跑 AgentService.Run,写 Artifact
   - `GetCompletedUnreported(userID)` -- 供主 Agent 前置查询
   - `MarkReported(taskID)` -- 汇报后标记
 
@@ -216,10 +224,10 @@ web `HandleSendMessageAgentStream` / 飞书 `HandleInbound`:
 轮询是主路径(用户不用发消息也能收到汇报),前置查兜底防漏(轮询间隙用户发消息时也能汇报)。
 两者都靠 `Reported` 字段去重,不会重复汇报。
 
-### 4.6 装配(routes.go)
+### 4.6 装配(`internal/api/wire.go`,显式 DI)
 
-- 建 `agentTaskRepo` + `subAgentRegistry` + `subAgentSvc`
-- 注册示例子 Agent "researcher"(prompt/角色;工具由能力白名单裁剪,见 §5.6)
+- 建 `agentTaskRepo` + `subAgentSvc`(无 registry;角色卡已删)
+- 子 Agent 工具可见性由能力白名单裁剪(§5.6,config 驱动)
 - delegate 工具加入主 Agent toolRegistry
 - subAgentSvc 注入主 Agent handler(前置汇报兜底用)
 - 新增路由:`GET /api/v1/agent/tasks`(轮询)+ `POST /api/v1/agent/tasks/:id/report`(触发汇报)
@@ -326,7 +334,7 @@ delegate({
 2. **SubAgentService**:StartTask(建任务+起goroutine)/executeTask(跑子Agent写Artifact)/GetCompletedUnreported/MarkReported + 单测(mock Runner)
 3. **delegate 工具**:CreateDelegateTool(去 sub_agent_type,带 persona_hint/task_type) + 单测
 5. **主 Agent 前置汇报**:主对话流程改造(查未汇报任务+注入回执)+ 单测
-6. **装配 + 示例子 Agent**:routes.go 注册 researcher + 装配 subAgentSvc + delegate 工具
+6. **装配**:wire.go 装配 subAgentSvc + delegate 工具(去角色化后无示例卡注册)
 7. **回归 + 手测**:go test + 起后端真实派活验证(需真实 LLM)
 
 ---

@@ -68,12 +68,12 @@ PromptRegistry(注册中心, 进程内单例或按 AgentService 装配)
   └── Assemble(c PromptCtx) -> 最终 system prompt(string)
 
 组装输入 PromptCtx
-  ├── Scopes  []ScopeKey   // 本次要谁喝: main / sub:researcher ...
+  ├── Scopes  []ScopeKey   // 本次要谁喝: main / sub ...
   └── Request map[string]string  // 本次运行动态数据: goal/deliverables/用户配置...
 
 消费方
   ├── 主 Agent : systemPrompt = registry.Assemble({Scopes:[main]})
-  └── 子 Agent : systemPrompt = registry.Assemble({Scopes:[sub:researcher], Request:{goal:...}})
+  └── 子 Agent : systemPrompt = registry.Assemble({Scopes:[sub], Request:{goal:...}})
 ```
 
 **关键边界**：`PromptRegistry` 只负责"产出最终的 system prompt 字符串"，不碰工具、不碰循环。`ReActAgent` / `AgentService` 依然消费 `SystemPrompt string`，改动只在**生产这个字符串的地方**。
@@ -91,8 +91,10 @@ PromptRegistry(注册中心, 进程内单例或按 AgentService 装配)
 type ScopeKey string
 
 const ScopeMain ScopeKey = "main" // 主 Agent
+const ScopeSub   ScopeKey = "sub"  // 子 Agent(通用执行器,去角色化后唯一 sub scope)
 
-// 子 Agent 用 ScopeKey("sub:" + card.Type),如 "sub:researcher"、"sub:xxx"。
+// SubScope 历史兼容:按角色卡派生子 scope("sub:"+type)。子 Agent 去角色化
+// (删 SubAgentCard/SubAgentRegistry)后新代码统一用 ScopeSub,SubScope 仅测试/历史用途保留。
 func SubScope(agentType string) ScopeKey { return ScopeKey("sub:" + agentType) }
 ```
 
@@ -198,7 +200,7 @@ Assemble(c PromptCtx):
 
 | section | Scope | Order | 内容来源 |
 |---------|:---:|:---:|----------|
-| `harness_identity` | 全局 | -100 | "你是全平台智能助手"（与子 Agent 共享） |
+| `agent_base` | main | -100 | 基础人格（`DefaultSystemPrompt`；子 Agent 侧另有 `agent_base`(sub) 同款共享，原 `harness_identity` 设计经去角色化后落为双 scope 各注册一份） |
 | `persona` | main | 0 | 管家定位（从 `defaultSystemPrompt` 扩容而来） |
 | `response_style` | main | -90 | 表达方式：管家口吻、直接给结果、不叙述工具调用过程（persona 层，恒装配） |
 | `delegation_rules` | main | 100 | 派活规则（**仅装配了子 Agent 时注册**） |
@@ -237,15 +239,19 @@ Assemble(c PromptCtx):
 
 **核心不变量**：迁移后，对同一配置产出的 system prompt **与现状逐字节一致**（金丝雀保证，防 prompt 回归）。
 
+> ✅ **本节迁移路线已执行完毕**。实际落点与原计划有一处不同：实现抽成了独立包
+> `internal/agentprompt/`（`prompt.go`/`main.go`/`sub.go`/`content.go`），而非
+> `internal/service/agent/prompt.go`——避免 service 层反向依赖。下表保留为迁移过程记录。
+
 | 步骤 | 动作 | 验收 |
 |------|------|------|
-| 1 | 新增 `internal/service/agent/prompt.go`：`ScopeKey` / `PromptCtx` / `PromptSection` / `PromptRegistry` | `go build ./...` 通过 |
+| 1 | 新增 prompt 基建（实际落 `internal/agentprompt/prompt.go`）：`ScopeKey` / `PromptCtx` / `PromptSection` / `PromptRegistry` | `go build ./...` 通过 |
 | 2 | 把 `MainAgentSystemPrompt` 的单条大串拆成上述 sections，写一个 `BuildMainAgentRegistry(hasSubAgents)` 组装 | 对 `hasSubAgents ∈ {true,false}`，`Assemble` 输出 == 现 `MainAgentSystemPrompt(...)` |
 | 3 | 把 `researcherSystemPrompt` 的 `{goal}` 改 `{{goal}}`，另立 `goal_details` section；`buildSubAgentPrompt` 改为走 `Assemble` | 对同一 `goal + 详情`，输出 == 现 `buildSubAgentPrompt` |
-| 4 | `routes.go` 用 registry 生产 `AgentServiceConfig.SystemPrompt`；`AgentService` 内部改为透传组装后的 string（ReAct 循环不动） | `service.go` 的 `runStreamWithClient` 仍消费 `SystemPrompt string`，**零变化** |
+| 4 | 装配点（时为 routes.go，现 wire.go）用 registry 生产 `AgentServiceConfig.SystemPrompt`；`AgentService` 内部改为透传组装后的 string（ReAct 循环不动） | `service.go` 的 `runStreamWithClient` 仍消费 `SystemPrompt string`，**零变化** |
 | 5 | 删 `MainAgentSystemPrompt` / `buildSubAgentPrompt` 旧实现（或在金丝雀测试通过后移除） | `grep` 无残留 |
 
-> 收益兑现点：第 5 步后，增删规则 = 注册/不注册一段 section；新增子 Agent 类型 = 注册 `sub_role` section；调整顺序 = 改 Order。主/子人格可共享 `harness_identity`。
+> 收益兑现点：第 5 步后，增删规则 = 注册/不注册一段 section；调整顺序 = 改 Order。主/子基础人格共享（`agent_base` 各 scope 注册一份，原设计名 `harness_identity`）。
 
 ---
 
@@ -269,7 +275,7 @@ Assemble(c PromptCtx):
 
 1. 主/子 Agent prompt 由 `PromptRegistry.Assemble` 唯一产出，无第二处拼接。
 2. 金丝雀测试证明迁移后输出与现状逐字节一致，prompt 零回归。
-3. 主/子共享 `harness_identity` section，主/子各自 scope 差异化。
+3. 主/子共享基础人格 section（`agent_base`，各 scope 一份），主/子各自 scope 差异化。
 4. `hasSubAgents` 布尔从 prompt 装配路径移除，由 `Has(...)` 取代。
 5. 新加/删一段 prompt 规则只动注册点，不改 ReAct 循环。
 6. `go build ./...` + `go test ./...` 全绿（既有 auth 抖动另计，与本方案无关）。
@@ -281,7 +287,7 @@ Assemble(c PromptCtx):
 - **ToolProviderResult ✅ 已落地（v1.10）**：工具可见集按 `内部/service/agent/tool_provider.go` 裁剪，与 prompt scope 概念对齐——但裁剪轴取**工具自身能力标签 ∩ config 白名单**，非角色卡固定列表（DSH 的 knownNames/schemas 分离：knownNames=框架能力词汇表判定配错，visible=能力命中+request_input 基线）。详见 08 框架文档 §5.x。
 - **生命周期 / 事件**：是否需要 Cordis 那套"注册即 disposer + change 事件"，取决于是否要多 Agent 动态装配；本期以纯 registry 起步。
 - **持久化快照**：DSH 用 `PromptContext` 物化动态上下文快照、变更才记日志，供复盘/审计，可后续引入。
-- **记忆索引 section（规划中）**：高级记忆系统将把「最近 10 条记忆全文注入」收敛为「top-N 记忆索引」常驻 section（数据来源与设计见《[12-记忆系统技术方案](12-记忆系统技术方案.md)》§6.5），落地时在本方案注册对应 section（M3 期）。
+- **记忆索引 section（已由 hook 形态实现）**：常驻注入现为「手动记忆全量 ∪ 置顶自动记忆」（M8.3，见《[12-记忆系统技术方案](12-记忆系统技术方案.md)》§6.5/§14.2.4），非 top-N 索引；实现走 `note_injection_hook`（非本方案 prompt section 形态）。若未来需要动态 section 化，注册点在本方案的 registry。
 
 ---
 

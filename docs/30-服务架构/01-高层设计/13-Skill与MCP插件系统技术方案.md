@@ -12,8 +12,8 @@
 |----|------|
 | 版本 | v1.2 |
 | 状态 | 已确认（2026-09-04;2026-09-25 正名修订;2026-09-25 MCP 客户端迁移官方 go-sdk） |
-| PRD | [插件系统PRD-v1.0](../../20-产品PRD/in_progress/插件系统PRD-v1.0.md) |
-| 上游规划 | [15-后续能力演进规划.md](./15-后续能力演进规划.md) 阶段 3 / 阶段 4 |
+| PRD | [插件系统PRD-v1.0](../../20-产品PRD/completed/插件系统PRD-v1.0.md) |
+| 上游规划 | [15-后续能力演进规划(已归档)](../02-历史归档/15-后续能力演进规划.md) 阶段 3 / 阶段 4 |
 | 前置 | 08-后台Agent任务框架（能力白名单已落地）、11-Prompt管理 |
 
 ---
@@ -33,22 +33,22 @@
 
 | 已具备 | 位置 | 本方案的用法 |
 |--------|------|--------------|
-| `Tool` 统一接口 + `ToolRegistry` | `service/agent/tool.go` | 不动，skill 是它的"上游供货商" |
-| 能力标签 + 白名单解析 | `tool_provider.go` | skill 携带 capabilities，原样下传 |
+| `Tool` 统一接口 + `ToolRegistry` | `internal/pkg/toolcore`（43a96e9 下沉的中立包，agent/tool/mcp 共同依赖） | 不动，ToolService 是它的"上游供货商" |
+| 能力标签 + 白名单解析 | `service/agent/tool_provider.go` | 工具携带 capabilities，原样下传 |
 | 工具熔断/预算 hook | `tool_budget_hook.go` 等 | 按 tool name 生效，MCP 工具自动纳管 |
-| PromptRegistry | `agentprompt/` | 不动（本期不做提示词型 skill） |
-| AES 加密（用户 LLM key 先例） | `service/user` | M2 密钥处理沿用同一模式 |
+| PromptRegistry | `internal/agentprompt/` | 不动（本期不做提示词型 skill） |
+| AES 加密（用户 LLM key 先例） | `service/user` | MCP 密钥处理沿用同一模式 |
 
-## 3. 总体设计
+## 3. 总体设计（2026-09 正名后现行版）
 
 ```
-                    ┌─────────────── SkillService（调度中枢）───────────────┐
-                    │                                                      │
-   定义来源 A        │  skills 表（定义+启停,单一事实源）      定义来源 B      │
-   builtin 执行体注册表◄── 启动时 seed/upsert                  MCP client ───┤ (M2)
-   (Go func,代码内)  │                                                      │  ListTools → upsert
-                    ▼                                                      ▼
-            BuildRegistries():  enabled ∧ executor 可用 的 skill → Tool
+                    ┌─────────────── ToolService（调度中枢）────────────────┐
+                    │                                                       │
+   定义来源 A        │  tools 表（builtin 定义+启停,单一事实源）  来源 B       │
+   builtin 执行体注册表◄── 启动时 SeedBuiltins upsert        MCP 连接器 ─────┤
+   (Go 工厂,代码内)  │   (MCP 工具目录内存化,不入 tools 表)     (service/mcp) │  ListTools →
+                    ▼                                        MCPToolCatalog ▼ (进程内缓存)
+            ApplyTo():  enabled ∧ executor 可用 的 tool → Tool(toolcore.Tool)
                     │
         ┌───────────┴───────────┐
         ▼                       ▼
@@ -56,54 +56,54 @@
   (主 Agent,含框架工具)     (子 Agent 池,能力白名单裁剪)
 ```
 
-核心原则：
+核心原则（现行实现口径）：
 
-1. **skill = 定义（数据）+ 执行体（代码/协议）**。定义统一落 `skills` 表；执行体两类——`builtin`（Go 闭包）与 `mcp`（远程调用）。
-2. **框架工具不 skill 化**：`request_input`/`delegate`/`query_task`/`update_task` 是 Agent 的生存依赖（PRD 4.1"不可停用"），保持硬编码，不入 skills 表、不出现在清单里。
-3. **执行体不可用 → 技能隐藏**：如 MCP server 断连，该 skill 不进 registry（而非进了但必失败），助手口径为"没有这个技能"。
-4. **单一事实源**：运行时 registry 一律由 SkillService 构建，装配点不再逐个注册能力工具。
+1. **tool = 定义（数据）+ 执行体（代码/协议）**。**内置工具**定义统一落 `tools` 表（发版即
+   seed 更新）；**MCP 工具目录内存化**（`mcp_catalog.go` 的 `MCPToolCatalog`，按 server 整目录
+   同步重建+向量化，不入库）——两者最终都汇聚为 `toolcore.Tool` 进运行时 registry。
+2. **框架工具不 tool 化**：`request_input`/`delegate`/`query_task`/`update_task` 是 Agent 的生存依赖
+   （PRD 4.1"不可停用"），保持硬编码，不入 tools 表、不出现在清单里。
+3. **执行体不可用 → 工具隐藏**：`ToolView.Available=false` 时不进运行时 registry（而非进了但必
+   失败），助手口径为"没有这个工具"。
+4. **单一事实源**：运行时 registry 一律由 ToolService 构建与重建（`ApplyTo`），装配点不逐个注册
+   能力工具。
+5. **MCP 调用收敛为单工具**：主 Agent 侧暴露 `mcp_call`(B2 按需加载——每轮按问题语义匹配相关
+   MCP 工具注入上下文)，而非把每个 MCP 工具平铺成独立 function。
 
 ## 4. 数据模型
 
-`internal/domain/skill/skill.go`：
+`internal/domain/tool/tool.go`（原 `domain/skill/skill.go`，2026-09-25 正名迁移）：
 
 ```go
-type Skill struct {
-    ID          int64  `gorm:"primaryKey"`
-    Name        string `gorm:"uniqueIndex;size:64"`   // 工具名(即 ToolRegistry key)
-    DisplayName string `gorm:"size:64"`               // 面向用户的中文名
-    Description string                                // 给 LLM 的描述
-    Source      string `gorm:"size:16;index"`         // builtin / mcp
-    ExecutorKey string `gorm:"size:64"`               // builtin:执行体注册表 key;mcp:server 内工具名
-    Capabilities string `gorm:"size:128"`             // 逗号分隔,如 "research,web"
-    ParamsSchema string `gorm:"type:text"`            // JSON Schema 字符串
-    Enabled     bool
-    MCPServerID *int64 `gorm:"index"`                 // source=mcp 时指向所属 server
+type Tool struct {
+    ID           int64  `gorm:"primaryKey;autoIncrement"`
+    Name         string `gorm:"uniqueIndex;size:64;not null"` // 工具名(ToolRegistry key)
+    DisplayName  string `gorm:"size:64"`                      // 面向用户的中文名
+    Description  string `gorm:"type:text"`                    // 给 LLM 的描述
+    Capabilities string `gorm:"size:128"`                     // 逗号分隔,如 "research,web"
+    ParamsSchema string `gorm:"type:text"`                    // JSON Schema 字符串
+    Enabled      bool   `gorm:"not null"`                     // 用户启停(builtin seed 不覆盖)
+    MainVisible  bool   `gorm:"not null"`                     // 是否进主 Agent 池(false=子 Agent 专属)
     CreatedAt / UpdatedAt
-}
-
-// M2:
-type MCPServer struct {
-    ID       int64
-    Name     string `gorm:"uniqueIndex;size:64"`
-    BaseURL  string
-    APIKey   string  // AES 加密存储(沿用 user_llm_configs 的加密模式)
-    Enabled  bool
 }
 ```
 
+MCP server 配置见 §6（M3 起在线配置，`domain/mcp.MCPServer` 落库，密钥 AES 加密）；
+MCP **工具**不落库（内存目录，随连接同步）。
+
 约束：
 
-- `Name` 全局唯一（builtin 与 mcp 冲突时：MCP 工具重名 → 加载失败该条并在日志告警，不覆盖内置）。
-- `ParamsSchema` 存 JSON 字符串，运行时 `json.Unmarshal` 为 `map[string]interface{}`；非法 schema 的 skill 视为执行体不可用（隐藏 + 告警）。
-- seed 语义：启动时以代码内 builtin 定义 `upsert`（按 Name，更新描述/schema/capabilities，**不碰 Enabled**——用户启停状态优先于发版）。
+- `Name` 全局唯一（builtin 与 MCP 冲突时：MCP 工具重名 → 加载失败该条并在日志告警，不覆盖内置）。
+- `ParamsSchema` 存 JSON 字符串，运行时 `json.Unmarshal`；非法 schema 视为执行体不可用（隐藏 + 告警）。
+- seed 语义：启动时以代码内 builtin 定义 `upsert`（`SeedBuiltins`，按 Name 更新描述/schema/
+  capabilities，**不碰 Enabled**——用户启停状态优先于发版）。
 
-## 5. M1：skill 抽象
+## 5. M1：tool 抽象（原"skill 抽象"，正名）
 
 ### 5.1 执行体注册表（实现按 builder 模式落地）
 
 > 实现细化（相对草案）：未新建独立的 ExecutorRegistry——**现有 `agent.CreateXXXTool()` 工厂本身就是
-> builder**（`func() agent.Tool`，定义+执行体同源），`SkillService.RegisterBuiltin(builder)` 直接注册。
+> builder**（`func() agent.Tool`，定义+执行体同源），`ToolService.RegisterBuiltin(builder)` 直接注册。
 > 定义以代码为准（发版即更新，无漂移窗口），DB 定义列仅存档/展示。避免了两处定义的同步负担。
 
 ```go
@@ -115,37 +115,41 @@ type ToolBuilder func() agentpkg.Tool
 另引入 `MainVisible` 标记（草案遗漏）：主 Agent 工具集刻意不含抓取类（方向 B：管家不亲自抓网页，
 联网必须 delegate），skill 需要携带"是否进主 Agent 池"的信息，否则 skill 化会破坏该设计。
 
-### 5.2 SkillService
+### 5.2 ToolService（原 SkillService，正名迁移）
 
-`internal/service/skill/skill_service.go`：
+`internal/service/tool/tool_service.go`：
 
 ```go
-type SkillService struct {
-    repo      SkillRepository
-    executors *ExecutorRegistry
-    mu        sync.RWMutex
+type ToolService struct {
+    repo       ToolRepository   // 窄接口,UpsertBuiltin/List/SetEnabled...
+    builders   map[string]ToolBuilder
+    main, global *toolcore.ToolRegistry // BindRegistries 绑定
+    mu           sync.RWMutex
 }
-func (s *SkillService) SeedBuiltins(defs []BuiltinDef) error          // 启动 upsert
-func (s *SkillService) List() ([]SkillView, error)                    // 含 source/enabled
-func (s *SkillService) SetEnabled(name string, enabled bool) error
-func (s *SkillService) BuildRegistries() (main, global *agent.ToolRegistry, err error)
+func (s *ToolService) RegisterBuiltin(builder ToolBuilder)          // 默认主 Agent 可见
+func (s *ToolService) RegisterBuiltinSubOnly(builder ToolBuilder)   // 子 Agent 专属
+func (s *ToolService) BindRegistries(main, global *toolcore.ToolRegistry) error
+func (s *ToolService) SeedBuiltins() error                          // 启动 upsert(按注册表 seed)
+func (s *ToolService) List() ([]ToolView, error)                    // name/description/enabled/available
+func (s *ToolService) SetEnabled(name string, enabled bool) error
+func (s *ToolService) ApplyTo(main, global *toolcore.ToolRegistry) error // 幂等重建
 ```
 
-`ApplyTo`（实现命名）幂等重建规则：对技能名集合——先从两池移除，再把 `Enabled ∧ 执行体可用` 的加回
-（`MainVisible=false` 的只进 global 池）；不碰注册在池里的框架工具（名字不属于技能集，天然不受影响）。
+`ApplyTo` 幂等重建规则：对工具名集合——先从两池移除，再把 `Enabled ∧ 执行体可用` 的加回
+（`MainVisible=false` 的只进 global 池）；不碰注册在池里的框架工具（名字不属于工具集，天然不受影响）。
 `ToolRegistry` 已加 RWMutex 并发安全（Agent 执行链读 registry 与启停重建并发）。
 `SetEnabled` 落库后立即 ApplyTo 已绑定的 registry——停用即时生效，无需重启。
 
-### 5.3 API
+### 5.3 API（原 `/api/v1/skills`，正名迁移）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/skills` | 清单：name/display_name/description/source/enabled（不含 schema 细节） |
-| PUT | `/api/v1/skills/:name` | body `{enabled: bool}`，生效即时重建 registry |
+| GET | `/api/v1/tools` | 清单：name/display_name/description/enabled/available（不含 schema 细节） |
+| PUT | `/api/v1/tools/:name` | body `{enabled: bool}`，生效即时重建 registry |
 
 ### 5.4 前端
 
-SettingsDrawer 新增「技能」tab：技能清单（名称/说明/来源徽标/开关）。来源徽标 builtin=「内置」；M2 起 mcp 显示所属服务名。
+SettingsDrawer「工具」区：工具清单（名称/说明/来源徽标/开关）。来源徽标 builtin=「内置」；MCP 工具经 `mcp_call` 调度，不逐个出现在清单。
 
 ## 6. M2：MCP 客户端
 
@@ -154,8 +158,8 @@ SettingsDrawer 新增「技能」tab：技能清单（名称/说明/来源徽标
 **M3 修订**：MCP server 配置从 config.yaml 迁移到 **数据库（`mcp_servers` 表）**，Web 端「技能」抽屉在线增删改查——兑现 PRD 4.2 的完整形态。config.yaml 的 `mcp.servers` 段降级为**首次启动 seed**（库空且有配置时导入一次，加密落库，此后 DB 为唯一事实源）。
 
 - APIKey **AES 加密落库**（`crypto.Encrypt`，密文带 `enc:` 前缀），接口只回显 `has_api_key` 布尔；更新时空 key = 保留原值。
-- 增/改/删 server **立即同步**（连接 → ListTools → 落 skills 表/清技能行），无需重启；同步失败以 `SyncResult.Err` 可读返回，不阻断保存。
-- 停用 server（enabled=false）= 不连接 + 执行体移除（技能隐藏）；删除 server 级联删其技能行。
+- 增/改/删 server **立即同步**（连接 → ListTools → 重建内存工具目录），无需重启；同步失败以 `SyncResult.Err` 可读返回，不阻断保存。
+- 停用 server（enabled=false）= 不连接 + 执行体移除（工具隐藏）；删除 server 级联清其目录。
 - API：`GET/POST /api/v1/mcp/servers`、`PUT/DELETE /api/v1/mcp/servers/:id`、`POST /api/v1/mcp/servers/:id/sync`。
 
 ```yaml
