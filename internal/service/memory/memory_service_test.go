@@ -30,6 +30,13 @@ type mockMemoryRepository struct {
 	deletedIDUser    int64
 	deleteByIDResult bool
 	deleteByIDErr    error
+	// loop 状态迁移桩(SetLoopStatus 测试用)
+	loopTransitionID     int64
+	loopTransitionUserID int64
+	loopTransitionFrom   string
+	loopTransitionTo     string
+	loopTransitionOK     bool
+	loopTransitionErr    error
 	updatedID        int64
 	deletedUserID    int64
 	deletedSource    string
@@ -60,8 +67,12 @@ func (m *mockMemoryRepository) ListOpenLoops(int64, int) ([]*memorydomain.Memory
 	return nil, nil
 }
 
-func (m *mockMemoryRepository) TransitionLoopStatus(int64, int64, string, string) (bool, error) {
-	return false, nil
+func (m *mockMemoryRepository) TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error) {
+	m.loopTransitionID = id
+	m.loopTransitionUserID = userID
+	m.loopTransitionFrom = fromStatus
+	m.loopTransitionTo = toStatus
+	return m.loopTransitionOK, m.loopTransitionErr
 }
 
 func (m *mockMemoryRepository) ListPinnedAutoByUserID(int64) ([]*memorydomain.Memory, error) {
@@ -306,4 +317,49 @@ func (m *mockMemoryRepository) DeleteByUserIDAndSource(userID int64, source stri
 	m.deletedUserID = userID
 	m.deletedSource = source
 	return nil
+}
+
+// ---- SetLoopStatus 管理面手动关闭/重开(架构复评 E3/§14.2.2 逃生口) ----
+
+func TestMemoryService_SetLoopStatus_Close(t *testing.T) {
+	repo := &mockMemoryRepository{loopTransitionOK: true}
+	service := NewMemoryService(repo, nil, nil, nil)
+
+	ok, err := service.SetLoopStatus(context.Background(), 42, 7, memorydomain.MemoryLoopStatusClosed)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, int64(7), repo.loopTransitionID)
+	assert.Equal(t, int64(42), repo.loopTransitionUserID)
+	assert.Equal(t, memorydomain.MemoryLoopStatusOpen, repo.loopTransitionFrom, "关闭走 open→closed")
+	assert.Equal(t, memorydomain.MemoryLoopStatusClosed, repo.loopTransitionTo)
+}
+
+func TestMemoryService_SetLoopStatus_Reopen(t *testing.T) {
+	repo := &mockMemoryRepository{loopTransitionOK: true}
+	service := NewMemoryService(repo, nil, nil, nil)
+
+	ok, err := service.SetLoopStatus(context.Background(), 42, 7, memorydomain.MemoryLoopStatusOpen)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, memorydomain.MemoryLoopStatusClosed, repo.loopTransitionFrom, "重开走 closed→open")
+	assert.Equal(t, memorydomain.MemoryLoopStatusOpen, repo.loopTransitionTo)
+}
+
+func TestMemoryService_SetLoopStatus_NotHit(t *testing.T) {
+	repo := &mockMemoryRepository{loopTransitionOK: false} // 他人/不存在/非 loop/状态不符
+	service := NewMemoryService(repo, nil, nil, nil)
+
+	ok, err := service.SetLoopStatus(context.Background(), 42, 999, memorydomain.MemoryLoopStatusClosed)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestMemoryService_SetLoopStatus_RepoError(t *testing.T) {
+	expectedErr := errors.New("db down")
+	repo := &mockMemoryRepository{loopTransitionErr: expectedErr}
+	service := NewMemoryService(repo, nil, nil, nil)
+
+	ok, err := service.SetLoopStatus(context.Background(), 42, 7, memorydomain.MemoryLoopStatusClosed)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.False(t, ok)
 }

@@ -7,6 +7,7 @@ import type {
   DeleteMemoryResponse,
   GetMemoriesResponse,
   PinMemoryResponse,
+  SetLoopStatusResponse,
   UpdateMemoryRequest,
   UpdateMemoryResponse,
 } from '../types/api';
@@ -72,6 +73,17 @@ export const memoryService = {
       return response.data.data;
     } catch (error) {
       console.error('Failed to pin memory:', error);
+      throw error;
+    }
+  },
+
+  /** loop 状态迁移(E3:管理面手动关闭/重开未决事项) */
+  async setLoopStatus(id: number, status: 'open' | 'closed'): Promise<SetLoopStatusResponse> {
+    try {
+      const response = await request.put<ApiResponse<SetLoopStatusResponse>>(`/memories/${id}/loop-status`, { status });
+      return response.data.data;
+    } catch (error) {
+      console.error('Failed to set loop status:', error);
       throw error;
     }
   },

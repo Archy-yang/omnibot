@@ -12,7 +12,7 @@ type MemoryHit struct {
 // 检索"这件事到哪了"先命中事项,整体调出,而非靠相似度碰散落的事实片段。
 type MatterHit struct {
 	Matter *Matter
-	Facts  []*Memory // matter_id 挂靠的原子记忆(含 fact/episode/loop)
+	Facts  []*Memory // matter_id 挂靠的原子记忆(含 fact/loop;episode 已于 M8.4 断源)
 	Score  float64
 }
 

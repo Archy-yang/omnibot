@@ -20,7 +20,12 @@
 3. 没有用户可控的长期记忆能力，后续自动记忆提取、向量召回都缺少基础
 
 **解决方案**：
-长期记忆服务提供入口无关的记忆管理能力，用户通过显式命令保存长期记忆，助手在每次对话中自动注入最近 10 条记忆。
+> ⚠️ **2026-10-07 追平声明（架构复评 P0-2）**：本文档曾停在 2026-06 MVP 基线，与 12 号技术方案
+> （M6/M7/M8 落地后的现行口径）存在多处冲突。本次已追平实体表/业务规则/Repository 接口/决策记录；
+> 若仍有出入，**以《12-记忆系统技术方案》为唯一权威**。
+
+长期记忆服务提供入口无关的记忆管理能力：用户通过显式命令保存长期记忆；注入走分层
+（manual 全量 ∪ 置顶自动常驻，其余自动记忆走 search_memories 工具检索）。
 
 读之前你需要知道：
 - [消息与上下文记忆服务](./message-service.md)
@@ -38,15 +43,24 @@
 | ID | int64 | 主键，自增 |
 | UserID | int64 | 所属用户 ID，索引 |
 | Content | string | 记忆文本内容 |
-| CreatedAt | time.Time | 创建时间 |
-| UpdatedAt | time.Time | 更新时间 |
+| Source | string | manual=用户交代 / auto=沉淀管线提取（注入分层） |
+| Kind | string | 分层：fact/loop（episode 为历史兼容值，M8.4 起断源归一 fact） |
+| LoopStatus | string | 仅 kind=loop：open/closed（M8.2 生命周期） |
+| SourceMessageID | *int64 | 溯源：沉淀自哪条消息 |
+| MatterID | *int64 | 挂靠事项（M6 matters 机制） |
+| Embedding | []float32 | 语义向量（JSON 列 + 应用层余弦，§6.2） |
+| EmbeddingModel | string | 向量所属模型（异构向量不可比） |
+| Category / Importance | - | 预留列，暂未启用 |
+| Pinned / PinnedAt | bool/*time.Time | M8.3：置顶常驻 core |
+| CreatedAt / UpdatedAt | time.Time | 时间戳 |
 
 ### 业务规则
 
 - 每条记忆属于一个用户，不同用户完全隔离
 - 单条内容最大 200 个 Unicode 字符
 - 按创建时间排序（`ORDER BY id ASC`）
-- 上下文注入时最多取最近 10 条
+- 上下文注入走分层：manual 全量常驻（用户意志，不参与预算截断）∪ 置顶自动记忆（预算内按 pinned_at DESC）；其余自动记忆只出存在性提示（§6.5 修订 + §14.2.4）
+- 未决 loop（kind=loop 且 open）进世界观快照，管理面可手动关闭/重开（E3：`PUT /memories/:id/loop-status`）
 
 ---
 
@@ -104,13 +118,26 @@ type MemoryService interface {
 type MemoryRepository interface {
     Create(memory *Memory) error
     ListByUserID(userID int64) ([]*Memory, error)
+    ListManualByUserID(userID int64) ([]*Memory, error)          // 常驻注入(手动层)
+    CountByUserIDAndSource(userID int64, source string) (int64, error)
     DeleteByUserID(userID int64) error
+    DeleteByUserIDAndSource(userID int64, source string) error   // 双 tab 各清各的
     GetByID(id, userID int64) (*Memory, error)
     DeleteByID(id, userID int64) (bool, error)
     UpdateContentByID(id, userID int64, content string) (*Memory, error)
     GetRecentByUserID(userID int64, limit int) ([]*Memory, error)
+    UpdateContentEmbeddingByID(id, userID int64, content string, embedding []float32, model string) error // §7.3 冲突更新
+    CreateLinks(links []MemoryMessageLink) error                 // M5.2 溯源
+    ReplaceLinksForMemory(memoryID int64, messageIDs []int64) error
+    ListByUserIDAndMatter(userID, matterID int64) ([]*Memory, error) // M6.2 事项全景
+    ListOpenLoops(userID int64, limit int) ([]*Memory, error)    // M8.2 未决 loop(两端取样)
+    TransitionLoopStatus(id, userID int64, from, to string) (bool, error) // CAS 迁移
+    ListPinnedAutoByUserID(userID int64) ([]*Memory, error)      // M8.3 置顶常驻
+    SetPinned(id, userID int64, pinned bool) (bool, error)
 }
 ```
+
+> 完整签名以 `internal/repository/memory/memory_repo.go` 为准。
 
 ### 查询规则
 
@@ -203,14 +230,11 @@ type LongTermMemoryProvider interface {
   - `MemoryService` 增加 Delete/Update 方法时不影响 chat 层
   - 测试 mock 更简洁，只需实现一个方法
 
-### 决策2：为什么不加 embedding 字段？
+### ~~决策2：为什么不加 embedding 字段？~~（已作废，2026-10-07 标注）
 
-- **背景**：向量检索是 v1.5+ 的目标
-- **决策**：当前不加 embedding，保持简单
-- **原因**：
-  - MVP 阶段 10 条以内的记忆不需要向量召回
-  - 避免提前引入 pgvector 依赖
-  - 后续可以通过迁移脚本添加字段
+- **作废原因**：`Embedding` 列在记忆 M1 落地时即已加入（JSON 列 + 应用层余弦，
+  非 pgvector，见 12 号 §6.2）；M7 更建了消息级向量层。MVP 时期的"暂不加"决策
+  已被实现全面超越，原文保留会造成误导。
 
 ### 决策3：为什么按序号删除而不是按 ID？
 
@@ -237,8 +261,10 @@ type LongTermMemoryProvider interface {
 
 ## 10. 下一步演进
 
-> **已立项（2026-08-31）**：记忆系统升级为三层记忆（短期/中期纪要/长期事实）+ 语义检索 + 自动沉淀，完整设计见
-> 《[12-记忆系统技术方案](../01-高层设计/12-记忆系统技术方案.md)》与《高级记忆系统PRD-v1.0》。本文档描述的是当前已实现的 MVP 基线。
+> **已全部落地（2026-10 更新）**：三层记忆、语义检索、自动沉淀、Turn/Compact/Recall、
+> loop 生命周期（M8.2）、pinned 常驻 core（M8.3）、episodes 断源（M8.4）均已上线，
+> 设计与落地进度以《[12-记忆系统技术方案](../01-高层设计/12-记忆系统技术方案.md)》
+> 与《[16-架构迭代路线图](../01-高层设计/16-架构迭代路线图-V1-对话与上下文演进.md)》为准。
 
 - ~~v1.5：自动从对话中提取长期记忆 + embedding 向量召回~~ → 已由 12-记忆系统技术方案承接（三层记忆 + EmbeddingProvider）
 - v1.4/v1.6 中的记忆分类、去重合并机制随沉淀管线后续迭代

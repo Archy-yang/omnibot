@@ -47,10 +47,13 @@ func (p *DigestPipeline) createAutoMemory(
 ) {
 	m := memorydomain.NewAutoMemory(userID, content, sourceMsgID)
 	m.Kind = memorydomain.NormalizeKind(kind)
-	// M8.4 §14.2.3:episode 已断源,若 LLM 仍输出(旧上下文/漂移)显式 warn——可见,不静默降级
-	if kind == memorydomain.MemoryKindEpisode {
-		logger.WarnWithFields("memory: LLM 输出已断源的 episode kind,已归一为 fact",
-			zap.Int64("user_id", userID), zap.String("content_prefix", content[:min(30, len(content))]))
+	// M8.4 §14.2.3:episode 已断源;架构复评 P2-7:未知 kind(模型漂移,如 "experience")
+	// 同样不得静默降级——凡非 fact/loop 的输入都显式 warn。
+	// (空 kind 视为模型省略,按 fact 正常处理,不告警以免噪声)
+	if kind != "" && kind != memorydomain.MemoryKindFact && kind != memorydomain.MemoryKindLoop {
+		logger.WarnWithFields("memory: LLM 输出的 kind 已归一为 fact",
+			zap.Int64("user_id", userID), zap.String("raw_kind", kind),
+			zap.String("content_prefix", content[:min(30, len(content))]))
 	}
 	m.MatterID = matterID
 	if vec != nil {

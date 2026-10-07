@@ -67,6 +67,8 @@ type MemoryService interface {
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 	// SetPinned 置顶/取消置顶(M8.3 §14.2.4:置顶的自动记忆进常驻注入)。
 	SetPinned(ctx context.Context, userID int64, memoryID int64, pinned bool) (bool, error)
+	// SetLoopStatus 管理面手动关闭/重开 loop(§14.2.2 逃生口,架构复评 E3)。
+	SetLoopStatus(ctx context.Context, userID int64, memoryID int64, status string) (bool, error)
 }
 
 // AgentService Agent 服务接口

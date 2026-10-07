@@ -23,17 +23,17 @@ const (
 )
 
 type Memory struct {
-	ID              int64     `gorm:"primaryKey;autoIncrement"`
-	UserID          int64     `gorm:"index;not null"`
-	Content         string    `gorm:"type:text;not null"`
-	Source          string    `gorm:"size:20;not null;default:manual"` // manual/auto
-	Kind            string    `gorm:"size:20;not null;default:fact"`   // M6 分层:fact/episode/loop
-	LoopStatus      string    `gorm:"size:20;not null;default:open"`   // M8:loop 生命周期 open/closed(仅 kind=loop 有意义)
-	SourceMessageID *int64    // 溯源:首个来源消息 ID(主指针,展示兼容;完整映射见 memory_message_links)
-	MatterID        *int64    `gorm:"index"`           // M6:可选挂靠事项;独立事实/闲聊经历为 NULL
-	Embedding       []float32 `gorm:"serializer:json"` // JSON 向量列,SQLite/PG 通吃;NULL=未嵌入(检索走子串降级)
-	EmbeddingModel  string    `gorm:"size:100"`        // 生成向量的模型标识,检索只比同模型向量(§6.3)
-	Category        string     `gorm:"size:50"` // 预留列,本期恒空
+	ID              int64      `gorm:"primaryKey;autoIncrement"`
+	UserID          int64      `gorm:"index;not null"`
+	Content         string     `gorm:"type:text;not null"`
+	Source          string     `gorm:"size:20;not null;default:manual"` // manual/auto
+	Kind            string     `gorm:"size:20;not null;default:fact"`   // M6 分层:fact/loop(episode 为历史兼容值,M8.4 起断源并归一为 fact)
+	LoopStatus      string     `gorm:"size:20;not null;default:open"`   // M8:loop 生命周期 open/closed(仅 kind=loop 有意义)
+	SourceMessageID *int64     // 溯源:首个来源消息 ID(主指针,展示兼容;完整映射见 memory_message_links)
+	MatterID        *int64     `gorm:"index"`           // M6:可选挂靠事项;独立事实/闲聊经历为 NULL
+	Embedding       []float32  `gorm:"serializer:json"` // JSON 向量列,SQLite/PG 通吃;NULL=未嵌入(检索走子串降级)
+	EmbeddingModel  string     `gorm:"size:100"`        // 生成向量的模型标识,检索只比同模型向量(§6.3)
+	Category        string     `gorm:"size:50"`         // 预留列,本期恒空
 	Importance      int        // 预留列,本期恒 0
 	Pinned          bool       `gorm:"not null;default:false"` // M8.3 §14.2.4:常驻 core 人工置顶(manual ∪ pinned auto 进常驻注入)
 	PinnedAt        *time.Time // 置顶时间(取消置顶置 NULL;截断按 pinned_at DESC 新近优先)
@@ -101,4 +101,13 @@ func NewAutoMemory(userID int64, content string, sourceMessageID *int64) *Memory
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+// MemoryInjection 常驻注入数据(§6.5 注入分层 + M8.3 §14.2.4)。
+// 领域值对象:memory service 产出、chat service 消费(经 MemoryInjectionProvider
+// 接口)——定义在 domain 层,消费方不必依赖 memory service 实现包(架构复评 P1-4)。
+type MemoryInjection struct {
+	Manual     []string // 手动记忆全量(用户主动交代)
+	PinnedAuto []string // 置顶自动记忆(常驻 core 例外,新近置顶优先)
+	AutoCount  int      // 自动记忆总数
 }

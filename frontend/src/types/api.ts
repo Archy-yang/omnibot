@@ -166,6 +166,10 @@ export interface MemoryItem {
   source?: string;
   /** M8.3:置顶(常驻 core,置顶的自动记忆进常驻注入) */
   pinned?: boolean;
+  /** 分层:fact/loop(episode 已归一,M8.4) */
+  kind?: string;
+  /** 仅 kind=loop:open/closed(E3 管理面关闭/重开) */
+  loop_status?: string;
   created_at: string;
 }
 
@@ -216,6 +220,20 @@ export interface PinMemoryRequest {
  * 置顶/取消置顶记忆响应类型(M8.3)
  */
 export interface PinMemoryResponse {
+  message: string;
+}
+
+/**
+ * loop 状态迁移请求类型(E3:管理面关闭/重开)
+ */
+export interface SetLoopStatusRequest {
+  status: 'open' | 'closed';
+}
+
+/**
+ * loop 状态迁移响应类型(E3)
+ */
+export interface SetLoopStatusResponse {
   message: string;
 }
 

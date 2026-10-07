@@ -20,8 +20,10 @@ import (
 type MemoryDTO struct {
 	ID        int64  `json:"id"`
 	Content   string `json:"content"`
-	Source    string `json:"source"` // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
-	Pinned    bool   `json:"pinned"` // M8.3:置顶(常驻 core,进常驻注入)
+	Source    string `json:"source"`               // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
+	Pinned    bool   `json:"pinned"`               // M8.3:置顶(常驻 core,进常驻注入)
+	Kind      string `json:"kind"`                 // 分层:fact/loop(episode 已归一,M8.4)
+	LoopStatus string `json:"loop_status,omitempty"` // 仅 kind=loop:open/closed(E3 管理面关闭/重开)
 	CreatedAt string `json:"created_at"`
 }
 
@@ -68,12 +70,18 @@ func toMemoryDTO(memory *memorydomain.Memory) MemoryDTO {
 	if source == "" {
 		source = memorydomain.MemorySourceManual // 迁移期兜底:老数据视为手动
 	}
+	loopStatus := ""
+	if memory.Kind == memorydomain.MemoryKindLoop {
+		loopStatus = memory.LoopStatus
+	}
 	return MemoryDTO{
-		ID:        memory.ID,
-		Content:   memory.Content,
-		Source:    source,
-		Pinned:    memory.Pinned,
-		CreatedAt: memory.CreatedAt.Format(time.RFC3339),
+		ID:         memory.ID,
+		Content:    memory.Content,
+		Source:     source,
+		Pinned:     memory.Pinned,
+		Kind:       memorydomain.NormalizeKind(memory.Kind),
+		LoopStatus: loopStatus,
+		CreatedAt:  memory.CreatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -345,6 +353,80 @@ func (h *Handler) HandlePinMemory(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": PinMemoryResponse{
+			Message: message,
+		},
+	})
+}
+
+// SetLoopStatusURIRequest loop 状态迁移 URI 参数(E3)。
+type SetLoopStatusURIRequest struct {
+	MemoryID int64 `uri:"id" binding:"required,min=1"`
+}
+
+// SetLoopStatusRequest loop 状态迁移请求体(E3):status 仅接受 open/closed。
+type SetLoopStatusRequest struct {
+	Status string `json:"status" binding:"required"`
+}
+
+// SetLoopStatusResponse loop 状态迁移响应(E3)。
+type SetLoopStatusResponse struct {
+	Message string `json:"message"`
+}
+
+// HandleSetLoopStatus 管理面手动关闭/重开 loop(§14.2.2「可人工回滚」逃生口,架构复评 E3)。
+// 快照窗口外的未决 loop 可手动关闭;已关闭的 loop 可人工重开。
+// 非法 status → 400;记忆不存在/非 loop/状态不符/越权 → 404(越权不可探测)。
+func (h *Handler) HandleSetLoopStatus(c *gin.Context) {
+	var uriReq SetLoopStatusURIRequest
+	if err := c.ShouldBindUri(&uriReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的记忆 ID。",
+		})
+		return
+	}
+
+	var req SetLoopStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误",
+		})
+		return
+	}
+	if req.Status != memorydomain.MemoryLoopStatusOpen && req.Status != memorydomain.MemoryLoopStatusClosed {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "status 仅接受 open 或 closed。",
+		})
+		return
+	}
+
+	userID := c.GetInt64(middleware.AuthUserIDKey)
+
+	ok, err := h.memoryService.SetLoopStatus(c.Request.Context(), userID, uriReq.MemoryID, req.Status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "服务暂时不可用，请稍后再试。",
+		})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "记忆不存在、不属于当前用户或当前状态不允许该操作。",
+		})
+		return
+	}
+
+	message := "已标记为已完成。"
+	if req.Status == memorydomain.MemoryLoopStatusOpen {
+		message = "已重新打开。"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": SetLoopStatusResponse{
 			Message: message,
 		},
 	})

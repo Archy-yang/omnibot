@@ -9,7 +9,6 @@ import (
 	"omnibot/internal/db"
 	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
-	memorysvc "omnibot/internal/service/memory"
 	"omnibot/internal/repository/chat"
 
 	"github.com/stretchr/testify/assert"
@@ -108,9 +107,9 @@ func (m *mockContextMemoryService) Clear(ctx context.Context, userID int64) erro
 	return nil
 }
 
-func (m *mockContextMemoryService) GetMemoryInjection(ctx context.Context, userID int64) (*memorysvc.MemoryInjection, error) {
+func (m *mockContextMemoryService) GetMemoryInjection(ctx context.Context, userID int64) (*memorydomain.MemoryInjection, error) {
 	m.userID = userID
-	return &memorysvc.MemoryInjection{Manual: m.manual, AutoCount: m.autoCount}, m.err
+	return &memorydomain.MemoryInjection{Manual: m.manual, AutoCount: m.autoCount}, m.err
 }
 
 func TestMessageService_BuildContextMessages_IncludesLongTermMemories(t *testing.T) {

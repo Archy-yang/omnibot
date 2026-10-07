@@ -16,6 +16,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import DialogShell from '@/components/layout/DialogShell.vue';
 import { useMemory } from '@/composables/useMemory';
 import { useToast } from '@/composables/useToast';
+import type { MemoryItem } from '@/types/api';
 
 const props = defineProps<{
   visible: boolean;
@@ -36,6 +37,7 @@ const {
   deleteMemory,
   updateMemory,
   setPinned,
+  setLoopStatus,
 } = useMemory();
 const { success, error } = useToast();
 
@@ -155,6 +157,21 @@ const handleTogglePin = async (id: number, pinned: boolean): Promise<void> => {
     error(getErrorMessage(err));
   } finally {
     isPinning.value = false;
+  }
+};
+
+// E3:loop 管理面关闭/重开(§14.2.2 逃生口;仅 kind=loop 的自动沉淀条目)
+const isTogglingLoop = ref<boolean>(false);
+const handleToggleLoop = async (memory: MemoryItem): Promise<void> => {
+  const next = memory.loop_status === 'open' ? 'closed' : 'open';
+  isTogglingLoop.value = true;
+  try {
+    await setLoopStatus(memory.id, next);
+    success(next === 'closed' ? '已标记为已完成。' : '已重新打开。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  } finally {
+    isTogglingLoop.value = false;
   }
 };
 
@@ -335,6 +352,25 @@ const formatTime = (iso: string): string => {
                 <svg width="13" height="13" viewBox="0 0 24 24" :fill="memory.pinned ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="17" x2="12" y2="22"/>
                   <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+                </svg>
+              </button>
+              <!-- E3:loop 关闭/重开(仅自动沉淀 tab 的未决/已决 loop 条目) -->
+              <button
+                v-if="activeTab === 'auto' && memory.kind === 'loop'"
+                type="button"
+                class="memory-action-btn pin-btn"
+                :class="{ 'is-pinned': memory.loop_status === 'closed' }"
+                :title="memory.loop_status === 'closed' ? '重新打开' : '标记为已完成'"
+                :disabled="isTogglingLoop"
+                @click="handleToggleLoop(memory)"
+              >
+                <svg v-if="memory.loop_status !== 'closed'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="1 4 1 10 7 10"/>
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
                 </svg>
               </button>
               <button
