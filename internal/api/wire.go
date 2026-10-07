@@ -40,6 +40,7 @@ import (
 	chatService "omnibot/internal/service/chat"
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
+	sandboxsvc "omnibot/internal/service/sandbox"
 	subscriptionService "omnibot/internal/service/subscription"
 	toolService "omnibot/internal/service/tool"
 	userService "omnibot/internal/service/user"
@@ -315,6 +316,23 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
 		})
 	})
+	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
+	// Docker 客户端初始化失败(如 DOCKER_HOST 非法)仅告警跳过注册——工具隐藏,不影响启动
+	if sandboxAPI, sbErr := sandboxsvc.NewDefaultAPIClient(); sbErr != nil {
+		logger.Error("沙箱 docker 客户端初始化失败,工具不注册: " + sbErr.Error())
+	} else {
+		sandboxExec := sandboxsvc.NewDockerExecutor(sandboxAPI, sandboxsvc.DockerConfig{
+			Image:          cfg.Sandbox.Image,
+			Timeout:        time.Duration(cfg.Sandbox.TimeoutSeconds) * time.Second,
+			MemoryMB:       cfg.Sandbox.MemoryMB,
+			CPUCores:       cfg.Sandbox.CPUCores,
+			MaxOutputBytes: cfg.Sandbox.MaxOutputBytes,
+			PidsLimit:      cfg.Sandbox.PidsLimit,
+		})
+		toolSvc.RegisterBuiltinSubOnly(func() agentpkg.Tool {
+			return agenttools.CreateSandboxRunTool(sandboxExec)
+		})
+	}
 	if err := toolSvc.SeedBuiltins(); err != nil {
 		logger.Error("工具定义 seed 失败: " + err.Error())
 	}

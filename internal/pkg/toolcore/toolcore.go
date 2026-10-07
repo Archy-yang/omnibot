@@ -39,6 +39,7 @@ const (
 	CapResearch    = "research"    // 研究/检索类(rss_reader, web_read 及记忆检索)
 	CapWeb         = "web"         // 联网抓取(web_read, rss_reader)
 	CapIngest      = "ingest"      // 信息摄入汇总(rss_reader)
+	CapCode        = "code"        // 沙箱代码执行(sandbox_run,17-脚本沙箱技术方案)
 	CapInteractive = "interactive" // 与用户/主 Agent 交互(request_input 强制基线)
 	// CapDelegateOwner 主 Agent 专用(不参与子 Agent capability 白名单):delegate/query/update/cancel_task。
 	// 它们注册在 main 专用 agentToolRegistry 而非 globalToolRegistry,天然不对子 Agent 可见,无需打标。

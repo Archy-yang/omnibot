@@ -21,6 +21,7 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Agent    AgentConfig    `mapstructure:"agent"`
+	Sandbox  SandboxConfig  `mapstructure:"sandbox"`
 	Security SecurityConfig `mapstructure:"security"`
 }
 
@@ -113,6 +114,17 @@ type FeishuConfig struct {
 type FeishuCLI struct {
 	BinPath        string `mapstructure:"bin_path"`        // 默认 "lark-cli"(PATH 查找)
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单次执行超时,默认 60
+}
+
+// SandboxConfig 脚本沙箱配置(17-脚本沙箱技术方案 §5.2)。
+// 零值字段取执行器内置默认;image 是部署者运维决策(预装库经 docker/sandbox.Dockerfile 定制)。
+type SandboxConfig struct {
+	Image          string  `mapstructure:"image"`           // 沙箱镜像,默认 omnibot-sandbox:latest
+	TimeoutSeconds int     `mapstructure:"timeout_seconds"` // 单次执行默认与上限,默认 60
+	MemoryMB       int64   `mapstructure:"memory_mb"`       // 内存限额,默认 512
+	CPUCores       float64 `mapstructure:"cpu_cores"`       // CPU 限额,默认 1.0
+	MaxOutputBytes int     `mapstructure:"max_output_bytes"`// 输出截断上限,默认 32KB
+	PidsLimit      int64   `mapstructure:"pids_limit"`      // 进程数限额,默认 64
 }
 
 // LLMConfig 大模型配置

@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend clean run dev dev-frontend dev-stop dev-logs dev-backend start stop restart status logs test test-backend test-all lint help install-tools
+.PHONY: all build build-frontend build-backend clean run dev dev-frontend dev-stop dev-logs dev-backend start stop restart status logs test test-backend test-all sandbox-image lint help install-tools
 
 # Go related variables
 GO_CMD = go
@@ -150,6 +150,11 @@ test-backend:  ## Run backend unit tests
 	$(GO_TEST) -v -cover $(GO_DIRS)
 
 test-all: test-backend  ## Run all tests (currently backend only)
+
+sandbox-image:  ## Build sandbox image for sandbox_run tool (17-脚本沙箱技术方案)
+	@echo "📦 Building sandbox image..."
+	docker build -t omnibot-sandbox:latest -f docker/sandbox.Dockerfile .
+	@echo "✅ Sandbox image built: omnibot-sandbox:latest"
 
 test-coverage:  ## Run tests with coverage report
 	@echo "📊 Running tests with coverage..."
