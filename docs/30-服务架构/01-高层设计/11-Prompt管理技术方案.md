@@ -161,6 +161,18 @@ func (r *PromptRegistry) Assemble(c PromptCtx) (string, error)
 
 > 常规约定：**静态为主、动态为辅**。80% 的 prompt 是静态 section，只有真正跑起来才变的地方才用 provider / 变量。
 
+> **分工原则（2026-10-07 补充）**：**prompt 只放策略、判据、跨工具工作流；工具名、参数、
+> 单工具用法与触发时机放该工具的 `Description`。** 理由：tool description 随每轮 `tools` 参数
+> 权威下发，与实现天然同步；prompt 里的副本一定会随能力演进脱节。
+>
+> **事故留痕**：2026-10-07 派活规则重写为"能力+量级"两问后，仍保留了工具枚举
+> "你的直调工具只覆盖 mcp_call、calculator"，而该清单**漏了 `weather`**——同段第一个例子
+> "明天北京天气怎么样? → 直调"恰好依赖 `weather`；`wire.go` 的工具注册注释还专门论证过
+> 天气该给主 Agent。**结论：prompt 中不得出现会随工具/能力增减而变化的清单。**
+>
+> 推论：`DynamicSection` / `RegisterVariable` 只用于**真正运行时才定的值**（goal、交付物等），
+> **不要**用来把工具清单搬进 prompt——那只是把硬编码换成了注入，耦合仍在。
+
 ---
 
 ## 4. 组装流程（Assemble 算法）
@@ -201,11 +213,15 @@ Assemble(c PromptCtx):
 | section | Scope | Order | 内容来源 |
 |---------|:---:|:---:|----------|
 | `agent_base` | main | -100 | 基础人格（`DefaultSystemPrompt`；子 Agent 侧另有 `agent_base`(sub) 同款共享，原 `harness_identity` 设计经去角色化后落为双 scope 各注册一份） |
-| `persona` | main | 0 | 管家定位（从 `defaultSystemPrompt` 扩容而来） |
 | `response_style` | main | -90 | 表达方式：管家口吻、直接给结果、不叙述工具调用过程（persona 层，恒装配） |
 | `delegation_rules` | main | 100 | 派活规则（**仅装配了子 Agent 时注册**） |
 | `reporting_rules` | main | 110 | 汇报引导 |
-| `task_mgmt` | main | 120 | 任务管理工具(query/update/cancel)指引 |
+| `task_mgmt` | main | 120 | 任务管理**策略与跨工具工作流**（三工具用法在其 tool description） |
+| `subscription_rules` | main | 130 | 订阅**策略**（`manage_subscriptions` 用法在其 tool description） |
+
+> **勘误（2026-10-07）**：本表此前列有 `persona`(order 0)——实际 `MainAgentSections`
+> (`internal/agentprompt/main.go`) 从未注册该 section（管家定位已并入 `agent_base` + `response_style`）；
+> 同时漏列了 `subscription_rules`(130)。以上已按代码实况更正。
 
 > `response_style` 只约束"怎么说"不影响"做什么"——派活/汇报的反幻觉铁律、input_required 转述等
 > 基于真实工具调用的确认话术原样保留（section 末段护栏明示）。
