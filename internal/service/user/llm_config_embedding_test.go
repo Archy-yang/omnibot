@@ -19,6 +19,8 @@ import (
 
 func embeddingTestSetup(t *testing.T) LLMConfigService {
 	t.Helper()
+	// §17 后全局密钥需显式注入(不再静默回退默认密钥)。
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
 		Logger:         logger.Default.LogMode(logger.Silent),
 		TranslateError: true,

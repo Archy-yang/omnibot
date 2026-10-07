@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mcpdomain "omnibot/internal/domain/mcp"
+	"omnibot/internal/pkg/crypto"
 )
 
 // ---- mock MCPServerRepository ----
@@ -100,10 +102,24 @@ func enabledClient(tool string) *mockMCPClient {
 	return &mockMCPClient{tools: []mcpdomain.MCPRemoteTool{textTool(tool, "远端工具 "+tool)}}
 }
 
+// TestMain §17 后全局加密密钥需显式注入(不再静默回退默认密钥);
+// 本包多个测试经 encryptSecret/decryptSecret/TokenStore 走全局密钥路径,统一注入一次。
+func TestMain(m *testing.M) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+	os.Exit(m.Run())
+}
+
+// initTestCrypto 单测级注入(幂等;不清理——全局密钥由 TestMain 统一持有,
+// 中途置 nil 会干扰同包后续测试)。
+func initTestCrypto(t *testing.T) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+}
+
 // ---- AddServer ----
 
 // 测试 18:AddServer 加密落库(密文非明文)+立即同步发现工具,返回视图含掩码与工具数。
 func TestAddServer_EncryptsAndSyncs(t *testing.T) {
+	initTestCrypto(t)
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 
@@ -164,6 +180,7 @@ func TestAddServer_DisabledNoConnect(t *testing.T) {
 
 // 测试 21:UpdateServer 改地址/开关后立即重新同步;密钥留空=保留原 key。
 func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
+	initTestCrypto(t)
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	_, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
@@ -179,6 +196,7 @@ func TestUpdateServer_KeepsKeyAndResyncs(t *testing.T) {
 
 // 测试 22:UpdateServer 改为 disabled → 目录即时失效(工具不可调用、不参与匹配)。
 func TestUpdateServer_DisableHidesSkills(t *testing.T) {
+	initTestCrypto(t)
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, err := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://old.com", APIKey: "sk-1", Enabled: true}, 42)
@@ -201,6 +219,7 @@ func TestUpdateServer_DisableHidesSkills(t *testing.T) {
 
 // 测试 23:DeleteServer → 目录即时失效(内存缓存,无库表残留)。
 func TestDeleteServer_CascadesSkills(t *testing.T) {
+	initTestCrypto(t)
 	serverRepo := newMockServerRepo()
 	svc := newManagerService(serverRepo, enabledClient("gh_search"))
 	view, _ := svc.AddServer(MCPServerInput{Name: "github", BaseURL: "https://x.com", APIKey: "sk-1", Enabled: true}, 42)

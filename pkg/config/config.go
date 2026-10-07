@@ -21,6 +21,17 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Agent    AgentConfig    `mapstructure:"agent"`
+	Security SecurityConfig `mapstructure:"security"`
+}
+
+// SecurityConfig 密钥安全配置(§17)。
+//
+// EncryptKey 是敏感字段加密密钥的材料(任意长度字符串,内部 sha256 派生 32 字节
+// AES-256 key),加密 user_llm_configs/mcp_servers 中的 API key、OAuth token 等。
+// 空值:production 拒绝启动;development 回落 legacy 默认密钥(显眼告警)。
+// 该值写在 config.yaml(已 gitignore);旧环境变量 LLM_CONFIG_ENCRYPT_KEY 仍可覆盖。
+type SecurityConfig struct {
+	EncryptKey string `mapstructure:"encrypt_key"`
 }
 
 // MCPConfig MCP 接入配置(13-插件系统 M2)。

@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	domain "omnibot/internal/domain/user"
+	"omnibot/internal/pkg/crypto"
 	repo "omnibot/internal/repository/user"
 	userService "omnibot/internal/service/user"
 )
@@ -22,7 +23,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// initTestCrypto §17 后全局密钥需显式注入(不再静默回退);
+// 不做清理——全局密钥是包级状态,中途置 nil 会干扰同包后续测试。
+func initTestCrypto(t *testing.T) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+}
+
 func TestHandler_ConfigCommands_SetAPIKey(t *testing.T) {
+	initTestCrypto(t)
 	db := setupTestDB(t)
 	llmRepo := repo.NewLLMConfigRepository(db)
 	llmConfigService := userService.NewLLMConfigService(llmRepo)
@@ -60,6 +68,7 @@ func TestHandler_ConfigCommands_ConfigMenu(t *testing.T) {
 }
 
 func TestHandler_ConfigCommands_GetConfigView(t *testing.T) {
+	initTestCrypto(t)
 	db := setupTestDB(t)
 	llmRepo := repo.NewLLMConfigRepository(db)
 	llmConfigService := userService.NewLLMConfigService(llmRepo)
@@ -79,6 +88,7 @@ func TestHandler_ConfigCommands_GetConfigView(t *testing.T) {
 }
 
 func TestHandler_ConfigCommands_ClearConfig(t *testing.T) {
+	initTestCrypto(t)
 	db := setupTestDB(t)
 	llmRepo := repo.NewLLMConfigRepository(db)
 	llmConfigService := userService.NewLLMConfigService(llmRepo)

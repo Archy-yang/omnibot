@@ -129,3 +129,9 @@ auth:
 #       base_url: "https://mcp.example.com/mcp"
 #       api_key: "sk-xxx"
 #       enabled: true
+
+# 密钥安全(§17):敏感字段(LLM API key、MCP 凭据、OAuth token)的加密密钥材料。
+# 留空:production 拒绝启动;development 回落 legacy 默认密钥(有告警)。
+# 生成:openssl rand -hex 32。旧环境变量 LLM_CONFIG_ENCRYPT_KEY 仍可覆盖本项。
+security:
+  encrypt_key: ""

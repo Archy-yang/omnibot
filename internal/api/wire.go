@@ -26,6 +26,7 @@ import (
 	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/pkg/auth"
+	"omnibot/internal/pkg/crypto"
 	"omnibot/internal/realtime"
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
@@ -81,6 +82,22 @@ type appDeps struct {
 
 // buildAppDeps 构造全部依赖(原 SetupRouter 前半段,行为零变化)。
 func buildAppDeps(cfg *config.Config) *appDeps {
+	// §17:密钥安全校验——production 缺加密密钥/JWT secret 拒绝启动(2026-10)。
+	if err := validateSecurityForProduction(cfg); err != nil {
+		logger.Fatal("security validation failed", zap.Error(err))
+	}
+
+	// §17:初始化全局加密密钥(替代旧"env 直读+静默回退默认密钥",2026-10)。
+	// 未配置时:production 已在上面拒绝;development 回落 legacy 默认密钥并显眼告警。
+	encryptMaterial := resolveEncryptKeyMaterial(cfg)
+	if encryptMaterial != "" {
+		crypto.Init(encryptMaterial)
+	} else {
+		crypto.InitWithKey(crypto.LegacyDefaultKey)
+		logger.Warn("⚠️  未配置 security.encrypt_key,正在使用 legacy 默认加密密钥——" +
+			"请在 config.yaml 配置 security.encrypt_key(openssl rand -hex 32 生成),§17")
+	}
+
 	// 创建 LLM 客户端
 	llmClient, err := llm.NewClient(cfg.LLM)
 	if err != nil {
@@ -91,6 +108,15 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	dbConn, err := db.InitDB(&cfg.Database)
 	if err != nil {
 		logger.Fatal("Failed to initialize database", zap.Error(err))
+	}
+
+	// §17:存量密文迁移(启动自愈,幂等)——legacy 默认密钥密文重加密为当前密钥。
+	// 未配置新密钥时(development legacy 兜底)新旧行为同密钥,天然 no-op。
+	if n, err := db.MigrateLegacyCiphertext(dbConn.GetGormDB(), crypto.DeriveKey(encryptMaterial)); err != nil {
+		logger.Error("legacy ciphertext migration failed", zap.Error(err))
+	} else if n > 0 {
+		logger.Info("legacy ciphertext migrated to configured key",
+			zap.Int("fields", n))
 	}
 
 	// 初始化仓储层
