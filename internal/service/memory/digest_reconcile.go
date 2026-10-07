@@ -157,18 +157,25 @@ func (p *DigestPipeline) reconcile(
 	// 原子层:分层落库(复用余弦去重/冲突更新/links)
 	stats.MemoriesCreated, stats.MemoriesUpdated = p.applyFacts(context.Background(), userID, result.Facts, titleToID, fromID, toID)
 
-	// loop 生命周期(M8 §14.2.2):关闭/重开只认 DB 中的真实状态(CAS 迁移),
-	// 不存在的 ID、他人的 ID、状态不符的指令一律静默忽略(幂等,防幻觉关闭)
-	for _, id := range result.LoopCloses {
-		if ok, err := p.memoryRepo.TransitionLoopStatus(id, userID, memorydomain.MemoryLoopStatusOpen, memorydomain.MemoryLoopStatusClosed); err == nil && ok {
-			stats.LoopsClosed++
+	// loop 生命周期(M8 §14.2.2):关闭/重开只认 DB 中的真实状态(CAS 迁移)。
+	// 「未命中」(ID 不存在/他人/状态不符)是有意静默——幂等,防幻觉关闭;
+	// 但「DB 错误」必须可见:水位随后照常推进,该指令不会重试,静默即永久丢失(架构复评 P2-6)。
+	applyLoop := func(ids []int64, from, to string, counter *int, action string) {
+		for _, id := range ids {
+			ok, err := p.memoryRepo.TransitionLoopStatus(id, userID, from, to)
+			if err != nil {
+				logger.WarnWithFields("memory: loop 状态迁移失败,该指令本轮丢失(水位仍会推进)",
+					zap.Int64("user_id", userID), zap.Int64("memory_id", id),
+					zap.String("action", action), zap.Error(err))
+				continue
+			}
+			if ok {
+				*counter++
+			}
 		}
 	}
-	for _, id := range result.LoopReopens {
-		if ok, err := p.memoryRepo.TransitionLoopStatus(id, userID, memorydomain.MemoryLoopStatusClosed, memorydomain.MemoryLoopStatusOpen); err == nil && ok {
-			stats.LoopsReopened++
-		}
-	}
+	applyLoop(result.LoopCloses, memorydomain.MemoryLoopStatusOpen, memorydomain.MemoryLoopStatusClosed, &stats.LoopsClosed, "close")
+	applyLoop(result.LoopReopens, memorydomain.MemoryLoopStatusClosed, memorydomain.MemoryLoopStatusOpen, &stats.LoopsReopened, "reopen")
 	return stats
 }
 

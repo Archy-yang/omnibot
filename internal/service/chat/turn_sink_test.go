@@ -7,7 +7,7 @@ import (
 
 	"omnibot/internal/db"
 	"omnibot/internal/domain/conversation"
-	memorysvc "omnibot/internal/service/memory"
+	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/internal/repository/chat"
 
 	"github.com/stretchr/testify/require"
@@ -106,8 +106,8 @@ type fakeInjectionMemory struct {
 	autoCount  int
 }
 
-func (f *fakeInjectionMemory) GetMemoryInjection(_ context.Context, _ int64) (*memorysvc.MemoryInjection, error) {
-	return &memorysvc.MemoryInjection{Manual: f.manual, PinnedAuto: f.pinnedAuto, AutoCount: f.autoCount}, nil
+func (f *fakeInjectionMemory) GetMemoryInjection(_ context.Context, _ int64) (*memorydomain.MemoryInjection, error) {
+	return &memorydomain.MemoryInjection{Manual: f.manual, PinnedAuto: f.pinnedAuto, AutoCount: f.autoCount}, nil
 }
 
 func injectionSetup(t *testing.T, mem *fakeInjectionMemory) MessageService {
@@ -228,4 +228,29 @@ func TestBuildContextMessages_PinnedBudgetTruncation(t *testing.T) {
 	require.Contains(t, memoryBlock, "置顶一", "pinned 按 DESC 序保留")
 	require.NotContains(t, memoryBlock, "置顶三", "超预算置顶被截断")
 	require.Contains(t, memoryBlock, "另有", "截断后保留存在性提示")
+}
+
+// TestBuildContextMessages_ManualNeverTruncated manual 是用户意志,契约(§6.5)要求全量常驻,
+// 预算只约束 pinned auto——manual 单独超预算时也必须全部注入(架构复评 P0-1 回归守护)。
+func TestBuildContextMessages_ManualNeverTruncated(t *testing.T) {
+	manuals := []string{"手动记忆A", "手动记忆B", "手动记忆C", "手动记忆D", "手动记忆E"}
+	mem := &fakeInjectionMemory{manual: manuals, pinnedAuto: []string{"置顶一"}, autoCount: 1}
+	service := injectionSetup(t, mem).(*messageService)
+	// 预算小到只装得下两条 manual:旧实现会静默丢弃三条
+	service.memoryBlockMaxTokens = 2 * (EstimateTokens("手动记忆A") + 2)
+
+	msgs, err := service.BuildContextMessages(context.Background(), 123, "hi")
+	require.NoError(t, err)
+
+	var memoryBlock string
+	for _, m := range msgs {
+		if m.Role == conversation.RoleSystem && strings.Contains(m.Content, "长期记忆") {
+			memoryBlock = m.Content
+		}
+	}
+	require.NotEmpty(t, memoryBlock, "应有记忆注入块")
+	for _, want := range manuals {
+		require.Contains(t, memoryBlock, want, "manual 必须全量注入,不得被预算截断")
+	}
+	require.NotContains(t, memoryBlock, "置顶一", "预算不足时应截断 pinned,而非 manual")
 }

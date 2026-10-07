@@ -113,7 +113,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.DELETE("", d.webHandler.HandleClearMemories)
 		memoryAPIGroup.DELETE("/:id", d.webHandler.HandleDeleteMemory)
 		memoryAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMemory)
-		memoryAPIGroup.PUT("/:id/pin", d.webHandler.HandlePinMemory) // M8.3:置顶(常驻 core)
+		memoryAPIGroup.PUT("/:id/pin", d.webHandler.HandlePinMemory)             // M8.3:置顶(常驻 core)
+		memoryAPIGroup.PUT("/:id/loop-status", d.webHandler.HandleSetLoopStatus) // E3:loop 管理面关闭/重开(§14.2.2 逃生口)
 	}
 
 	// 订阅源管理路由(14-订阅源管理:对话入口之外的页面管理入口)

@@ -65,6 +65,15 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
+  /** loop 状态迁移(E3:管理面手动关闭/重开未决事项) */
+  const setLoopStatus = async (id: number, status: 'open' | 'closed'): Promise<void> => {
+    await memoryService.setLoopStatus(id, status);
+    const index = memories.value.findIndex((m) => m.id === id);
+    if (index !== -1) {
+      memories.value[index] = { ...memories.value[index], loop_status: status };
+    }
+  };
+
   return {
     memories,
     isLoading,
@@ -76,5 +85,6 @@ export const useMemoryStore = defineStore('memory', () => {
     deleteMemory,
     updateMemory,
     setPinned,
+    setLoopStatus,
   };
 });

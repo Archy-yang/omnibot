@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 
@@ -215,4 +216,65 @@ func newRepoTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
+}
+
+// ---- ListOpenLoops 两端取样(架构复评 P2-5/E2) ----
+
+// seedOpenLoop 插入一条指定时间的未决 loop。
+func seedOpenLoop(t *testing.T, db *gorm.DB, userID int64, content string, createdAt time.Time) {
+	t.Helper()
+	m := memorydomain.NewAutoMemory(userID, content, nil)
+	m.Kind = memorydomain.MemoryKindLoop
+	m.LoopStatus = memorydomain.MemoryLoopStatusOpen
+	m.CreatedAt = createdAt
+	m.UpdatedAt = createdAt
+	require.NoError(t, db.Create(m).Error)
+}
+
+// TestListOpenLoops_TwoEndedSampling 未决 loop 超过 limit 时两端各取一半:
+// 只取最旧会让最新 loop(最可能刚被了结的)永远进不了快照——两端覆盖。
+func TestListOpenLoops_TwoEndedSampling(t *testing.T) {
+	db := setupMemoryRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 30; i++ {
+		seedOpenLoop(t, db, 1, fmt.Sprintf("loop-%02d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	got, err := repo.ListOpenLoops(1, 20)
+	require.NoError(t, err)
+	require.Len(t, got, 20)
+
+	ids := make([]string, 0, len(got))
+	for _, m := range got {
+		ids = append(ids, m.Content)
+	}
+	// 最旧 10 条(loop-00..09)与最新 10 条(loop-20..29)都必须在
+	for i := 0; i < 10; i++ {
+		require.Contains(t, ids, fmt.Sprintf("loop-%02d", i), "最旧半区应覆盖")
+	}
+	for i := 20; i < 30; i++ {
+		require.Contains(t, ids, fmt.Sprintf("loop-%02d", i), "最新半区应覆盖")
+	}
+	// 中段(loop-10..19)不要求覆盖,但结果必须整体按 created_at ASC 稳定输出
+	for i := 1; i < len(got); i++ {
+		require.False(t, got[i].CreatedAt.Before(got[i-1].CreatedAt), "输出需按时间升序")
+	}
+}
+
+// TestListOpenLoops_UnderLimit 全量返回,按 created_at ASC。
+func TestListOpenLoops_UnderLimit(t *testing.T) {
+	db := setupMemoryRepoTestDB(t)
+	repo := NewMemoryRepository(db)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		seedOpenLoop(t, db, 1, fmt.Sprintf("loop-%d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	got, err := repo.ListOpenLoops(1, 20)
+	require.NoError(t, err)
+	require.Len(t, got, 5)
+	for i, m := range got {
+		require.Equal(t, fmt.Sprintf("loop-%d", i), m.Content)
+	}
 }

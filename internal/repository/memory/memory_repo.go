@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"sort"
 	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
@@ -32,7 +33,7 @@ type MemoryRepository interface {
 	// ListByUserIDAndMatter 某事项挂靠的记忆(M6.2 事项全景检索用;创建时间升序)。
 	ListByUserIDAndMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
 	// ListOpenLoops 未决 loop(M8 世界观快照用):kind=loop 且 loop_status=open,
-	// created_at 升序最旧优先(窗口随关闭动作轮转覆盖),最多 limit 条。
+	// 两端各取一半(最旧+最新)最多 limit 条,输出 created_at 升序(架构复评 E2)。
 	ListOpenLoops(userID int64, limit int) ([]*memorydomain.Memory, error)
 	// TransitionLoopStatus loop 生命周期迁移(M8 §14.2.2):仅当当前状态=fromStatus 时置为
 	// toStatus(只对 kind=loop 生效)。返回是否发生迁移(幂等:重复关闭/重开返回 false)。
@@ -187,17 +188,44 @@ func (r *memoryRepository) ListByUserIDAndMatter(userID int64, matterID int64) (
 	return memories, err
 }
 
-// ListOpenLoops 未决 loop(M8 世界观快照用):最旧优先,最多 limit 条。
+// ListOpenLoops 未决 loop(M8 世界观快照用):两端各取一半,最多 limit 条(架构复评 E2)。
+// 只取最旧会让最新 loop(最可能刚被了结的)永远进不了快照,反之亦然——两端覆盖两个极端。
+// 返回顺序:created_at ASC(稳定,便于 prompt 内编号引用)。
 func (r *memoryRepository) ListOpenLoops(userID int64, limit int) ([]*memorydomain.Memory, error) {
-	var memories []*memorydomain.Memory
-	q := r.db.Where("user_id = ? AND kind = ? AND loop_status = ?", userID, memorydomain.MemoryKindLoop, memorydomain.MemoryLoopStatusOpen).
-		Order("created_at ASC")
-	if limit > 0 {
-		q = q.Limit(limit)
+	if limit <= 0 {
+		limit = defaultOpenLoopLimit
 	}
-	err := q.Find(&memories).Error
-	return memories, err
+	half := limit/2 + limit%2
+	base := func() *gorm.DB {
+		return r.db.Where("user_id = ? AND kind = ? AND loop_status = ?",
+			userID, memorydomain.MemoryKindLoop, memorydomain.MemoryLoopStatusOpen)
+	}
+	var oldest, newest []*memorydomain.Memory
+	if err := base().Order("created_at ASC").Limit(half).Find(&oldest).Error; err != nil {
+		return nil, err
+	}
+	if err := base().Order("created_at DESC").Limit(limit - half).Find(&newest).Error; err != nil {
+		return nil, err
+	}
+	// 合并去重(总量 ≤ limit 时两端重叠),按 created_at ASC 稳定输出
+	seen := make(map[int64]struct{}, limit)
+	merged := make([]*memorydomain.Memory, 0, limit)
+	for _, list := range [][]*memorydomain.Memory{oldest, newest} {
+		for _, m := range list {
+			if _, dup := seen[m.ID]; dup {
+				continue
+			}
+			seen[m.ID] = struct{}{}
+			merged = append(merged, m)
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt.Before(merged[j].CreatedAt) })
+	return merged, nil
 }
+
+// defaultOpenLoopLimit 快照未决 loop 兜底上限(与 service 层 snapshotMaxLoops 语义一致;
+// repository 不反向依赖 service,故本地定义。现有唯一调用点始终显式传参)。
+const defaultOpenLoopLimit = 20
 
 // TransitionLoopStatus loop 生命周期迁移(M8):CAS 语义,仅 fromStatus → toStatus。
 // 只对 kind=loop 生效;返回是否发生迁移(幂等)。

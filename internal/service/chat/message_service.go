@@ -11,7 +11,7 @@ import (
 	agentdomain "omnibot/internal/domain/agent"
 	"omnibot/internal/domain/conversation"
 	chatrepo "omnibot/internal/repository/chat"
-	memorysvc "omnibot/internal/service/memory"
+	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
@@ -26,7 +26,7 @@ const (
 	MaxContextMemories      = 10
 
 	// DefaultMemoryBlockMaxTokens 长期记忆常驻块 token 预算(M8.3 §14.2.4):
-	// manual 全量优先保留,置顶自动记忆超预算截断(按 pinned_at DESC)。
+	// 约束 pinned auto 层(按 pinned_at DESC);manual 为用户意志,全量常驻不参与截断(§6.5)。
 	DefaultMemoryBlockMaxTokens = 2000
 )
 
@@ -71,7 +71,7 @@ type MessageService interface {
 // MemoryInjectionProvider 常驻注入数据提供者(注入分层,§6.5 修订 + M8.3 §14.2.4):
 // 手动记忆全量常驻 + 置顶自动记忆常驻 + 其余自动记忆只出存在性提示(内容走 search_memories 工具检索)。
 type MemoryInjectionProvider interface {
-	GetMemoryInjection(ctx context.Context, userID int64) (*memorysvc.MemoryInjection, error)
+	GetMemoryInjection(ctx context.Context, userID int64) (*memorydomain.MemoryInjection, error)
 }
 
 // TurnSink 对话轮次结束的观察者(12-记忆系统技术方案 §7 沉淀管线 NotifyTurn)。
@@ -93,7 +93,7 @@ type messageService struct {
 	// Phase 3(§8):Conversation Recall(Recent Raw 之后注入,补偿 Compact 有损)
 	recall RecallSearcher
 	// memoryBlockMaxTokens 长期记忆常驻块的 token 预算(M8.3 §14.2.4):
-	// manual 全量优先保留,pinned auto 超预算截断(按 pinned_at DESC 序)。
+	// 约束 pinned auto 层(按 pinned_at DESC 序);manual 全量常驻不参与截断(§6.5)。
 	memoryBlockMaxTokens int
 	// turnSinks 轮次收尾观察者(M7 起有多个:沉淀管线+消息嵌入器)。
 	// 曾是单字段:后注入的嵌入器覆盖先注入的沉淀管线,记忆停止总结——必须广播。
@@ -279,26 +279,24 @@ func (s *messageService) buildLongTermMemoryMessages(ctx context.Context, userID
 		return nil
 	}
 
-	// 预算内组装:manual 全量 → pinned auto 依次保留,超预算截断
+	// 组装(§6.5 契约 + M8.3 §14.2.4):manual = 用户意志,契约是「全量常驻」——不参与截断;
+	// 预算只约束 M8.3 新增的 pinned auto 层(助手笔记,量可增长)。
+	// manual 的成本仍计入起点,故「manual 全量 + pinned 预算」的总量依旧受 memoryBlockMaxTokens 约束。
 	kept := make([]string, 0, len(inj.Manual)+len(inj.PinnedAuto))
-	truncated := 0
 	used := 0
-	appendItem := func(item string) bool {
-		cost := EstimateTokens(item) + 2 // 编号与换行开销
+	for _, m := range inj.Manual {
+		kept = append(kept, m)        // 全量注入,不做预算判断(超预算也不丢)
+		used += EstimateTokens(m) + 2 // 编号与换行开销
+	}
+	truncated := 0
+	for _, p := range inj.PinnedAuto {
+		cost := EstimateTokens(p) + 2
 		if used+cost > s.memoryBlockMaxTokens {
-			return false
+			truncated++ // 只截断 pinned,并计入存在性提示
+			continue
 		}
 		used += cost
-		kept = append(kept, item)
-		return true
-	}
-	for _, m := range inj.Manual {
-		appendItem(m) // manual 全量优先:超预算也不截断(继续尝试下一条)
-	}
-	for _, p := range inj.PinnedAuto {
-		if !appendItem(p) {
-			truncated++
-		}
+		kept = append(kept, p)
 	}
 
 	if len(kept) == 0 && inj.AutoCount == 0 {

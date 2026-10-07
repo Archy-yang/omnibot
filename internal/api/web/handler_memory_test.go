@@ -34,6 +34,10 @@ type mockMemoryService struct {
 	pinMemoryID     int64
 	pinPinned       bool
 	pinNotFound     bool
+	loopUserID      int64
+	loopMemoryID    int64
+	loopStatus      string
+	loopErr         error
 }
 
 func (m *mockMemoryService) Remember(ctx context.Context, userID int64, content string) (*memorydomain.Memory, error) {
@@ -121,6 +125,7 @@ func newMemoryTestRouter(memorySvc *mockMemoryService) (*gin.Engine, *mockUserSe
 	router.DELETE("/api/v1/memories/:id", handler.HandleDeleteMemory)
 	router.PUT("/api/v1/memories/:id", handler.HandleUpdateMemory)
 	router.PUT("/api/v1/memories/:id/pin", handler.HandlePinMemory)
+	router.PUT("/api/v1/memories/:id/loop-status", handler.HandleSetLoopStatus)
 	return router, userSvc
 }
 
@@ -406,8 +411,8 @@ func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ s
 }
 
 // GetMemoryInjection 注入分层桩(web handler 测试不涉及注入,返回空)。
-func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) (*memorysvc.MemoryInjection, error) {
-	return &memorysvc.MemoryInjection{}, nil
+func (m *mockMemoryService) GetMemoryInjection(_ context.Context, _ int64) (*memorydomain.MemoryInjection, error) {
+	return &memorydomain.MemoryInjection{}, nil
 }
 
 // SetPinned 置顶桩(M8.3)。
@@ -416,6 +421,14 @@ func (m *mockMemoryService) SetPinned(_ context.Context, userID int64, memoryID 
 	m.pinMemoryID = memoryID
 	m.pinPinned = pinned
 	return !m.pinNotFound, nil
+}
+
+// SetLoopStatus loop 关闭/重开桩(E3):记录调用,返回预设结果。
+func (m *mockMemoryService) SetLoopStatus(_ context.Context, userID int64, memoryID int64, status string) (bool, error) {
+	m.loopUserID = userID
+	m.loopMemoryID = memoryID
+	m.loopStatus = status
+	return !m.pinNotFound, m.loopErr
 }
 
 // ClearSource 按 source 清空桩:记录调用供断言。
@@ -522,4 +535,61 @@ func TestHandlePinMemory_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Contains(t, w.Body.String(), "记忆不存在或不属于当前用户。")
+}
+
+// ---- HandleSetLoopStatus(E3:loop 管理面关闭/重开) ----
+
+func TestHandleSetLoopStatus_Close(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/7/loop-status", strings.NewReader(`{"status":"closed"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已标记为已完成")
+	assert.Equal(t, int64(7), memorySvc.loopMemoryID)
+	assert.Equal(t, "closed", memorySvc.loopStatus)
+	assert.Equal(t, int64(42), memorySvc.loopUserID)
+}
+
+func TestHandleSetLoopStatus_Reopen(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/7/loop-status", strings.NewReader(`{"status":"open"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "已重新打开")
+	assert.Equal(t, "open", memorySvc.loopStatus)
+}
+
+func TestHandleSetLoopStatus_InvalidStatus(t *testing.T) {
+	memorySvc := &mockMemoryService{}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/7/loop-status", strings.NewReader(`{"status":"done"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "仅接受 open 或 closed")
+}
+
+func TestHandleSetLoopStatus_NotFound(t *testing.T) {
+	memorySvc := &mockMemoryService{pinNotFound: true}
+	router, _ := newMemoryTestRouter(memorySvc)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/memories/999/loop-status", strings.NewReader(`{"status":"closed"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

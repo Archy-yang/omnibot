@@ -40,16 +40,13 @@ type MemoryService interface {
 	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订 + M8.3 §14.2.4):
 	// Manual=手动全量(用户意志,时间正序);PinnedAuto=置顶自动记忆(pinned_at 倒序,
 	// 唯一进常驻的自动记忆);AutoCount=自动记忆总数(注入端换算未列出条数)。
-	GetMemoryInjection(ctx context.Context, userID int64) (*MemoryInjection, error)
+	GetMemoryInjection(ctx context.Context, userID int64) (*memorydomain.MemoryInjection, error)
 	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false,handler 映射 404)。
 	SetPinned(ctx context.Context, userID int64, memoryID int64, pinned bool) (bool, error)
-}
-
-// MemoryInjection 常驻注入数据(§6.5 + M8.3 §14.2.4)。
-type MemoryInjection struct {
-	Manual     []string // 手动记忆全量(用户主动交代)
-	PinnedAuto []string // 置顶自动记忆(常驻 core 例外,新近置顶优先)
-	AutoCount  int      // 自动记忆总数
+	// SetLoopStatus 管理面手动关闭/重开 loop(§14.2.2「可人工回滚」逃生口,架构复评 E3)。
+	// 目标态驱动:closed=关闭(open→closed CAS)、open=重开(closed→open CAS)。
+	// 非法状态由 handler 校验(400);未命中(他人/不存在/非 loop/状态不符)→ false(handler 404)。
+	SetLoopStatus(ctx context.Context, userID int64, memoryID int64, status string) (bool, error)
 }
 
 // RecentMessageSource 中期记忆原文回表(M7 §10.6):命中消息向量后取 content+时间。
@@ -135,7 +132,7 @@ func (s *memoryService) List(ctx context.Context, userID int64) ([]*memorydomain
 // GetMemoryInjection 常驻注入数据:手动全量 ∪ 置顶自动(M8.3),自动计数供存在性提示。
 // 注入分层(§6.5 修订):手动=用户意志,常驻;自动=助手笔记,默认只提示存在、内容走
 // search_memories;唯一例外是 pinned=true 的自动记忆(用户标记常驻,§14.2.4)。
-func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*MemoryInjection, error) {
+func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*memorydomain.MemoryInjection, error) {
 	manuals, err := s.repo.ListManualByUserID(userID)
 	if err != nil {
 		return nil, err
@@ -160,9 +157,9 @@ func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*
 		// 计数失败不影响常驻注入,只不出提示行
 		logger.WarnWithFields("memory: 自动记忆计数失败,注入缺存在性提示",
 			zap.Int64("user_id", userID), zap.Error(err))
-		return &MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto}, nil
+		return &memorydomain.MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto}, nil
 	}
-	return &MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto, AutoCount: int(auto)}, nil
+	return &memorydomain.MemoryInjection{Manual: manual, PinnedAuto: pinnedAuto, AutoCount: int(auto)}, nil
 }
 
 // SetPinned 置顶/取消置顶(M8.3 §14.2.4):用户在记忆抽屉把某条自动记忆标记常驻。
@@ -291,4 +288,28 @@ func (s *memoryService) Update(ctx context.Context, userID int64, memoryID int64
 	}
 
 	return memory, nil
+}
+
+// SetLoopStatus 管理面手动关闭/重开 loop(§14.2.2 承诺的逃生口,架构复评 E3)。
+// 快照窗口外的未决 loop 此处可手动关闭;已关闭的 loop 可人工重开(回滚)。
+func (s *memoryService) SetLoopStatus(ctx context.Context, userID int64, memoryID int64, status string) (bool, error) {
+	from, to := memorydomain.MemoryLoopStatusOpen, memorydomain.MemoryLoopStatusClosed
+	action := "close"
+	if status == memorydomain.MemoryLoopStatusOpen {
+		from, to = memorydomain.MemoryLoopStatusClosed, memorydomain.MemoryLoopStatusOpen
+		action = "reopen"
+	}
+	ok, err := s.repo.TransitionLoopStatus(memoryID, userID, from, to)
+	if err != nil {
+		logger.ErrorWithFields("Failed to set loop status",
+			zap.Int64("user_id", userID), zap.Int64("memory_id", memoryID),
+			zap.String("action", action), zap.Error(err))
+		return false, err
+	}
+	if ok {
+		logger.InfoWithFields("Loop status changed",
+			zap.Int64("user_id", userID), zap.Int64("memory_id", memoryID),
+			zap.String("action", action), zap.String("operation", "memory_loop_status"))
+	}
+	return ok, nil
 }

@@ -39,8 +39,10 @@ func TestParse_Tampered(t *testing.T) {
 	token, err := svc.GenerateToken(1)
 	require.NoError(t, err)
 
-	// 篡改最后一个字符
-	tampered := token[:len(token)-1] + string(alterLast(token[len(token)-1]))
+	// 篡改 payload 中段的一个字符(不能改最后一个字符——base64url 末字符
+	// 可能只携带填充位,改动不改变解码字节,签名校验会照常通过,导致测试偶发通过)
+	mid := len(token) / 2
+	tampered := token[:mid] + string(alterLast(token[mid])) + token[mid+1:]
 	_, err = svc.ParseToken(tampered)
 	assert.Error(t, err)
 }

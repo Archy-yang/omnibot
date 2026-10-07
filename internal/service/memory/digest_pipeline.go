@@ -54,11 +54,11 @@ type DigestPipeline struct {
 	// embeddingResolver 用户级向量解析(M5.1,§5.3 同源):非 nil 且返回非 nil 时优先;
 	// nil/解析为 nil → 回落系统默认 embedding。
 	embeddingResolver func(userID int64) EmbeddingProvider
-	threshold         int         // pending 消息数阈值
-	maxBatchMessages  int         // 单轮最多沉淀的消息数(积压分块,防巨包请求)
+	threshold         int           // pending 消息数阈值
+	maxBatchMessages  int           // 单轮最多沉淀的消息数(积压分块,防巨包请求)
 	silenceGap        time.Duration // 段落边界静默阈值(M8.1 §14.2.1):相邻非 report 消息间隔 ≥ 此值视为段落边界
-	audit             DigestAudit // 留痕(M5.3):task+step 可观测,nil=仅日志
-	inflight          sync.Map    // userID → struct{} (per-user 单飞标记)
+	audit             DigestAudit   // 留痕(M5.3):task+step 可观测,nil=仅日志
+	inflight          sync.Map      // userID → struct{} (per-user 单飞标记)
 }
 
 // SetAudit 注入留痕适配器(装配点调用;不影响既有测试)。
