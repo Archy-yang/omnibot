@@ -181,3 +181,23 @@ Execute:
   withUserID），无需改动。
 - 测试：larkauth 4 项（mock CLI）/ handler 4 项 / feishu profile 4 项（stub 脚本）,全量 39 包绿；
   既有 feishu_tool 9 项零回归。
+
+### 收尾分类修复（2026-10-11 晚，实测驱动）
+
+首次真机走流程暴露两个误判（`feishu-auth` 401 误判为另一独立 bug，已同日修）：
+
+1. **成功退出码非零**：实测 `auth login --device-code` 收尾**成功**也以退出码 3 退出（stderr 自打印
+   "exited with code 0"）——按"退出码非零=失败"分类会把用户已确认的授权误杀清场。
+2. **超时被杀误判失败**：5s 探测超时被吞成字符串错误，`isTimeout` 认不出 → 走 default → failed。
+   另实测杀进程后 Run 滞留（5s 封顶漂移到 10.7s，管道被占用所致）。
+
+修复（实测时间数据：确认后**秒级**返回 token；device code `expires_in=600`）：
+
+- `cliReal.run`：超时以 `context.DeadlineExceeded` 类型透出 + `WaitDelay=1s` 防管道滞留
+- `PollAuth` 分类重写，**权威判据是 whoami token 就绪，退出码不参与判定**：
+  token 就绪 → authorized；探测超时 → 保持 pending（链接仍在，下轮再问）；whoami 瞬时失败 →
+  pending 下轮补回显；CLI 明确报错（code 过期/无效）→ failed
+- 新增回归测试 5 项（成功但退出码非零 / 超时保持 pending / DeadlineExceeded 类型透出 /
+  WaitDelay 有界返回 / 非超时错误可区分），larkauth 9 项全绿
+- 前端登录跳转两 bug 同日修复：feishu-auth handler 误读 request ctx（改读 gin.Context）+
+  三处硬编码 `/login` 改跟随 BASE_URL（vite base=/chat/）

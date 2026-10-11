@@ -175,6 +175,50 @@ func TestPollAuth(t *testing.T) {
 	assert.Equal(t, StatusFailed, repo2.rows[8].Status)
 }
 
+// T2.1 成功判据是 token 就绪(whoami),不是收尾退出码——实测 lark-cli 收尾成功也以非零码退出(exit 3),
+// 按"退出码非零=失败"分类会把用户已确认的授权误杀(2026-10-11 线上复现)。
+func TestPollAuth_SuccessDespiteNonZeroExit(t *testing.T) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+
+	repo := newMockRepo()
+	cli := &mockCLI{
+		startURL: "u", startUserCode: "c", startDevice: "d",
+		completeErr:  errors.New("lark-cli auth 失败: (退出码 3,但 stderr 显示 token response received)"),
+		statusOpenID: "ou_f88a", statusName: "杨琦",
+	}
+	svc := NewService(repo, cli)
+	_, err := svc.StartAuth(context.Background(), 7, "a", "s")
+	require.NoError(t, err)
+
+	view, err := svc.PollAuth(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusAuthorized, view.Status, "token 就绪即授权成功,退出码不参与判定")
+	assert.Equal(t, "ou_f88a", view.OpenID)
+	assert.Equal(t, StatusAuthorized, repo.rows[7].Status)
+	assert.Empty(t, repo.rows[7].DeviceCode)
+}
+
+// T2.2 单次探测超时(DeadlineExceeded)且 token 未就绪 → 保持 pending,不得转 failed。
+func TestPollAuth_TimeoutStaysPending(t *testing.T) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+
+	repo := newMockRepo()
+	cli := &mockCLI{
+		startURL: "u", startUserCode: "c", startDevice: "d",
+		completeErr: context.DeadlineExceeded,
+		statusErr:   errors.New("whoami: not logged in"),
+	}
+	svc := NewService(repo, cli)
+	_, err := svc.StartAuth(context.Background(), 7, "a", "s")
+	require.NoError(t, err)
+
+	view, err := svc.PollAuth(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, view.Status)
+	assert.Equal(t, StatusPending, repo.rows[7].Status, "超时≠失败,pending 行原样保留(验证链接仍在)")
+	assert.NotEmpty(t, repo.rows[7].VerifiedURL)
+}
+
 // T3 Disconnect:logout 调用 + 行删除;logout 失败不影响删除;无授权行 → ErrNotFound。
 func TestDisconnect(t *testing.T) {
 	crypto.InitWithKey([]byte("01234567890123456789012345678901"))

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -60,13 +61,20 @@ func NewRealCLI(cfg CLIConfig) LarkCLI { return &cliReal{cfg: cfg} }
 type cliReal struct{ cfg CLIConfig }
 
 // run 执行 lark-cli(argv 直传),返回 stdout;退出码非零时附尾部输出(错误信息对排障有价值)。
+// 注意:退出码不参与上层成败判定——实测收尾成功也可能非零退出(见 PollAuth)。
+// 超时被杀必须以 context.DeadlineExceeded 类型透出(上层据此判"还没确认");WaitDelay 防
+// 管道被孙进程占用导致 Run 滞留(实测曾把 5s 封顶拖到 10.7s)。
 func (c *cliReal) run(ctx context.Context, args ...string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, c.cfg.bin(), args...) //nolint:gosec // 受控 bin + argv 直传
+	cmd.WaitDelay = time.Second
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
 		tail := errOut.String()
 		if len(tail) > 400 {
 			tail = tail[len(tail)-400:]

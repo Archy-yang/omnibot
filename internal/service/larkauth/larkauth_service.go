@@ -82,8 +82,9 @@ func (s *Service) StartAuth(ctx context.Context, userID int64, appID, appSecret 
 	return View{Status: row.Status, AppID: appID, VerifyURL: verifyURL, UserCode: userCode}, nil
 }
 
-// PollAuth 惰性收尾 + 状态查询:pending → LoginComplete(短超时)→ 成功转 authorized /
-// 超时保持 pending / CLI 报过期转 failed。非 pending 或无行直接返回现状。
+// PollAuth 惰性收尾 + 状态查询:pending → LoginComplete(短超时)→ 按结果分类。
+// 成败判定不看出收尾的退出码——实测 lark-cli 收尾成功也可能非零退出(exit 3);
+// 权威判据是 whoami 的 token 是否就绪。非 pending 或无行直接返回现状。
 func (s *Service) PollAuth(ctx context.Context, userID int64) (View, error) {
 	row, err := s.repo.GetByUserID(userID)
 	if err != nil {
@@ -96,19 +97,22 @@ func (s *Service) PollAuth(ctx context.Context, userID int64) (View, error) {
 		return s.viewOf(row), nil
 	}
 	completeErr := s.cli.LoginComplete(ctx, row.ProfileName, row.DeviceCode)
+	openID, userName, stErr := s.cli.Status(row.ProfileName)
 	switch {
-	case completeErr == nil:
-		openID, userName, stErr := s.cli.Status(row.ProfileName)
-		if stErr != nil {
-			// 授权已确认但回显失败:不回退状态,记日志下轮 poll 再补
-			log.Printf("larkauth: user=%d 授权完成但 whoami 失败: %v", userID, stErr)
-		}
+	case stErr == nil && openID != "":
+		// token 就绪即授权成功(用户已确认)
 		row.Status = userdomain.LarkAuthStatusAuthorized
 		row.OpenID, row.UserName = openID, userName
 		row.DeviceCode, row.VerifiedURL = "", ""
-	case ctx.Err() != nil || isTimeout(completeErr):
-		return s.viewOf(row), nil // 等待确认,保持 pending
+	case errors.Is(completeErr, context.DeadlineExceeded) || isTimeout(completeErr):
+		// 单次探测超时=还没确认:保持 pending 原样(验证链接仍在),下轮 poll 再问
+		return s.viewOf(row), nil
+	case completeErr == nil && stErr != nil:
+		// 收尾正常结束但 whoami 暂时失败:保持 pending,下轮 poll 再补回显
+		log.Printf("larkauth: user=%d 收尾完成但 whoami 失败(下轮重试): %v", userID, stErr)
+		return s.viewOf(row), nil
 	default:
+		// CLI 明确报错(code 过期/无效等)→ failed
 		row.Status = userdomain.LarkAuthStatusFailed
 		row.DeviceCode, row.VerifiedURL = "", ""
 	}
