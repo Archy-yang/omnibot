@@ -10,7 +10,7 @@
 | 项 | 内容 |
 |----|------|
 | 版本 | v1.0 |
-| 状态 | 已确认（2026-10-11 设计评审通过；M1 待实施） |
+| 状态 | **M1 + M2 已落地（2026-10-11）**；M3（对话内触发）视使用决定 |
 | 上游 | [13-Tool与MCP插件系统](./13-Skill与MCP插件系统技术方案.md) §7.5（feishu_tool 现状）、[17-脚本沙箱](./17-脚本沙箱技术方案.md)（§6 安全收口同款纪律）、调研文档（CLI 能力实测） |
 | 关联 | v2.2-飞书绑定（user_channels：账号↔飞书身份的消息渠道绑定，与本方案"操作能力授权"互补且独立） |
 
@@ -166,3 +166,18 @@ Execute:
 
 **文档版本**：v1.0
 **创建日期**：2026-10-11
+
+---
+
+## 落地记录（M1 + M2，2026-10-11）
+
+- **M1**：`user_larkcli_auths` 表（AutoMigrate）+ `internal/service/larkauth`（Service 编排 +
+  `LarkCLI` 窄接口 / `cliReal` 真实实现——argv 直传/超时/--json 宽容解析多候选字段名）+
+  `/api/v1/feishu-auth` 四端点（JWT 按 user 隔离,requireUserID 兜底 401）+ 设置抽屉「飞书授权」区
+  （发起 → 验证链接 + 2s 轮询自动收尾 → 身份回显/断开）。
+- **M2**：`FeishuCLIConfig.Resolver`（nil=现状,向后兼容）——Execute 按 `toolcore.UserIDFromContext`
+  查 `ProfileForUser` → argv 前插 `--profile user-<id>`；未授权返回引导文案不执行；wire 装配。
+- **§9 风险项实检**：delegate user_id 传递已确认贯通（`sub_agent_runner.go:143` → RunStream →
+  withUserID），无需改动。
+- 测试：larkauth 4 项（mock CLI）/ handler 4 项 / feishu profile 4 项（stub 脚本）,全量 39 包绿；
+  既有 feishu_tool 9 项零回归。

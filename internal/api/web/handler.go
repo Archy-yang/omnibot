@@ -95,6 +95,8 @@ type Handler struct {
 	mcpManager MCPManager
 	// 技能管理(18-Skill 技能系统)。nil 时技能接口返回 503(向后兼容)。
 	skillService SkillManager
+	// 用户级飞书授权(19 号)。nil 时授权接口返回 503(向后兼容)。
+	larkAuthService LarkAuthManager
 }
 
 // NewHandler 创建 Web 聊天处理器

@@ -40,11 +40,18 @@ var feishuAllowedDomains = map[string]bool{
 	"schema": true, "skills": true, "api": true,
 }
 
+// ProfileResolver 用户级 lark-cli profile 解析(19-多用户LarkCLI授权技术方案 §6)。
+// authorized → "user-<id>";未授权 → ErrNotAuthorized。nil = 不启用(行为同现状)。
+type ProfileResolver interface {
+	ProfileForUser(userID int64) (string, error)
+}
+
 // FeishuCLIConfig CLI 桥接配置(零值字段取默认)。
 type FeishuCLIConfig struct {
-	BinPath     string        // lark-cli 可执行路径,默认 "lark-cli"(PATH 查找)
-	Timeout     time.Duration // 单次执行超时,默认 60s
-	OutputLimit int           // 输出截断上限(字节),默认 32KB
+	BinPath     string          // lark-cli 可执行路径,默认 "lark-cli"(PATH 查找)
+	Timeout     time.Duration   // 单次执行超时,默认 60s
+	OutputLimit int             // 输出截断上限(字节),默认 32KB
+	Resolver    ProfileResolver // 非 nil 时按 ctx 用户动态 --profile(19 号 M2)
 }
 
 func (c FeishuCLIConfig) binPath() string {
@@ -103,7 +110,17 @@ func CreateFeishuTool(cfg FeishuCLIConfig) toolcore.Tool {
 			if err := validateFeishuArgs(cliArgs); err != nil {
 				return "", err
 			}
-			return runFeishuCLI(ctx, cfg, cliArgs, feishuStdin(args))
+			profile := ""
+			if cfg.Resolver != nil {
+				if userID := toolcore.UserIDFromContext(ctx); userID > 0 {
+					p, perr := cfg.Resolver.ProfileForUser(userID)
+					if perr != nil {
+						return "", fmt.Errorf("尚未完成飞书授权:请在 设置-飞书授权 中连接后重试(授权一次,后续自动使用你的身份)")
+					}
+					profile = p
+				}
+			}
+			return runFeishuCLI(ctx, cfg, cliArgs, feishuStdin(args), profile)
 		},
 	}
 }
@@ -147,11 +164,16 @@ func validateFeishuArgs(cliArgs []string) error {
 }
 
 // runFeishuCLI 执行 lark-cli:超时控制 + stdin 透传 + 输出截断。
-func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, cliArgs []string, stdin string) (string, error) {
+// profile 非空时 argv 前插 --profile(19 号 M2:按当前用户隔离授权)。
+func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, cliArgs []string, stdin, profile string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, cfg.timeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, cfg.binPath(), cliArgs...) //nolint:gosec // 白名单校验后的受控执行
+	fullArgs := cliArgs
+	if profile != "" {
+		fullArgs = append([]string{"--profile", profile}, cliArgs...)
+	}
+	cmd := exec.CommandContext(runCtx, cfg.binPath(), fullArgs...) //nolint:gosec // 白名单校验后的受控执行
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
