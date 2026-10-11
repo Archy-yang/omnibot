@@ -233,4 +233,28 @@ func TestSkillService_OnChange(t *testing.T) {
 	assert.Equal(t, 3, calls)
 }
 
+// T6 SaveSkillByAgent:source=agent、enabled=false;重名不覆盖;校验同 Create。
+func TestSaveSkillByAgent(t *testing.T) {
+	repo := newMockSkillRepository()
+	svc := NewSkillService(repo)
+
+	created, err := svc.SaveSkillByAgent(okInput())
+	require.NoError(t, err)
+	assert.Equal(t, skilldomain.SourceAgent, created.Source)
+	assert.False(t, created.Enabled, "Agent 生成默认停用待审")
+	assert.Len(t, svc.Catalog(), 0, "停用技能不进目录")
+
+	// 重名 → 不覆盖
+	_, err = svc.SaveSkillByAgent(okInput())
+	assert.ErrorIs(t, err, ErrNameTaken)
+	row, _ := repo.GetByName("charge-analysis")
+	assert.Equal(t, skilldomain.SourceAgent, row.Source, "原记录未被覆盖为 manual")
+
+	// 校验透传:非法 name
+	bad := okInput()
+	bad.Name = "Bad"
+	_, err = svc.SaveSkillByAgent(bad)
+	assert.ErrorIs(t, err, ErrNameInvalid)
+}
+
 func boolPtr(b bool) *bool { return &b }

@@ -8,7 +8,7 @@
 | 项 | 内容 |
 |----|------|
 | 版本 | v1.1 |
-| 状态 | **S1 已落地（2026-10-11）**；S1.5（save_skill）待实施 |
+| 状态 | **S1 + S1.5 已落地（2026-10-11）**；S2 待实施 |
 | 上游 | [13-Tool与MCP插件系统技术方案](./13-Skill与MCP插件系统技术方案.md)（skill 概念留白出处）、[11-Prompt管理技术方案](./11-Prompt管理技术方案.md)（section 化/provider 机制）、[17-脚本沙箱技术方案](./17-脚本沙箱技术方案.md)（脚本执行底座） |
 
 ---
@@ -188,6 +188,10 @@ SaveSkillByAgent(name, description, instruction string, files []FileInput) (int6
 > 以 ToolDrawer 实况为准) + skill_catalog Provider 动态段(order 95,**agentprompt extras
 > 首个生产使用**;CRUD 经 OnChange 回调重建整份 system prompt,免重启)。
 > 测试:service 5 / repo 5 / tool 5 / handler 6 / prompt extras 1,全量 38 包绿。
+>
+> **S1.5 落地(2026-10-11)**:`save_skill` 工具(service.SaveSkillByAgent:source=agent、
+> enabled=false、重名不覆盖)+ wire 注册 + CatalogPrompt 尾注更新(沉淀技能引导改指 save_skill)。
+> 约束落实:该工具无 enabled 入参——启停只走 Web,防 Agent 未经审阅扩充自己的指令面。
 >
 > **实施期事故留痕(撞号)**:`migrateSkillsToTools` 守卫 `HasTable("skills")` 把新 Skill 表
 > 误当正名迁移的旧表,启动 FATAL 且迁移末尾会 DropTable 新表——已修:旧表判定加

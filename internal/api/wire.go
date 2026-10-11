@@ -341,6 +341,10 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateLoadSkillTool(skillSvc)
 	})
+	// save_skill(18 号 §5.3,S1.5):对话中把流程沉淀为技能,默认停用待审
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+		return agenttools.CreateSaveSkillTool(skillSvc)
+	})
 	if err := toolSvc.SeedBuiltins(); err != nil {
 		logger.Error("工具定义 seed 失败: " + err.Error())
 	}

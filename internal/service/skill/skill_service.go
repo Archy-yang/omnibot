@@ -119,7 +119,7 @@ func (s *SkillService) CatalogPrompt() string {
 			fmt.Fprintf(&b, "- %s:%s\n", e.Name, e.Description)
 		}
 	}
-	b.WriteString("目录里没有相关技能时按常规方式处理;用户要求把某个流程沉淀为技能时,如实告知可在设置页手动创建。")
+	b.WriteString("目录里没有相关技能时按常规方式处理;用户要求把某个流程沉淀为技能时,调 save_skill 落库(默认停用,告知用户在设置-技能中审阅开启后生效)。")
 	return b.String()
 }
 
@@ -163,6 +163,17 @@ func (s *SkillService) LoadFile(name, path string) (string, error) {
 
 // Create 创建技能(校验 → 落库 → 刷新目录 → 通知)。
 func (s *SkillService) Create(in CreateInput) (*skilldomain.Skill, error) {
+	return s.createWith(in, skilldomain.SourceManual, true)
+}
+
+// SaveSkillByAgent Agent 自助落库(18 号 §5.3):source=agent、enabled=false——
+// 用户审阅后在 Web 端开启才进目录;name 冲突报错(提示换名),不覆盖。
+func (s *SkillService) SaveSkillByAgent(in CreateInput) (*skilldomain.Skill, error) {
+	return s.createWith(in, skilldomain.SourceAgent, false)
+}
+
+// createWith 共享校验与落库管线。
+func (s *SkillService) createWith(in CreateInput, source string, enabled bool) (*skilldomain.Skill, error) {
 	if err := validateName(in.Name); err != nil {
 		return nil, err
 	}
@@ -184,8 +195,8 @@ func (s *SkillService) Create(in CreateInput) (*skilldomain.Skill, error) {
 		DisplayName: in.DisplayName,
 		Description: in.Description,
 		Instruction: in.Instruction,
-		Source:      skilldomain.SourceManual,
-		Enabled:     true,
+		Source:      source,
+		Enabled:     enabled,
 	}
 	if err := s.repo.Create(sk, files); err != nil {
 		return nil, err
