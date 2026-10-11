@@ -9,7 +9,7 @@ package agentprompt
 //
 // section 文本来自 MainDelegationRulesPrompt 等常量(agent.go),常量块是唯一来源,
 // 保证组装与顺序拼接逐字节一致(见 TestMainAgentMigration_Golden)。
-func MainAgentSections(hasSubAgents bool) []PromptSection {
+func MainAgentSections(hasSubAgents bool, extra ...PromptSection) []PromptSection {
 	sections := []PromptSection{
 		// agent_base:基础人格(DefaultSystemPrompt),Order -100 最前。
 		StaticSection("agent_base", ScopeMain, -100, DefaultSystemPrompt),
@@ -17,22 +17,29 @@ func MainAgentSections(hasSubAgents bool) []PromptSection {
 		StaticSection("response_style", ScopeMain, -90, MainResponseStylePrompt),
 	}
 	if !hasSubAgents {
-		return sections
+		return append(sections, extra...)
 	}
-	return append(sections,
+	sections = append(sections,
 		// 派活规则 → 汇报规则 → 任务管理 → 订阅规则,按 Order 升序(100/110/120/130)。
 		StaticSection("delegation_rules", ScopeMain, 100, MainDelegationRulesPrompt),
 		StaticSection("reporting_rules", ScopeMain, 110, MainReportingRulesPrompt),
 		StaticSection("task_mgmt", ScopeMain, 120, MainTaskMgmtToolsPrompt),
 		StaticSection("subscription_rules", ScopeMain, 130, MainSubscriptionRulesPrompt),
 	)
+	return append(sections, extra...)
 }
 
 // BuildMainAgentSystemPrompt 用 registry 组装主 Agent 的 system prompt。
 // hasSubAgents=false → 仅基础人格(等于 DefaultSystemPrompt)。
 func BuildMainAgentSystemPrompt(hasSubAgents bool) (string, error) {
+	return BuildMainAgentSystemPromptWithExtras(hasSubAgents, nil)
+}
+
+// BuildMainAgentSystemPromptWithExtras 组装时附加动态 section(如 skill_catalog——
+// 18 号 §5.1:目录内容由装配点的 SkillService.Provider 求值,prompt 常量里零清单)。
+func BuildMainAgentSystemPromptWithExtras(hasSubAgents bool, extra []PromptSection) (string, error) {
 	r := NewPromptRegistry()
-	for _, s := range MainAgentSections(hasSubAgents) {
+	for _, s := range MainAgentSections(hasSubAgents, extra...) {
 		if err := r.Register(s); err != nil {
 			return "", err
 		}

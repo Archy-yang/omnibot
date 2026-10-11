@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	skilldomain "omnibot/internal/domain/skill"
 )
 
 // skills→tools 正名迁移测试(2026-09):builtin 行启停状态保留,旧表消失,幂等可重跑。
@@ -70,4 +72,25 @@ func TestMigrateSkillsToTools_NoLegacyTable(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, autoMigrate(db))
 	require.NoError(t, migrateSkillsToTools(db), "无 skills 表应静默跳过")
+}
+
+// TestMigrateSkillsToTools_NewSkillsTableSkipped 撞号守护(2026-10-11,18-Skill 技能域):
+// 新 Skill 模型落库表名同为 skills 且无 capabilities 列——迁移必须跳过,且绝不 DropTable 新表。
+// (真实事故:守卫只查 HasTable("skills"),新表被误当旧表,启动 FATAL 且迁移末尾会删掉新表。)
+func TestMigrateSkillsToTools_NewSkillsTableSkipped(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, autoMigrate(db)) // autoMigrate 含新 Skill/SkillFile 模型
+
+	// 新表里放一行真技能,迁移后必须原样存在
+	ns := skilldomain.Skill{Name: "charge-analysis", DisplayName: "充电分析",
+		Description: "测试", Instruction: "## 步骤", Source: skilldomain.SourceManual, Enabled: true}
+	require.NoError(t, db.Create(&ns).Error)
+
+	require.NoError(t, migrateSkillsToTools(db), "新 skills 表(无 capabilities 列)应被跳过")
+
+	var count int64
+	require.NoError(t, db.Model(&skilldomain.Skill{}).Count(&count).Error)
+	assert.Equal(t, int64(1), count, "新技能表的数据不得被动")
+	require.True(t, db.Migrator().HasTable(&skilldomain.Skill{}), "新技能表不得被 DropTable")
 }

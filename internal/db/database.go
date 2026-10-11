@@ -11,6 +11,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/memory"
 	"omnibot/internal/domain/mcp"
+	"omnibot/internal/domain/skill"
 	"omnibot/internal/domain/subscription"
 	"omnibot/internal/domain/tool"
 	"omnibot/internal/domain/user"
@@ -181,6 +182,8 @@ func autoMigrate(db *gorm.DB) error {
 		&tool.Tool{},                 // 13-插件系统:工具定义+启停(单一事实源)
 		&mcp.MCPServer{},             // M3:MCP server 在线配置(DB 为事实源,yaml 仅首次 seed)
 		&subscription.Subscription{}, // 14-订阅源管理:RSS 信息源登记簿(查询时按需取)
+		&skill.Skill{},               // 18-Skill 技能系统:程序性知识包(DB 为事实源,目录按需注入)
+		&skill.SkillFile{},           // 18:技能附属文件(脚本/资源,sandbox_run 执行)
 	)
 }
 
@@ -196,6 +199,12 @@ func ensurePostgresExtensions(db *gorm.DB) error {
 // 迁移后 SeedBuiltins 会以代码内定义 upsert 刷新定义字段,Enabled 不被覆盖。
 func migrateSkillsToTools(db *gorm.DB) error {
 	if !db.Migrator().HasTable("skills") {
+		return nil
+	}
+	// 2026-10-11 起存在同名新表(18-Skill 技能域,Skill 模型落库表名同为 skills)。
+	// 判据:旧表含 capabilities 列,新表没有——列不在 = 新表,迁移早已完成,直接跳过
+	// (否则会把新表当旧表搬进 tools 并在迁移末尾 DropTable 掉,后果是新技能表被删)。
+	if !db.Migrator().HasColumn(&skill.Skill{}, "capabilities") {
 		return nil
 	}
 	copySQL := `INSERT INTO tools

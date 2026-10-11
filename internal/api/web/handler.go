@@ -93,6 +93,8 @@ type Handler struct {
 	toolService ToolService
 	// MCP server 在线管理(M3)。nil 时 MCP 接口返回 503(向后兼容)。
 	mcpManager MCPManager
+	// 技能管理(18-Skill 技能系统)。nil 时技能接口返回 503(向后兼容)。
+	skillService SkillManager
 }
 
 // NewHandler 创建 Web 聊天处理器

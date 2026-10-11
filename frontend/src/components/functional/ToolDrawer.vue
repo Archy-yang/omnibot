@@ -10,9 +10,10 @@
  */
 import { ref, watch } from 'vue';
 import { useToast } from '@/composables/useToast';
-import type { MCPServerItem, ToolItem } from '@/types/api';
+import type { MCPServerItem, SkillFileInput, SkillItem, ToolItem } from '@/types/api';
 import { toolService } from '@/services/tool';
 import { mcpServerService } from '@/services/mcpServer';
+import { skillService } from '@/services/skill';
 import DialogShell from '@/components/layout/DialogShell.vue';
 
 const props = defineProps<{
@@ -61,10 +62,135 @@ const handleToolToggle = async (tool: ToolItem, event: Event) => {
   }
 };
 
+// ===== 技能管理(18-Skill 技能系统):程序性知识包,CRUD 即时生效 =====
+const skills = ref<SkillItem[]>([]);
+const skillsLoading = ref(false);
+const showSkillForm = ref(false);
+const editingSkillId = ref<number | null>(null); // null=新建
+const skillSaving = ref(false);
+const formSkillName = ref('');
+const formSkillDisplayName = ref('');
+const formSkillDescription = ref('');
+const formSkillInstruction = ref('');
+const formSkillFiles = ref<SkillFileInput[]>([]);
+const formSkillEnabled = ref(true);
+
+const loadSkills = async () => {
+  skillsLoading.value = true;
+  try {
+    const data = await skillService.listSkills();
+    skills.value = data.skills;
+  } catch (err) {
+    console.error('Failed to load skills:', err);
+  } finally {
+    skillsLoading.value = false;
+  }
+};
+
+const openSkillCreate = () => {
+  editingSkillId.value = null;
+  formSkillName.value = '';
+  formSkillDisplayName.value = '';
+  formSkillDescription.value = '';
+  formSkillInstruction.value = '';
+  formSkillFiles.value = [];
+  formSkillEnabled.value = true;
+  showSkillForm.value = true;
+};
+
+const openSkillEdit = async (skill: SkillItem) => {
+  try {
+    const detail = await skillService.getSkill(skill.id);
+    editingSkillId.value = skill.id;
+    formSkillName.value = detail.name;
+    formSkillDisplayName.value = detail.display_name;
+    formSkillDescription.value = detail.description;
+    formSkillInstruction.value = detail.instruction;
+    formSkillFiles.value = detail.files.map((f) => ({ path: f.path, content: f.content }));
+    formSkillEnabled.value = detail.enabled;
+    showSkillForm.value = true;
+  } catch (err) {
+    error(err instanceof Error ? err.message : '获取技能详情失败');
+  }
+};
+
+const resetSkillForm = () => {
+  showSkillForm.value = false;
+  editingSkillId.value = null;
+};
+
+const addSkillFile = () => {
+  formSkillFiles.value.push({ path: '', content: '' });
+};
+
+const removeSkillFile = (idx: number) => {
+  formSkillFiles.value.splice(idx, 1);
+};
+
+const handleSaveSkill = async () => {
+  if (!formSkillName.value.trim() || !formSkillDescription.value.trim()) {
+    error('name 与描述必填');
+    return;
+  }
+  skillSaving.value = true;
+  try {
+    if (editingSkillId.value === null) {
+      await skillService.createSkill({
+        name: formSkillName.value.trim(),
+        display_name: formSkillDisplayName.value.trim(),
+        description: formSkillDescription.value.trim(),
+        instruction: formSkillInstruction.value,
+        files: formSkillFiles.value.filter((f) => f.path.trim() !== ''),
+      });
+      success('技能已创建,已进入助手技能目录');
+    } else {
+      await skillService.updateSkill(editingSkillId.value, {
+        display_name: formSkillDisplayName.value.trim(),
+        description: formSkillDescription.value.trim(),
+        instruction: formSkillInstruction.value,
+        enabled: formSkillEnabled.value,
+        files: formSkillFiles.value.filter((f) => f.path.trim() !== ''),
+      });
+      success('技能已保存');
+    }
+    resetSkillForm();
+    await loadSkills();
+  } catch (err) {
+    error(err instanceof Error ? err.message : '保存技能失败');
+  } finally {
+    skillSaving.value = false;
+  }
+};
+
+const handleSkillToggle = async (skill: SkillItem, event: Event) => {
+  const enabled = (event.target as HTMLInputElement).checked;
+  try {
+    await skillService.updateSkill(skill.id, { enabled });
+    skill.enabled = enabled;
+    success(enabled ? `已启用「${skill.display_name || skill.name}」` : `已停用「${skill.display_name || skill.name}」`);
+  } catch (err) {
+    (event.target as HTMLInputElement).checked = !enabled;
+    error(err instanceof Error ? err.message : '更新技能状态失败');
+  }
+};
+
+const handleDeleteSkill = async (skill: SkillItem) => {
+  if (!window.confirm(`确定删除技能「${skill.display_name || skill.name}」?此操作不可恢复。`)) {
+    return;
+  }
+  try {
+    await skillService.deleteSkill(skill.id);
+    success(`已删除「${skill.display_name || skill.name}」`);
+    await loadSkills();
+  } catch (err) {
+    error(err instanceof Error ? err.message : '删除技能失败');
+  }
+};
+
 // ===== MCP 服务管理 =====
 const servers = ref<MCPServerItem[]>([]);
-// 抽屉双 tab:工具(内置 function call)/连接器(MCP server 及其工具能力)
-const activeTab = ref<'tools' | 'connectors'>('tools');
+// 抽屉三 tab:工具(内置 function call)/连接器(MCP server 及其工具能力)/技能(程序性知识包)
+const activeTab = ref<'tools' | 'connectors' | 'skills'>('tools');
 const expandedServers = ref<Set<number>>(new Set());
 const toggleServerExpand = (id: number) => {
   const next = new Set(expandedServers.value);
@@ -258,6 +384,7 @@ watch(
     if (visible) {
       loadTools();
       loadServers();
+      loadSkills();
     }
   }
 );
@@ -270,6 +397,9 @@ watch(
       <button type="button" class="cap-tab" :class="{ active: activeTab === 'tools' }" @click="activeTab = 'tools'">工具</button>
       <button type="button" class="cap-tab" :class="{ active: activeTab === 'connectors' }" @click="activeTab = 'connectors'">
         连接器<span v-if="servers.length > 0" class="cap-tab-count">{{ servers.length }}</span>
+      </button>
+      <button type="button" class="cap-tab" :class="{ active: activeTab === 'skills' }" @click="activeTab = 'skills'">
+        技能<span v-if="skills.length > 0" class="cap-tab-count">{{ skills.length }}</span>
       </button>
     </div>
 
@@ -501,6 +631,100 @@ watch(
           </label>
         </li>
       </ul>
+    </div>
+
+    <!-- ===== 技能 tab(18-Skill 技能系统:程序性知识包) ===== -->
+    <div v-show="activeTab === 'skills'" class="section-tools">
+      <div class="section-title">技能</div>
+      <p class="section-hint">教助手的"做事方法":命中任务时,助手会加载对应技能按步骤执行。启停即时生效。</p>
+
+      <template v-if="showSkillForm">
+        <div class="server-form">
+          <div class="form-field">
+            <label class="form-label" for="skill-name">name <span class="form-optional">小写字母/数字/连字符,创建后不可改</span></label>
+            <input
+              id="skill-name"
+              v-model="formSkillName"
+              class="form-input"
+              type="text"
+              :disabled="editingSkillId !== null"
+              placeholder="如 charge-analysis"
+            />
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="skill-display-name">显示名 <span class="form-optional">选填,中文名</span></label>
+            <input id="skill-display-name" v-model="formSkillDisplayName" class="form-input" type="text" placeholder="如 充电分析" />
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="skill-desc">描述 <span class="form-optional">给助手看的一句话"何时用"</span></label>
+            <input id="skill-desc" v-model="formSkillDescription" class="form-input" type="text" placeholder="如:分析飞书充电记录表的电耗与成本" />
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="skill-instruction">操作指令 <span class="form-optional">Markdown,命中任务时按需加载</span></label>
+            <textarea
+              id="skill-instruction"
+              v-model="formSkillInstruction"
+              class="form-textarea"
+              rows="8"
+              placeholder="## 步骤&#10;1. 用 feishu 读《充电记录》表&#10;2. 需要计算时,把脚本经 sandbox_run 执行&#10;3. 汇报口径:电量/花费/单公里成本"
+            ></textarea>
+          </div>
+          <div class="form-field">
+            <label class="form-label">附属文件 <span class="form-optional">脚本/参考(选填,≤10 个)</span></label>
+            <div v-for="(f, idx) in formSkillFiles" :key="idx" class="skill-file-row">
+              <input v-model="f.path" class="form-input skill-file-path" type="text" placeholder="文件名,如 analyze.py" />
+              <button type="button" class="server-btn" @click="removeSkillFile(idx)">移除</button>
+              <textarea v-model="f.content" class="form-textarea" rows="4" placeholder="文件内容"></textarea>
+            </div>
+            <button type="button" class="add-server-btn" @click="addSkillFile">+ 添加文件</button>
+          </div>
+          <label v-if="editingSkillId !== null" class="server-enable-row">
+            <input v-model="formSkillEnabled" type="checkbox" />
+            <span>启用(进入助手技能目录)</span>
+          </label>
+          <div class="form-actions">
+            <button type="button" class="form-btn" @click="resetSkillForm">取消</button>
+            <button type="button" class="form-btn is-primary" :disabled="skillSaving" @click="handleSaveSkill">
+              {{ skillSaving ? '保存中...' : '保存' }}
+            </button>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <button type="button" class="add-server-btn" @click="openSkillCreate">+ 新建技能</button>
+        <div v-if="skillsLoading" class="hint-text">加载中...</div>
+        <div v-else-if="skills.length === 0" class="hint-text">还没有技能。把常做的流程(如"充电记录分析")沉淀成技能,下次一句话就能复用。</div>
+        <ul v-else class="server-list">
+          <li v-for="skill in skills" :key="skill.id" class="server-item">
+            <div class="server-info">
+              <div class="server-name-row">
+                <span class="server-name">{{ skill.display_name || skill.name }}</span>
+                <span v-if="skill.source === 'agent' && !skill.enabled" class="server-badge is-off">待审阅</span>
+                <span class="server-badge" :class="{ 'is-off': !skill.enabled }">
+                  {{ skill.enabled ? '已启用' : '已停用' }}
+                </span>
+                <span v-if="skill.file_count > 0" class="server-count">{{ skill.file_count }} 个文件</span>
+              </div>
+              <div class="server-desc">{{ skill.description }}</div>
+              <div class="server-url">{{ skill.name }}</div>
+            </div>
+            <div class="server-actions">
+              <button type="button" class="server-btn" @click="openSkillEdit(skill)">编辑</button>
+              <button type="button" class="server-btn" @click="handleDeleteSkill(skill)">删除</button>
+              <label class="tool-switch">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  :aria-label="`启用${skill.display_name || skill.name}`"
+                  :checked="skill.enabled"
+                  @change="handleSkillToggle(skill, $event)"
+                />
+                <span class="tool-switch-slider"></span>
+              </label>
+            </div>
+          </li>
+        </ul>
+      </template>
     </div>
 
     <div class="drawer-footer-spacer"></div>
@@ -897,5 +1121,33 @@ watch(
 
 .drawer-footer-spacer {
   height: 32px;
+}
+.form-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-l2);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.form-textarea:focus {
+  outline: none;
+  border-color: var(--border-l3);
+}
+.skill-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: var(--bg-tip);
+  border-radius: 8px;
+}
+.skill-file-path {
+  flex: 1;
 }
 </style>

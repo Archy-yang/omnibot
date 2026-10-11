@@ -7,8 +7,8 @@
 
 | 项 | 内容 |
 |----|------|
-| 版本 | v1.0 |
-| 状态 | 已确认（2026-10-11 设计对齐；S1 待实施） |
+| 版本 | v1.1 |
+| 状态 | **S1 已落地（2026-10-11）**；S1.5（save_skill）待实施 |
 | 上游 | [13-Tool与MCP插件系统技术方案](./13-Skill与MCP插件系统技术方案.md)（skill 概念留白出处）、[11-Prompt管理技术方案](./11-Prompt管理技术方案.md)（section 化/provider 机制）、[17-脚本沙箱技术方案](./17-脚本沙箱技术方案.md)（脚本执行底座） |
 
 ---
@@ -176,3 +176,20 @@ SaveSkillByAgent(name, description, instruction string, files []FileInput) (int6
 
 **文档版本**：v1.0
 **创建日期**：2026-10-11
+
+---
+
+## 落地记录
+
+> **S1 落地（2026-10-11）**：`internal/domain/skill` + `internal/repository/skill` +
+> `internal/service/skill`（缓存/目录渲染/校验/OnChange）+ `load_skill` 工具 +
+> `/api/v1/skills` CRUD(+GET /:id 详情——实施期补充:编辑回显需要 instruction 全文) +
+> ToolDrawer「技能」tab(实施修正:技能/工具/连接器同属一个管理抽屉,§6 原写 SettingsDrawer
+> 以 ToolDrawer 实况为准) + skill_catalog Provider 动态段(order 95,**agentprompt extras
+> 首个生产使用**;CRUD 经 OnChange 回调重建整份 system prompt,免重启)。
+> 测试:service 5 / repo 5 / tool 5 / handler 6 / prompt extras 1,全量 38 包绿。
+>
+> **实施期事故留痕(撞号)**:`migrateSkillsToTools` 守卫 `HasTable("skills")` 把新 Skill 表
+> 误当正名迁移的旧表,启动 FATAL 且迁移末尾会 DropTable 新表——已修:旧表判定加
+> `HasColumn(capabilities)`(旧表有、新表无),守护测试 `TestMigrateSkillsToTools_NewSkillsTableSkipped`。
+> **教训:新表落名前须 grep 全部 `HasTable("同名")` 守卫。**

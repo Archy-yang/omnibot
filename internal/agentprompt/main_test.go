@@ -21,6 +21,30 @@ func TestMainAgentMigration_Golden_WithSubAgents(t *testing.T) {
 		"主 Agent(有子 Agent)的 registry 组装必须与默认拼接逐字节一致")
 }
 
+// TestMainAgentSections_Extras 动态段注入(18-Skill 技能系统 §5.1,skill_catalog 首个生产使用):
+// extras 附加 section 按 order 排序进入组装;目录内容来自 Provider 而非常量——改数据不改 prompt 源码即生效。
+func TestMainAgentSections_Extras(t *testing.T) {
+	sections := MainAgentSections(true, DynamicSection("skill_catalog", ScopeMain, 95, func(PromptCtx) string {
+		return "== 技能目录==\n- 充电分析(charge-analysis):分析充电记录"
+	}))
+	names := make([]string, 0, len(sections))
+	for _, s := range sections {
+		names = append(names, s.Name)
+	}
+	assert.Contains(t, names, "skill_catalog")
+
+	// 组装:动态段文本出现,且位于 delegation_rules(order 100)之前
+	r := NewPromptRegistry()
+	for _, s := range sections {
+		require.NoError(t, r.Register(s))
+	}
+	got, err := r.Assemble(PromptCtx{Scopes: []ScopeKey{ScopeMain}})
+	require.NoError(t, err)
+	assert.Contains(t, got, "charge-analysis")
+	assert.Less(t, strings.Index(got, "技能目录"), strings.Index(got, "派活规则"),
+		"skill_catalog(95) 应在 delegation_rules(100) 之前")
+}
+
 // TestMainAgentMigration_Golden_NoSubAgents hasSubAgents=false:组装输出 == base + 表达方式。
 func TestMainAgentMigration_Golden_NoSubAgents(t *testing.T) {
 	got, err := BuildMainAgentSystemPrompt(false)

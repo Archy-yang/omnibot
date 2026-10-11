@@ -283,6 +283,48 @@ export interface ListToolsResponse {
 }
 
 /**
+ * 技能附属文件(18-Skill 技能系统)
+ */
+export interface SkillFileInput {
+  path: string;
+  content: string;
+}
+
+/**
+ * 技能清单项(不含 instruction 正文,编辑时单独取)
+ */
+export interface SkillItem {
+  id: number;
+  /** 目录 key(创建后不可变) */
+  name: string;
+  display_name: string;
+  description: string;
+  enabled: boolean;
+  /** 来源:manual=手写;agent=助手生成(未启用时待审) */
+  source: string;
+  file_count: number;
+}
+
+/**
+ * 技能编辑数据(创建/更新请求体)
+ */
+export interface SkillEditPayload {
+  name?: string;
+  display_name?: string;
+  description?: string;
+  instruction?: string;
+  enabled?: boolean;
+  files?: SkillFileInput[];
+}
+
+/**
+ * 技能清单响应类型
+ */
+export interface ListSkillsResponse {
+  skills: SkillItem[];
+}
+
+/**
  * 工具启停响应类型
  */
 export interface UpdateToolsResponse {

@@ -84,6 +84,11 @@ func (s *AgentService) SetMCPContextProvider(p func(ctx context.Context, userID 
 	s.mcpContext = p
 }
 
+// SetSystemPrompt 运行时替换 system prompt(18 号 §5.1:技能目录变更时由装配点重建注入)。
+func (s *AgentService) SetSystemPrompt(p string) {
+	s.systemPrompt = p
+}
+
 // injectMCPContext 在最后一条 user 消息前插入匹配到的 MCP 工具块(Recent Raw 后/问题前,
 // 缓存边界之后零损失)。无命中/无 provider 时原样返回。
 func (s *AgentService) injectMCPContext(ctx context.Context, userID int64, conversation []map[string]interface{}) []map[string]interface{} {

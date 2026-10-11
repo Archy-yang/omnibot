@@ -41,6 +41,8 @@ import (
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
 	sandboxsvc "omnibot/internal/service/sandbox"
+	skillRepo "omnibot/internal/repository/skill"
+	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
 	toolService "omnibot/internal/service/tool"
 	userService "omnibot/internal/service/user"
@@ -299,6 +301,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolRepoImpl := toolRepo.NewToolRepository(dbConn.GetGormDB())
 	mcpServerRepo := mcpRepo.NewMCPServerRepository(dbConn.GetGormDB())
 	toolSvc := toolService.NewToolService(toolRepoImpl)
+	// Skill 技能服务(18 号 §4):DB 为事实源,内存目录缓存 CRUD 即失效(load_skill/目录注入即时生效)
+	skillSvc := skillService.NewSkillService(skillRepo.NewSkillRepository(dbConn.GetGormDB()))
 	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
 	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
@@ -333,6 +337,10 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			return agenttools.CreateSandboxRunTool(sandboxExec)
 		})
 	}
+	// load_skill(18 号 §5.2):技能正文按需加载,主 Agent 可见(技能是管家的"方法库")
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+		return agenttools.CreateLoadSkillTool(skillSvc)
+	})
 	if err := toolSvc.SeedBuiltins(); err != nil {
 		logger.Error("工具定义 seed 失败: " + err.Error())
 	}
@@ -418,7 +426,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 主 Agent 服务:system prompt 由 PromptRegistry 组装(11-Prompt管理),toolRegistry 含 delegate
 	// 派活只走循环内的 delegate 工具一条抽象框架路径:任务在循环内创建,task_id 由框架解析。
 	// 静态 section 组装不可能失败,故忽略 error。
-	agentMainPrompt, _ := agentprompt.BuildMainAgentSystemPrompt(true)
+	// skill_catalog(18 号 §5.1,order 95):首个 Provider 动态段——目录内容来自 SkillService
+	// (prompt 常量零清单,weather 事故同源教训);技能 CRUD 经 OnChange 回调重建整份 prompt。
+	skillCatalogSection := agentprompt.DynamicSection("skill_catalog", agentprompt.ScopeMain, 95,
+		func(agentprompt.PromptCtx) string { return skillSvc.CatalogPrompt() })
+	agentMainPrompt, _ := agentprompt.BuildMainAgentSystemPromptWithExtras(true,
+		[]agentprompt.PromptSection{skillCatalogSection})
 	agentSvc := agentpkg.NewAgentService(agentpkg.AgentServiceConfig{
 		LLMClient:          agentLLMClient,
 		StreamingLLMClient: agentLLMClient, // OpenAILLMClient 同时实现 LLMClient 和 StreamingLLMClient
@@ -432,10 +445,18 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	})
 	// B2:每轮按问题语义匹配 MCP 工具,以 system 消息晚置注入(Recent Raw 后/当前问题前)。
 	agentSvc.SetMCPContextProvider(mcpSvc.BuildMCPContextBlock)
+	// 技能 CRUD → 重建主 Agent system prompt(技能目录即时生效,免重启)
+	skillSvc.SetOnChange(func() {
+		if p, err := agentprompt.BuildMainAgentSystemPromptWithExtras(true,
+			[]agentprompt.PromptSection{skillCatalogSection}); err == nil {
+			agentSvc.SetSystemPrompt(p)
+		}
+	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
+	webHandler.SetSkillService(skillSvc)
 	webHandler.SetMCPManager(mcpSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report

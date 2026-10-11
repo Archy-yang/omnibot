@@ -135,6 +135,17 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		toolAPIGroup.PUT("/:name", d.webHandler.HandleUpdateTool)
 	}
 
+	// Skill 技能管理路由(18-Skill 技能系统):CRUD(启用技能进主 Agent 技能目录)
+	skillAPIGroup := r.Group("/api/v1/skills")
+	skillAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		skillAPIGroup.GET("", d.webHandler.HandleListSkills)
+		skillAPIGroup.GET("/:id", d.webHandler.HandleGetSkill)
+		skillAPIGroup.POST("", d.webHandler.HandleCreateSkill)
+		skillAPIGroup.PUT("/:id", d.webHandler.HandleUpdateSkill)
+		skillAPIGroup.DELETE("/:id", d.webHandler.HandleDeleteSkill)
+	}
+
 	// MCP server 在线管理路由(M3):增删改查 + 手动同步 + OAuth 授权(M4)
 	mcpAPIGroup := r.Group("/api/v1/mcp")
 	mcpAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
