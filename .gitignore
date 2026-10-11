@@ -10,3 +10,6 @@ configs/config.smoke.yaml
 
 # 运行日志(make 启动的服务输出)
 logs/
+
+# 数据库备份(见 make backup)
+backups/
