@@ -7,8 +7,10 @@ import (
 
 // DefaultSubAgentCapabilities 默认子 Agent 能力白名单。
 // 复刻原 researcher 卡工具集(research 类)+ request_input(interactive 基线):rss_reader/web_read/search_memories。
+// code(沙箱执行,17-脚本沙箱技术方案)默认纳入:派活场景"跑脚本干活"是子 Agent 的本职,
+// 停用走 tools 表 enabled 或 config 白名单裁剪。
 // 装配点(cfg.Agent.SubAgent.AllowedCapabilities)为空时回落此默认。
-var DefaultSubAgentCapabilities = []string{CapResearch, CapInteractive}
+var DefaultSubAgentCapabilities = []string{CapResearch, CapCode, CapInteractive}
 
 // ToolProviderResult 子 Agent 工具可见性解析结果(仿 DSH ToolProviderResult:knownNames vs schemas)。
 //
@@ -27,7 +29,7 @@ const alwaysBaselineTool = "request_input"
 // 注意:它不是"当前注册工具所带能力"的并集。默认白名单会引用一个当前可能无工具承载的能力(request_input 的
 // interactive)——即便某进程未注册 request_input,config 写 "interactive" 也是合法的,不应做配错报错。
 // (仿 DSH:knownNames 是已知工具名全集,而非"当前可见"子集;拼错的是它不在全集里,而非"此处没加载")
-var frameworkCapabilities = []string{CapBasic, CapMemory, CapResearch, CapWeb, CapIngest, CapInteractive}
+var frameworkCapabilities = []string{CapBasic, CapMemory, CapResearch, CapWeb, CapIngest, CapCode, CapInteractive}
 
 // ResolveSubAgentTools 由全局工具池 + 能力白名单解析子 Agent 可见工具集。
 //

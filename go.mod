@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	codeberg.org/readeck/go-readability v0.0.0-20260615104154-29522a0e224f
 	github.com/PuerkitoBio/goquery v1.8.0
+	github.com/docker/docker v27.1.1+incompatible
 	github.com/gin-gonic/gin v1.11.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -12,6 +13,7 @@ require (
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.6
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/opencontainers/image-spec v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.34.0
@@ -39,7 +41,6 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker v27.1.1+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -85,7 +86,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

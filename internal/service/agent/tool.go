@@ -31,5 +31,6 @@ const (
 	CapResearch    = toolcore.CapResearch
 	CapWeb         = toolcore.CapWeb
 	CapIngest      = toolcore.CapIngest
+	CapCode        = toolcore.CapCode
 	CapInteractive = toolcore.CapInteractive
 )

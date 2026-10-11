@@ -76,25 +76,45 @@ func TestMainDelegationRulesPrompt_AntiHallucination(t *testing.T) {
 		"推算",
 		"沿用历史编号",
 		"当场穿帮",
-		// B2 直调/派活边界(2026-09-25:游玩规划被主 Agent 连查带算直调,未派活)
-		"多步检索、跨来源汇总",
+		// 判断原则(2026-10-07 重构:由场景枚举改为「能力+量级」两问,枚举追不上能力演进——
+		// 先是游玩规划被直调,后是计算请求被答"没有python环境",都是枚举漏项)
+		// 2026-10-07 二轮(prompt-派活规则评审):两问正交化 + 删掉工具/能力枚举 + 无能宣言升格铁律
+		"先问能力,再问量级",
+		"直接看,不要凭印象",
+		"你没有的执行能力",
+		"不在此处列举",
+		"不许替后台宣布无能",
+		"多步检索跨来源汇总",
 		"即使手上连接器工具能查",
-		"什么时候不派",
+		"直调的样子",
+		"派活的样子",
 		"查个天气",
+		"拿不准时回到上面两问重新判断",
 		// 派活自检 + 例子(2026-09-25 二次漏派:餐饮追问被 10 连发 mcp_call 直调)
 		"派活自检",
 		"追问不豁免",
-		"并发一次发多个查询也算多处",
+		"并发一次发多个查询也算",
 		"对照感受量级",
 	} {
 		assert.Contains(t, MainDelegationRulesPrompt, want, "派活规则缺少关键句 %q", want)
 	}
-	// 铁律必须是规则体的第一段(优先级最高,不允许被其他段落稀释)
+	// 反枚举守护(2026-10-07 prompt-派活规则评审 P0-1):派活规则中不得出现"工具名/能力清单"——
+	// 清单必然与代码脱节(已发生:原"只覆盖 mcp_call/calculator"漏了 weather,
+	// 而同段第一个例子恰好依赖 weather 直调)。新增能力应改 tool description 或 tools 注册,
+	// 不得回来补 prompt 枚举。
+	for _, banned := range []string{"calculator 算式", "mcp_call 查连接器", "沙箱执行 Python/Shell"} {
+		assert.NotContains(t, MainDelegationRulesPrompt, banned,
+			"派活规则出现了能力枚举 %q——能力清单会随实现脱节,请改为「看 tools 参数」", banned)
+	}
+	// 铁律必须是规则体的第一段(优先级最高,不允许被其他段落稀释),
+	// 且必须同时覆盖"编造 task_id"与"虚假无能声明"两面(2026-10-07 二轮)。
 	first := strings.Index(MainDelegationRulesPrompt, "【铁律")
-	second := strings.Index(MainDelegationRulesPrompt, "【什么时候派】")
+	second := strings.Index(MainDelegationRulesPrompt, "【判断原则")
 	require.NotEqual(t, -1, first)
 	require.NotEqual(t, -1, second)
-	assert.Less(t, first, second, "铁律段必须位于「什么时候派」之前")
+	assert.Less(t, first, second, "铁律段必须位于「判断原则」之前")
+	assert.Contains(t, MainDelegationRulesPrompt[first:second], "一、说了就得做过", "铁律须含第一条")
+	assert.Contains(t, MainDelegationRulesPrompt[first:second], "二、做不了就得有证据", "铁律须含第二条")
 }
 
 // TestMainResponseStylePrompt_ButlerVoice 表达方式守护:管家口吻、不叙述工具调用过程

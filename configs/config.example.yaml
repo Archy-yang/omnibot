@@ -110,8 +110,21 @@ logger:
 # 非敏感数据。request_input(interactive)为强制基线恒可见,其余工具需在能力标签 ∩ 此白名单内。
 agent:
   sub_agent:
-    allowed_capabilities: ["research", "interactive"]
+    # code = 沙箱脚本执行(sandbox_run,17-脚本沙箱技术方案);不需要时从白名单移除
+    allowed_capabilities: ["research", "code", "interactive"]
     timeout: "180s"
+
+# 脚本沙箱(17-脚本沙箱技术方案):一次性 Docker 容器执行 Python/Shell。
+# 前置:make sandbox-image 构建镜像(或 docker build -t omnibot-sandbox:latest -f docker/sandbox.Dockerfile .);
+#       本机 Docker 处于运行状态(未启动时工具执行返回引导文案)。
+# 安全默认:断网 + rootfs 只读 + 非 root + 四重资源限额。
+sandbox:
+  image: "omnibot-sandbox:latest"
+  timeout_seconds: 60       # 单次执行默认与上限
+  memory_mb: 512
+  cpu_cores: 1.0
+  max_output_bytes: 32768
+  pids_limit: 64
 
 # 认证配置(v2.1 邮箱密码登录)
 # jwt_secret 生产必须改为强随机值(建议 ≥32 字符),不要提交到 git;
