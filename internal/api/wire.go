@@ -41,6 +41,7 @@ import (
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
 	sandboxsvc "omnibot/internal/service/sandbox"
+	larkauthSvc "omnibot/internal/service/larkauth"
 	skillRepo "omnibot/internal/repository/skill"
 	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
@@ -303,6 +304,11 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc := toolService.NewToolService(toolRepoImpl)
 	// Skill 技能服务(18 号 §4):DB 为事实源,内存目录缓存 CRUD 即失效(load_skill/目录注入即时生效)
 	skillSvc := skillService.NewSkillService(skillRepo.NewSkillRepository(dbConn.GetGormDB()))
+	// 用户级飞书授权服务(19 号 M1):device flow 编排 + feishu_tool 的 profile 解析
+	larkauthService := larkauthSvc.NewService(
+		userRepo.NewLarkCLIAuthRepo(dbConn.GetGormDB()),
+		larkauthSvc.NewRealCLI(larkauthSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath}),
+	)
 	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
 	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
@@ -316,8 +322,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateFeishuTool(agenttools.FeishuCLIConfig{
-			BinPath: cfg.Feishu.CLI.BinPath,
-			Timeout: time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
+			BinPath:  cfg.Feishu.CLI.BinPath,
+			Timeout:  time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
+			Resolver: larkauthService, // 19 号 M2:按 ctx 用户动态 --profile;nil 时行为同现状
 		})
 	})
 	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
@@ -461,6 +468,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
 	webHandler.SetSkillService(skillSvc)
+	// 用户级飞书授权(19 号 M1):device flow 编排 + 状态管理
+	webHandler.SetLarkAuthService(larkauthService)
 	webHandler.SetMCPManager(mcpSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report

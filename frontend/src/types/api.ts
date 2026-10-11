@@ -325,6 +325,19 @@ export interface ListSkillsResponse {
 }
 
 /**
+ * 用户级飞书授权视图(19-多用户LarkCLI授权)
+ * status: none=未发起 pending=等待确认 authorized=已授权 failed=发起失败
+ */
+export interface FeishuAuthView {
+  status: 'none' | 'pending' | 'authorized' | 'failed';
+  app_id?: string;
+  open_id?: string;
+  user_name?: string;
+  verify_url?: string;
+  user_code?: string;
+}
+
+/**
  * 工具启停响应类型
  */
 export interface UpdateToolsResponse {

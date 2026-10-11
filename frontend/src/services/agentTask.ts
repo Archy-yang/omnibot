@@ -1,4 +1,4 @@
-import { request } from '../utils/request';
+import { LOGIN_PATH, request } from '../utils/request';
 import type { ApiResponse, AgentTaskItem, AgentTaskDetail, AgentTaskStep } from '../types/api';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -93,7 +93,7 @@ export const agentTaskService = {
 
       if (response.status === 401) {
         localStorage.removeItem('token');
-        window.location.href = '/login';
+        window.location.href = LOGIN_PATH;
         return;
       }
       if (!response.ok) {

@@ -135,6 +135,16 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		toolAPIGroup.PUT("/:name", d.webHandler.HandleUpdateTool)
 	}
 
+	// 用户级飞书授权路由(19 号):发起/轮询/状态/断开(按 JWT 用户)
+	feishuAuthAPIGroup := r.Group("/api/v1/feishu-auth")
+	feishuAuthAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		feishuAuthAPIGroup.GET("", d.webHandler.HandleGetFeishuAuth)
+		feishuAuthAPIGroup.POST("", d.webHandler.HandleStartFeishuAuth)
+		feishuAuthAPIGroup.GET("/poll", d.webHandler.HandlePollFeishuAuth)
+		feishuAuthAPIGroup.DELETE("", d.webHandler.HandleDisconnectFeishuAuth)
+	}
+
 	// Skill 技能管理路由(18-Skill 技能系统):CRUD(启用技能进主 Agent 技能目录)
 	skillAPIGroup := r.Group("/api/v1/skills")
 	skillAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))

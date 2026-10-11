@@ -160,6 +160,7 @@ func autoMigrate(db *gorm.DB) error {
 		&user.User{},
 		&user.UserChannel{},
 		&user.LLMConfig{},
+		&user.LarkCLIAuth{}, // 19-多用户LarkCLI授权:用户级 lark-cli 授权状态(路由/密文/收尾态)
 		&user.UserCredential{},
 		&user.BindCode{},
 		&conversation.Message{},

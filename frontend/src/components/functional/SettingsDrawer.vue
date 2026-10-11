@@ -16,6 +16,8 @@
 import { ref, watch, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
+import { feishuAuthService } from '@/services/feishuAuth';
+import type { FeishuAuthView } from '@/types/api';
 import type { LLMConfig } from '@/types/api';
 import type { LLMProviderOption } from '@/types/llmProvider';
 import { useSettingsStore } from '@/stores/settings';
@@ -43,9 +45,85 @@ const { success, error } = useToast();
 const navItems = [
   { key: 'chat-model', label: '对话模型' },
   { key: 'embedding-model', label: '向量模型' },
+  { key: 'feishu-auth', label: '飞书授权' },
   { key: 'about', label: '关于' },
 ] as const;
 const activeSection = ref<string>('chat-model');
+
+// ===== 用户级飞书授权(19 号) =====
+const faView = ref<FeishuAuthView | null>(null);
+const faLoading = ref(false);
+const faBusy = ref(false);
+const faAppId = ref('');
+const faSecret = ref('');
+let faPollTimer: number | null = null;
+
+const stopFaPoll = () => {
+  if (faPollTimer !== null) { window.clearInterval(faPollTimer); faPollTimer = null; }
+};
+
+const loadFaStatus = async () => {
+  faLoading.value = true;
+  try {
+    faView.value = await feishuAuthService.getStatus();
+    if (faView.value.status === 'pending') startFaPoll();
+  } catch (err) {
+    console.error('Failed to load feishu auth status:', err);
+  } finally {
+    faLoading.value = false;
+  }
+};
+
+const startFaPoll = () => {
+  stopFaPoll();
+  faPollTimer = window.setInterval(async () => {
+    try {
+      const v = await feishuAuthService.poll();
+      faView.value = v;
+      if (v.status !== 'pending') {
+        stopFaPoll();
+        if (v.status === 'authorized') success(`已连接「${v.user_name || '飞书'}」`);
+      }
+    } catch { /* 轮询容错,下轮再试 */ }
+  }, 2000);
+};
+
+const handleFaStart = async () => {
+  faBusy.value = true;
+  try {
+    faView.value = await feishuAuthService.startAuth(faAppId.value.trim(), faSecret.value);
+    faSecret.value = '';
+    startFaPoll();
+  } catch (err) {
+    error(err instanceof Error ? err.message : '发起授权失败');
+  } finally {
+    faBusy.value = false;
+  }
+};
+
+const handleFaCancel = async () => {
+  stopFaPoll();
+  await handleFaDisconnect();
+};
+
+const handleFaDisconnect = async () => {
+  if (!window.confirm('确定断开飞书授权?断开后飞书工具将不可用,直到重新连接。')) return;
+  faBusy.value = true;
+  try {
+    await feishuAuthService.disconnect();
+    faView.value = { status: 'none' };
+    success('已断开飞书授权');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '断开失败');
+  } finally {
+    faBusy.value = false;
+  }
+};
+
+watch(activeSection, (v) => {
+  if (v === 'feishu-auth') loadFaStatus();
+  else stopFaPoll();
+});
 
 // Local form state — 编辑时不直接改 store,取消时恢复
 const localConfig = ref<LLMConfig>({
@@ -121,7 +199,10 @@ const feishuCountdownText = computed(() => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 });
 
-onUnmounted(() => clearFeishuTimer());
+onUnmounted(() => {
+  clearFeishuTimer();
+  stopFaPoll(); // 19 号:飞书授权轮询随组件卸载停止
+});
 
 // Sync local from store
 watch(
@@ -561,6 +642,48 @@ const showEmbeddingApiKey = ref(false);
     </div>
 
     </div><!-- /.section-pane 向量模型 -->
+
+    <!-- ===== 飞书授权 section(19-多用户LarkCLI授权) ===== -->
+    <div v-show="activeSection === 'feishu-auth'" class="section-pane">
+    <div class="section-title">飞书授权</div>
+    <p class="section-hint">连接后,飞书工具(读文档/多维表格/消息等)将以你本人的飞书身份执行。授权经飞书官方页面完成,密码不经过本服务。</p>
+
+    <div v-if="faLoading" class="form-hint">加载中...</div>
+
+    <template v-else>
+      <!-- 已授权:身份回显 + 断开 -->
+      <div v-if="faView?.status === 'authorized'" class="fa-status-row">
+        <div class="fa-identity">
+          <span class="fa-name">{{ faView.user_name || '已授权' }}</span>
+          <span class="fa-openid">{{ faView.open_id }}</span>
+        </div>
+        <button type="button" class="fa-btn" :disabled="faBusy" @click="handleFaDisconnect">断开授权</button>
+      </div>
+
+      <!-- pending:验证链接 + 轮询 -->
+      <div v-else-if="faView?.status === 'pending'" class="fa-pending">
+        <p class="form-hint">请在浏览器中打开以下链接并确认授权(用户码 <b>{{ faView.user_code }}</b>),确认后本页会自动检测到:</p>
+        <a class="fa-link" :href="faView.verify_url" target="_blank" rel="noopener">{{ faView.verify_url }}</a>
+        <button type="button" class="fa-btn" :disabled="faBusy" @click="handleFaCancel">取消</button>
+      </div>
+
+      <!-- failed / none:发起表单 -->
+      <div v-else class="fa-form">
+        <p v-if="faView?.status === 'failed'" class="form-hint">上次授权未完成,请重新发起。</p>
+        <div class="form-field">
+          <label class="form-label" for="fa-app-id">App ID</label>
+          <input id="fa-app-id" v-model="faAppId" class="form-input" type="text" placeholder="如 cli_aaca2d8cb0a15ce1" />
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="fa-secret">App Secret</label>
+          <input id="fa-secret" v-model="faSecret" class="form-input" type="password" autocomplete="new-password" />
+        </div>
+        <button type="button" class="fa-btn is-primary" :disabled="faBusy || !faAppId || !faSecret" @click="handleFaStart">
+          {{ faBusy ? '发起中...' : '连接我的飞书' }}
+        </button>
+      </div>
+    </template>
+    </div><!-- /飞书授权 section -->
 
     <!-- ===== 关于 section ===== -->
     <div v-show="activeSection === 'about'" class="section-about">
@@ -1140,4 +1263,36 @@ const showEmbeddingApiKey = ref(false);
   height: 32px;
 }
 
+.fa-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-tip);
+  border-radius: 8px;
+}
+.fa-identity { display: flex; flex-direction: column; gap: 2px; }
+.fa-name { font-size: 14px; font-weight: 500; color: var(--label-primary); }
+.fa-openid { font-size: 11px; color: var(--label-tertiary); word-break: break-all; }
+.fa-pending { display: flex; flex-direction: column; gap: 8px; }
+.fa-link {
+  font-size: 12px;
+  color: var(--primary, #3370ff);
+  word-break: break-all;
+}
+.fa-form { display: flex; flex-direction: column; gap: 4px; }
+.fa-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid var(--border-l2);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--label-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.fa-btn.is-primary { color: var(--label-primary); font-weight: 500; }
+.fa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

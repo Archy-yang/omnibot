@@ -13,9 +13,9 @@ import (
 )
 
 type fakeSkillSaver struct {
-	gotInput  *skillsvc.CreateInput
-	returned  *skilldomain.Skill
-	err       error
+	gotInput *skillsvc.CreateInput
+	returned *skilldomain.Skill
+	err      error
 }
 
 func (f *fakeSkillSaver) SaveSkillByAgent(in skillsvc.CreateInput) (*skilldomain.Skill, error) {
