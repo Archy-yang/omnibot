@@ -1,4 +1,4 @@
-import { request } from '../utils/request';
+import { LOGIN_PATH, request } from '../utils/request';
 import type { Message } from '../types/chat';
 import type { ApiResponse, GetHistoryResponse, PaginationParams, SendMessageRequest, ToolCallEvent, ToolResultEvent } from '../types/api';
 
@@ -22,7 +22,7 @@ interface StreamCallbacks {
 // v2.1: 401 集中处理(裸 fetch 不经 axios 拦截器,需手动兜底)
 function handle401AndRedirect(): void {
   localStorage.removeItem('token');
-  window.location.href = '/login';
+  window.location.href = LOGIN_PATH;
 }
 
 export const chatService = {

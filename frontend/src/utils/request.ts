@@ -4,6 +4,10 @@ import type { ApiResponse } from '../types/api';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
+// 登录页路径(跟随构建 base:vite base 为 /chat/,dev/prod 一致,故为 /chat/login;
+// 硬编码 '/login' 会落在 router base 之外,匹配不到任何路由)
+export const LOGIN_PATH = `${import.meta.env.BASE_URL}login`;
+
 const instance: AxiosInstance = axios.create({
   baseURL: BASE_URL,
   timeout: 30000,
@@ -42,7 +46,7 @@ instance.interceptors.response.use(
           // 其他端点 401 = token 失效,清 token 跳登录
           if (!error.config?.url?.startsWith('/auth/')) {
             localStorage.removeItem('token');
-            window.location.href = '/login';
+            window.location.href = LOGIN_PATH;
           }
           break;
         case 403:

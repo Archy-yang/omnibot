@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"omnibot/internal/pkg/toolcore"
+	"omnibot/internal/middleware"
 	larkauth "omnibot/internal/service/larkauth"
 
 	"github.com/gin-gonic/gin"
@@ -24,9 +24,9 @@ func (h *Handler) SetLarkAuthService(svc LarkAuthManager) {
 	h.larkAuthService = svc
 }
 
-// requireUserID 从 ctx 取 JWT 中间件注入的用户 id;缺失返回 false 并回 401。
+// requireUserID 取 JWT 中间件注入 gin.Context 的用户 id(AuthUserIDKey,与各 handler 同源);缺失回 401。
 func (h *Handler) requireUserID(c *gin.Context) (int64, bool) {
-	userID := toolcore.UserIDFromContext(c.Request.Context())
+	userID := c.GetInt64(middleware.AuthUserIDKey)
 	if userID <= 0 {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "未登录"})
 		return 0, false
