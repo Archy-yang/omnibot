@@ -5,6 +5,9 @@
 > `service/tool`+`service/mcp`、API `/api/v1/skills`→`/api/v1/tools`）；**MCP 连接器**= 外部
 > server,其工具目录只在内存缓存不入库（B2 按需加载）；**Skill（技能）**概念留白，未来 =
 > prompt+工具组合的能力包。本文其余章节中的 "skill" 均按此对照读作 "tool"（或连接器）。
+>
+> **2026-10-11 更新**：Skill 留白已立项兑现——[18-Skill技能系统技术方案](./18-Skill技能系统技术方案.md)
+> （DB 存储 + Web CRUD + Agent 自生成 + 按需注入；工具正名迁移不回退，新 skill 域独立于 tool 域）。
 
 ## 文档信息
 
