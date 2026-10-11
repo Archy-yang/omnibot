@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend clean run dev dev-frontend dev-stop dev-logs dev-backend start stop restart status logs test test-backend test-all sandbox-image lint help install-tools
+.PHONY: all build build-frontend build-backend clean run dev dev-frontend dev-stop dev-logs dev-backend start stop restart status logs test test-backend test-all sandbox-image backup lint help install-tools
 
 # Go related variables
 GO_CMD = go
@@ -161,6 +161,24 @@ test-coverage:  ## Run tests with coverage report
 	$(GO_TEST) -coverprofile=coverage.out -covermode=atomic $(GO_DIRS)
 	@$(GO_CMD) tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Coverage report generated: coverage.html"
+
+##@ Backup
+
+# 数据库备份:长期记忆/对话历史是本产品核心资产,误删 volume/磁盘故障不可逆。
+BACKUP_DIR = backups
+BACKUP_KEEP ?= 14
+PG_CONTAINER ?= omnibot-postgres-test
+PG_USER ?= test
+PG_DB ?= omnibot_test
+
+backup:  ## Dump database to backups/ (gzip, keep last $(BACKUP_KEEP))
+	@echo "🗄️  Dumping $(PG_DB) from $(PG_CONTAINER)..."
+	@mkdir -p $(BACKUP_DIR)
+	@ts=$$(date +%Y%m%d_%H%M%S); \
+	  docker exec $(PG_CONTAINER) pg_dump -U $(PG_USER) --no-owner --no-privileges $(PG_DB) | gzip > $(BACKUP_DIR)/omnibot_$$ts.sql.gz \
+	  || { rm -f $(BACKUP_DIR)/omnibot_$$ts.sql.gz; echo "❌ 备份失败(pg_dump 出错或容器不可达)"; exit 1; }; \
+	  ls -t $(BACKUP_DIR)/omnibot_*.sql.gz 2>/dev/null | tail -n +$$(($(BACKUP_KEEP) + 1)) | xargs rm -f 2>/dev/null; \
+	  echo "✅ $(BACKUP_DIR)/omnibot_$$ts.sql.gz ($$(du -h $(BACKUP_DIR)/omnibot_$$ts.sql.gz | cut -f1)),保留最近 $(BACKUP_KEEP) 份"
 
 ##@ Code Quality
 
