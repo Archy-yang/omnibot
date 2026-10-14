@@ -1076,7 +1076,7 @@ func TestSearchMemories_ExcludesClosedLoops(t *testing.T) {
 	mOpen.Kind = memorydomain.MemoryKindLoop
 	require.NoError(t, db.Create(mOpen).Error)
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "承诺事项", 10)
+	hits, err := svc.SearchMemories(context.Background(), 42, "承诺事项", 10, nil)
 	require.NoError(t, err)
 	for _, h := range hits {
 		require.NotEqual(t, memorydomain.MemoryLoopStatusClosed, h.Memory.LoopStatus, "closed loop 不进检索")

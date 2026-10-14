@@ -31,12 +31,12 @@ type MemoryService interface {
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 	Update(ctx context.Context, userID int64, memoryID int64, content string) (*memorydomain.Memory, error)
 	// 语义检索(12-记忆系统技术方案 §8):embedding 未配置时自动降级子串
-	SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error)
+	SearchMemories(ctx context.Context, userID int64, query string, topK int, filter *memorydomain.MemoryFilter) ([]memorydomain.MemoryHit, error)
 	// SearchMatters 事项优先检索(M6.2 两段式第一段):命中事项返回其状态+挂靠记忆全景。
 	SearchMatters(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MatterHit, error)
 	// SearchRecentMessages 中期记忆检索(M7 §10.6):消息级向量 + 时间加权,原文直达。
 	// embedding 未配置/无向量时返回空(中期层静默缺失,不报错)。
-	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error)
+	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int, filter *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error)
 	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订 + M8.3 §14.2.4):
 	// Manual=手动全量(用户意志,时间正序);PinnedAuto=置顶自动记忆(pinned_at 倒序,
 	// 唯一进常驻的自动记忆);AutoCount=自动记忆总数(注入端换算未列出条数)。

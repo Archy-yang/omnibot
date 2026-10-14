@@ -107,6 +107,14 @@ func NewAutoMemory(userID int64, content string, sourceMessageID *int64) *Memory
 // MemoryInjection 常驻注入数据(§6.5 注入分层 + M8.3 §14.2.4)。
 // 领域值对象:memory service 产出、chat service 消费(经 MemoryInjectionProvider
 // 接口)——定义在 domain 层,消费方不必依赖 memory service 实现包(架构复评 P1-4)。
+// MemoryFilter 检索过滤(22号 §3):时间锚=有效时间(happened_at ?? created_at,与 Journal 同源)。
+// nil 字段不过滤;nil filter 整体=无过滤(现行为)。
+type MemoryFilter struct {
+	From     *time.Time // 有效时间下界(含)
+	To       *time.Time // 有效时间上界(含)
+	MatterID *int64     // 只看某档案挂靠的记忆
+}
+
 type MemoryInjection struct {
 	Manual     []string // 手动记忆全量(用户主动交代)
 	PinnedAuto []string // 置顶自动记忆(常驻 core 例外,新近置顶优先)

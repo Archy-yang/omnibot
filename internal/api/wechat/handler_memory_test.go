@@ -266,7 +266,7 @@ func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
 }
 
 // SearchMemories/SearchDigests 语义检索接口桩(12-记忆系统技术方案):wechat handler 测试不涉及检索,返回空。
-func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MemoryHit, error) {
 	return nil, nil
 }
 
@@ -274,7 +274,7 @@ func (m *mockMemoryService) SearchMatters(_ context.Context, _ int64, _ string, 
 	return nil, nil
 }
 
-func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MessageHit, error) {
+func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error) {
 	return nil, nil
 }
 

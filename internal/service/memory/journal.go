@@ -287,3 +287,13 @@ func (s *memoryService) UpdateMatter(userID, id int64, stateDesc, status *string
 	}
 	return true, nil
 }
+
+// MatterIDByTitle 按标题解析档案 ID(22号:search_memories 的 matter_title 参数)。
+// 不存在 → (0,false);service 层不报错——调用方(LLM)需要的是"换个说法"而不是异常。
+func (s *memoryService) MatterIDByTitle(userID int64, title string) (int64, bool) {
+	m, err := s.matterRepo.GetByTitle(userID, title)
+	if err != nil || m == nil {
+		return 0, false
+	}
+	return m.ID, true
+}

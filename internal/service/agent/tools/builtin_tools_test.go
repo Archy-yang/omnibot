@@ -90,11 +90,11 @@ func (f *matterFirstFake) SearchMatters(_ context.Context, _ int64, _ string, _ 
 	return f.matters, nil
 }
 
-func (f *matterFirstFake) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MessageHit, error) {
+func (f *matterFirstFake) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error) {
 	return f.recent, nil
 }
 
-func (f *matterFirstFake) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+func (f *matterFirstFake) SearchMemories(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MemoryHit, error) {
 	return f.hits, nil
 }
 
