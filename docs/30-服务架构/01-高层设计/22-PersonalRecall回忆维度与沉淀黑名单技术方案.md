@@ -137,5 +137,23 @@ type MemoryBlacklist struct {
 
 ---
 
-**文档版本**：v1.0
+**文档版本**：v1.1
 **创建日期**：2026-10-14
+
+---
+
+## 落地记录（R1 + R2，2026-10-14）
+
+- **R1**：domain `MemoryFilter`（From/To/MatterID）+ `SearchMemories`/`SearchRecentMessages` 五参签名
+  （过滤在打分循环内,仓储零改动）；`search_memories` 可选 `from`/`to`/`matter_title`,传时间窗 →
+  结果按有效时间升序输出时间线（semantic 与 matterFirst 两条路径都排）；`matter_title` 经
+  `MatterIDByTitle` 解析,未命中返回可读错误引导 LLM 换查询；`memoryAnnotation` 改 happened_at 优先。
+- **R2**：`memory_blacklists` 表（(user_id,pattern) 唯一,json tags 不泄 user_id）；三处拦截
+  （管线 applyFacts 静默跳过/注入两层/检索,均 nil-repo 向后兼容）；建规则即删存量并回报条数
+  （`DeleteMatchingMemories` LOWER LIKE）；工具 `manage_memory_rules`（add/list/remove,add 文案含
+  删除条数,remove 未命中提示先 list）；API `/api/v1/memory-rules` 三端点（409 重复/400 非法/404 未命中）；
+  MemoryDrawer 自动 tab 底部折叠管理区（添加回报删除条数/解除二次确认）。
+- 测试：service 3+5 项/工具 4+2 项/handler 1 组,全量 39 包绿；vue-tsc 干净,vite build 通过；
+  DB 表实查确认。
+- 已知取舍:LIKE 匹配对 `%`/`_` 通配符不做转义(黑名单 pattern 含通配符时按通配符语义,可接受);
+  期间排障一处环境问题:5173 端口两个 7 天前的僵尸 vite 进程导致前端 502,杀旧起新恢复。
