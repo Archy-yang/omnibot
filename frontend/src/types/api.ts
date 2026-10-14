@@ -554,3 +554,16 @@ export interface MatterDetail {
   memory_count: number;
   timeline: JournalItem[];
 }
+
+/** 沉淀黑名单规则(22号) */
+export interface MemoryRule {
+  id: number;
+  pattern: string;
+  created_at: string;
+}
+
+/** POST /memory-rules 响应:新规则 + 存量删除条数 */
+export interface AddMemoryRuleResponse {
+  rule: MemoryRule;
+  deleted: number;
+}
