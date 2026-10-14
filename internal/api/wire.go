@@ -465,6 +465,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	})
 
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
+	if js, ok := memorySvc.(web.JournalService); ok { // 21号:memoryService 兼具个人经历层
+		webHandler.SetJournalService(js)
+	}
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
 	webHandler.SetSkillService(skillSvc)

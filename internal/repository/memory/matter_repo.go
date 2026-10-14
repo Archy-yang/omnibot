@@ -17,6 +17,12 @@ type MatterRepository interface {
 	GetByTitle(userID int64, title string) (*memorydomain.Matter, error)
 	// ListActiveByUserID 活跃事项(updated_at 倒序;世界观快照用)。
 	ListActiveByUserID(userID int64) ([]*memorydomain.Matter, error)
+	// GetByID 按主键取(21号档案详情);不存在或他人 → nil,nil(调用方按未找到处理)。
+	GetByID(userID, id int64) (*memorydomain.Matter, error)
+	// ListByUserID 档案列表(21号):status 空=全部,updated_at 倒序。
+	ListByUserID(userID int64, status string) ([]*memorydomain.Matter, error)
+	// UpdateFields 用户纠正口(21号 §5.2):只允许 StateDesc/Status;nil=不改;返回是否命中。
+	UpdateFields(userID, id int64, stateDesc, status *string) (bool, error)
 }
 
 type matterRepository struct {
@@ -63,4 +69,41 @@ func (r *matterRepository) ListActiveByUserID(userID int64) ([]*memorydomain.Mat
 		Order("updated_at DESC").
 		Find(&matters).Error
 	return matters, err
+}
+
+func (r *matterRepository) GetByID(userID, id int64) (*memorydomain.Matter, error) {
+	var m memorydomain.Matter
+	err := r.db.Where("user_id = ? AND id = ?", userID, id).First(&m).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (r *matterRepository) ListByUserID(userID int64, status string) ([]*memorydomain.Matter, error) {
+	q := r.db.Where("user_id = ?", userID)
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	var matters []*memorydomain.Matter
+	err := q.Order("updated_at DESC").Find(&matters).Error
+	return matters, err
+}
+
+func (r *matterRepository) UpdateFields(userID, id int64, stateDesc, status *string) (bool, error) {
+	updates := map[string]interface{}{"updated_at": time.Now()}
+	if stateDesc != nil {
+		updates["state_desc"] = *stateDesc
+	}
+	if status != nil {
+		updates["status"] = *status
+	}
+	res := r.db.Model(&memorydomain.Matter{}).Where("user_id = ? AND id = ?", userID, id).Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
