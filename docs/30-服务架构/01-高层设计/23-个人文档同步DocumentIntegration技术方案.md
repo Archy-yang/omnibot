@@ -123,5 +123,22 @@ CLI 失败 → 502 + 可读原因。
 
 ---
 
-**文档版本**：v1.0
+**文档版本**：v1.1
 **创建日期**：2026-10-14
+
+---
+
+## 落地记录（F1，2026-10-14）
+
+- matters 加 `feishu_doc_token/feishu_doc_url/synced_at` 列（AutoMigrate,DB 实查确认）
+- `feishudoc` service：`RenderMatterMarkdown` 纯函数（警示行/当前状态/档案状态/时间线,
+  无事件时间回落 created_at,pinned ★ 标记,空档案"(暂无记录)"）+ `SyncMatter`
+  （首次 create 并回写 token/url/synced_at;再次 overwrite 同一文档,`createCnt` 恒 1——幂等实测）
+  + 真实 CLI runner（`--profile` 按用户/stdin 传正文/60s 超时 + WaitDelay/JSON 多候选宽容解析,
+  缺 token 显性报错）
+- API `POST /matters/:id/sync-doc`：404 未找到 / **403 未授权**（刻意避开 401——前端拦截器对
+  401 会清 token 跳登录页,语义不符）/ 502 CLI 失败透传
+- MatterSummary/MatterDetail 回显 `doc_url/synced_at`；档案详情「同步到飞书」按钮：
+  未建档 → 创建;已建档 → 更新（覆盖前二次确认）+ 文档链接与上次同步时间回显
+- 测试 3 项,全量 40 包绿;vue-tsc 干净,vite build 通过
+- F2（Journal 整体同步/对话内工具/定时同步）未开工,视 F1 真实使用决定
