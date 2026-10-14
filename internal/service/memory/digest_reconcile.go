@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	memorydomain "omnibot/internal/domain/memory"
@@ -37,6 +38,7 @@ type factCandidate struct {
 	Content          string  `json:"content"`
 	Kind             string  `json:"kind"`
 	MatterTitle      string  `json:"matter_title"`
+	HappenedAt       string  `json:"happened_at"` // 21号:事件发生时间(LLM 换算为绝对时间;缺失/非法由 parseHappenedAt 容错为 NULL)
 	SourceMessageIDs []int64 `json:"source_message_ids"`
 }
 
@@ -101,10 +103,12 @@ type reconcileStats struct {
 }
 
 // reconcile 执行对账:先 upsert 事项(建立 title→id 映射),再落 facts,最后处理 loop 生命周期。
+// fromTime/toTime 为沉淀区间的时间锚(21号:事件时间抽取的合法窗口 [from-1年, to+24h])。
 func (p *DigestPipeline) reconcile(
 	userID int64,
 	result reconcileResult,
 	fromID, toID int64,
+	fromTime, toTime time.Time,
 ) reconcileStats {
 	var stats reconcileStats
 	// 事项层:覆写式更新。title→id 映射供 facts 挂靠(快照已有 + 本轮新建/更新)
@@ -155,7 +159,7 @@ func (p *DigestPipeline) reconcile(
 	}
 
 	// 原子层:分层落库(复用余弦去重/冲突更新/links)
-	stats.MemoriesCreated, stats.MemoriesUpdated = p.applyFacts(context.Background(), userID, result.Facts, titleToID, fromID, toID)
+	stats.MemoriesCreated, stats.MemoriesUpdated = p.applyFacts(context.Background(), userID, result.Facts, titleToID, fromID, toID, fromTime, toTime)
 
 	// loop 生命周期(M8 §14.2.2):关闭/重开只认 DB 中的真实状态(CAS 迁移)。
 	// 「未命中」(ID 不存在/他人/状态不符)是有意静默——幂等,防幻觉关闭;
@@ -179,7 +183,7 @@ func (p *DigestPipeline) reconcile(
 	return stats
 }
 
-// applyFacts 原子信息落库:过滤 → 溯源校验 → 挂 matter → 嵌入 → 去重裁决 → 落库。
+// applyFacts 原子信息落库:过滤 → 溯源校验 → 事件时间 → 挂 matter → 嵌入 → 去重裁决 → 落库。
 // 返回 (新增数, 原位更新数)。
 func (p *DigestPipeline) applyFacts(
 	ctx context.Context,
@@ -187,6 +191,7 @@ func (p *DigestPipeline) applyFacts(
 	facts []factCandidate,
 	titleToID map[string]int64,
 	fromID, toID int64,
+	fromTime, toTime time.Time,
 ) (created, updated int) {
 	if len(facts) == 0 {
 		return 0, 0
@@ -203,10 +208,14 @@ func (p *DigestPipeline) applyFacts(
 		currentModel = emb.Name()
 	}
 
+	blacklistPatterns, _ := p.memoryRepo.ListBlacklistPatterns(userID) // 22号:沉淀黑名单
 	for _, f := range facts {
 		content := strings.TrimSpace(f.Content)
 		if content == "" || utf8.RuneCountInString(content) > MaxMemoryContentLength {
 			continue
+		}
+		if containsBlacklisted(content, blacklistPatterns) {
+			continue // 用户禁止沉淀的内容静默跳过(水位照常推进)
 		}
 		validIDs := validSourceIDs(memoryCandidate{SourceMessageIDs: f.SourceMessageIDs}, fromID, toID)
 		var sourceMsgID *int64
@@ -221,6 +230,8 @@ func (p *DigestPipeline) applyFacts(
 				matterID = &id
 			}
 		}
+		// 事件时间(21号):解析容错,坏值 NULL;冲突更新路径不改写既有时间
+		happenedAt := parseHappenedAt(f.HappenedAt, fromTime, toTime)
 
 		// 嵌入候选(失败 → 无向量,仍可落库,读路径降级子串)
 		var vec []float32
@@ -241,7 +252,7 @@ func (p *DigestPipeline) applyFacts(
 			if err := p.memoryRepo.UpdateContentEmbeddingByID(dupID, userID, content, vec, currentModel); err != nil {
 				logger.WarnWithFields("memory: 疑似冲突更新失败,按新增处理",
 					zap.Int64("user_id", userID), zap.Int64("memory_id", dupID), zap.Error(err))
-				p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, f.Kind, matterID, &existing)
+				p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, f.Kind, matterID, happenedAt, &existing)
 				created++
 			} else {
 				if err := p.memoryRepo.ReplaceLinksForMemory(dupID, validIDs); err != nil {
@@ -252,7 +263,7 @@ func (p *DigestPipeline) applyFacts(
 				updated++
 			}
 		default:
-			p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, f.Kind, matterID, &existing)
+			p.createAutoMemory(userID, content, sourceMsgID, validIDs, vec, currentModel, f.Kind, matterID, happenedAt, &existing)
 			created++
 		}
 	}

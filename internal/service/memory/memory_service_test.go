@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 
@@ -37,13 +38,13 @@ type mockMemoryRepository struct {
 	loopTransitionTo     string
 	loopTransitionOK     bool
 	loopTransitionErr    error
-	updatedID        int64
-	deletedUserID    int64
-	deletedSource    string
-	updatedUserID    int64
-	updatedContent   string
-	updateResult     *memorydomain.Memory
-	updateErr        error
+	updatedID            int64
+	deletedUserID        int64
+	deletedSource        string
+	updatedUserID        int64
+	updatedContent       string
+	updateResult         *memorydomain.Memory
+	updateErr            error
 }
 
 func (m *mockMemoryRepository) Create(memory *memorydomain.Memory) error {
@@ -363,3 +364,20 @@ func TestMemoryService_SetLoopStatus_RepoError(t *testing.T) {
 	assert.ErrorIs(t, err, expectedErr)
 	assert.False(t, ok)
 }
+
+// ---- 21号 J2 新增仓储方法的桩(mock 只需满足接口,行为由真实仓储测试覆盖) ----
+func (m *mockMemoryRepository) ListJournal(int64, []string, *time.Time, *time.Time, *time.Time, int64, int) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryRepository) ListLinksForMemories([]int64) ([]memorydomain.MemoryMessageLink, error) {
+	return nil, nil
+}
+func (m *mockMemoryRepository) CountByMatter(int64) (map[int64]int64, error) {
+	return map[int64]int64{}, nil
+}
+func (m *mockMemoryRepository) ListByMatter(int64, int64) ([]*memorydomain.Memory, error) {
+	return nil, nil
+}
+
+// ---- 22号 R2:黑名单仓储方法的桩 ----
+func (m *mockMemoryRepository) ListBlacklistPatterns(int64) ([]string, error) { return nil, nil }

@@ -16,7 +16,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import DialogShell from '@/components/layout/DialogShell.vue';
 import { useMemory } from '@/composables/useMemory';
 import { useToast } from '@/composables/useToast';
-import type { MemoryItem } from '@/types/api';
+import { memoryRuleService } from '@/services/memoryRules';
+import type { MemoryItem, MemoryRule } from '@/types/api';
 
 const props = defineProps<{
   visible: boolean;
@@ -82,6 +83,7 @@ watch(
       loadMemories().catch((err: unknown) => {
         error(getErrorMessage(err));
       });
+      loadRules();
     } else {
       // 关闭时清空编辑态,避免下次打开还停留在某条编辑
       editingId.value = null;
@@ -101,6 +103,50 @@ onMounted(() => {
 
 const getErrorMessage = (err: unknown): string => {
   return err instanceof Error ? err.message : '服务暂时不可用,请稍后再试。';
+};
+
+// ===== 沉淀黑名单(22号):自动 tab 底部折叠区 =====
+const rulesExpanded = ref(false);
+const rules = ref<MemoryRule[]>([]);
+const ruleInput = ref('');
+const isAddingRule = ref(false);
+
+const loadRules = async (): Promise<void> => {
+  try {
+    rules.value = await memoryRuleService.listRules();
+  } catch (err) {
+    error(getErrorMessage(err));
+  }
+};
+
+const handleAddRule = async (): Promise<void> => {
+  const pattern = ruleInput.value.trim();
+  if (!pattern) {
+    error('请输入要禁止的关键词。');
+    return;
+  }
+  isAddingRule.value = true;
+  try {
+    const { deleted } = await memoryRuleService.addRule(pattern);
+    ruleInput.value = '';
+    rules.value = await memoryRuleService.listRules();
+    success(deleted > 0 ? `已禁止;同时删除了 ${deleted} 条相关记忆。` : '已禁止。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  } finally {
+    isAddingRule.value = false;
+  }
+};
+
+const handleRemoveRule = async (id: number): Promise<void> => {
+  if (!window.confirm('解除后相关内容将可以正常沉淀,此前删除的记忆不恢复。')) return;
+  try {
+    await memoryRuleService.removeRule(id);
+    rules.value = rules.value.filter((r) => r.id !== id);
+    success('已解除禁止。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  }
 };
 
 const handleCreateMemory = async (): Promise<void> => {
@@ -430,9 +476,117 @@ const formatTime = (iso: string): string => {
         </div>
       </div>
     </div>
+        <!-- 沉淀黑名单(22号):仅自动 tab 显示 -->
+      <div v-if="activeTab === 'auto'" class="rules-section">
+        <button type="button" class="rules-toggle" @click="rulesExpanded = !rulesExpanded">
+          <span>沉淀黑名单</span>
+          <span class="rules-count" v-if="rules.length">{{ rules.length }} 条</span>
+          <span class="rules-arrow">{{ rulesExpanded ? '▲' : '▼' }}</span>
+        </button>
+        <div v-if="rulesExpanded" class="rules-body">
+          <p class="rules-hint">包含关键词的内容将不再被自动沉淀(已沉淀的相关记忆也会被删除)。</p>
+          <div class="rules-input-row">
+            <input
+              v-model="ruleInput"
+              class="rules-input"
+              placeholder="输入要禁止的关键词,如:银行卡号"
+              :maxlength="140"
+              @keydown.enter.prevent="handleAddRule"
+            />
+            <button
+              type="button"
+              class="add-btn"
+              :disabled="!ruleInput.trim() || isAddingRule"
+              @click="handleAddRule"
+            >
+              {{ isAddingRule ? '添加中...' : '禁止' }}
+            </button>
+          </div>
+          <ul v-if="rules.length" class="rules-list">
+            <li v-for="r in rules" :key="r.id" class="rules-item">
+              <span class="rules-pattern">不记包含"{{ r.pattern }}"的内容</span>
+              <button type="button" class="rules-remove" @click="handleRemoveRule(r.id)">解除</button>
+            </li>
+          </ul>
+        </div>
+      </div>
   </DialogShell>
 </template>
 
+<style scoped>
+/* ===== 沉淀黑名单(22号) ===== */
+.rules-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-color, #eee);
+  padding-top: 10px;
+}
+.rules-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  text-align: left;
+}
+.rules-count {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+}
+.rules-arrow {
+  margin-left: auto;
+  font-size: 10px;
+}
+.rules-body {
+  margin-top: 8px;
+}
+.rules-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-tertiary, #999);
+}
+.rules-input-row {
+  display: flex;
+  gap: 8px;
+}
+.rules-input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.rules-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rules-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+}
+.rules-pattern {
+  word-break: break-all;
+}
+.rules-remove {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: #dc2626;
+  cursor: pointer;
+}
+</style>
 <style scoped>
 /* ===== 安全提醒条 ===== */
 .safety-bar {

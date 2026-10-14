@@ -95,7 +95,7 @@ func TestSearchMemories_Semantic(t *testing.T) {
 	seedMemory(t, db, 42, "用户偏好简洁回复", "fake/m1", []float32{1, 0, 0})
 	seedMemory(t, db, 42, "用户在上海工作", "fake/m1", []float32{0, 1, 0})
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "喜欢简短回答", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "喜欢简短回答", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSearchMemories_SubstringFallback(t *testing.T) {
 	svc, db := retrievalSetup(t)
 	seedMemory(t, db, 42, "用户在上海工作", "", nil)
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestSearchMemories_ModelMismatch(t *testing.T) {
 	// 记忆是老模型嵌入的
 	seedMemory(t, db, 42, "用户在上海工作", "fake/old-model", []float32{1, 0, 0})
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestSearchMemories_EmbedQueryFails(t *testing.T) {
 	setEmbedding(t, svc, &fakeEmbedding{fail: true, name: "fake/m1"})
 	seedMemory(t, db, 42, "用户在上海工作", "fake/m1", []float32{1, 0, 0})
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5, nil)
 	if err != nil {
 		t.Fatalf("查询 embedding 失败应降级而非报错, got %v", err)
 	}
@@ -174,7 +174,7 @@ func TestSearchMemories_Fusion(t *testing.T) {
 	seedMemory(t, db, 42, "包含简洁二字的记忆", "fake/m1", []float32{1, 0, 0}) // 语义+子串
 	seedMemory(t, db, 42, "用户偏好简短回复", "fake/m1", []float32{1, 0, 0})  // 仅语义
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "简洁", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "简洁", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSearchMemories_Fusion(t *testing.T) {
 // TestSearchMemories_Empty 其他用户/空库 → 空结果非错误。
 func TestSearchMemories_Empty(t *testing.T) {
 	svc, _ := retrievalSetup(t)
-	hits, err := svc.SearchMemories(context.Background(), 99, "任何", 5)
+	hits, err := svc.SearchMemories(context.Background(), 99, "任何", 5, nil)
 	if err != nil {
 		t.Fatalf("空库不应报错: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestSearchRecentMessages(t *testing.T) {
 	svc := NewMemoryService(memoryrepo.NewMemoryRepository(db), nil, embRepo, msgRepo)
 
 	// 无 embedding 配置:静默空,不报错
-	hits, err := svc.SearchRecentMessages(context.Background(), 42, "充电", 2)
+	hits, err := svc.SearchRecentMessages(context.Background(), 42, "充电", 2, nil)
 	if err != nil || hits != nil {
 		t.Fatalf("无 embedding 应返回空, got %v err=%v", hits, err)
 	}
@@ -246,7 +246,7 @@ func TestSearchRecentMessages(t *testing.T) {
 		t.Fatalf("seed embs: %v", err)
 	}
 
-	hits, err = svc.SearchRecentMessages(context.Background(), 42, "充电花了多少钱", 2)
+	hits, err = svc.SearchRecentMessages(context.Background(), 42, "充电花了多少钱", 2, nil)
 	if err != nil {
 		t.Fatalf("SearchRecentMessages: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestSearchMemories_UserResolver(t *testing.T) {
 	// 用户级向量(模型标记 fake/user-qianfan):语义命中
 	seedMemory(t, db, 42, "用户在上海工作", "fake/user-qianfan", []float32{1, 0, 0})
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5)
+	hits, err := svc.SearchMemories(context.Background(), 42, "上海", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestSearchMemories_UserResolver(t *testing.T) {
 	}
 
 	// 无用户级配置的用户(7)回落系统默认:其模型标记 fake/system 与记忆不符 → 无语义命中
-	hits, err = svc.SearchMemories(context.Background(), 7, "上海", 5)
+	hits, err = svc.SearchMemories(context.Background(), 7, "上海", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchMemories(7): %v", err)
 	}

@@ -73,7 +73,7 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}); err != nil {
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}, &memorydomain.MemoryBlacklist{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	// 默认返回:纪要 + 无记忆候选
@@ -1076,7 +1076,7 @@ func TestSearchMemories_ExcludesClosedLoops(t *testing.T) {
 	mOpen.Kind = memorydomain.MemoryKindLoop
 	require.NoError(t, db.Create(mOpen).Error)
 
-	hits, err := svc.SearchMemories(context.Background(), 42, "承诺事项", 10)
+	hits, err := svc.SearchMemories(context.Background(), 42, "承诺事项", 10, nil)
 	require.NoError(t, err)
 	for _, h := range hits {
 		require.NotEqual(t, memorydomain.MemoryLoopStatusClosed, h.Memory.LoopStatus, "closed loop 不进检索")

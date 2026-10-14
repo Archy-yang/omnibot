@@ -40,6 +40,17 @@ type MemoryRepository interface {
 	TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error)
 	// ListPinnedAutoByUserID 置顶的自动记忆(M8.3 常驻 core;pinned_at 倒序,新近置顶优先)。
 	ListPinnedAutoByUserID(userID int64) ([]*memorydomain.Memory, error)
+	// ListJournal 时间轴查询(21号 §5.1):有效时间=COALESCE(happened_at,created_at) 降序;
+	// kinds 空=不过滤;from/to 过滤有效时间窗;afterTime/afterID 为游标(取严格早于该键的下一页,零值=首页)。
+	ListJournal(userID int64, kinds []string, from, to, afterTime *time.Time, afterID int64, limit int) ([]*memorydomain.Memory, error)
+	// ListLinksForMemories 批量取溯源映射(21号溯源拼装);ids 空 → 空表。
+	ListLinksForMemories(memoryIDs []int64) ([]memorydomain.MemoryMessageLink, error)
+	// CountByMatter 各事项挂靠记忆数(21号档案列表计数);无挂靠的 matter 不在返回中。
+	CountByMatter(userID int64) (map[int64]int64, error)
+	// ListByMatter 档案时间线(21号 §5.2):pinned 前置,其余按有效时间升序;user+matter 双重隔离。
+	ListByMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
+	// ListBlacklistPatterns 黑名单关键词集(22号 §5.2:沉淀/注入/检索三处过滤共用)。
+	ListBlacklistPatterns(userID int64) ([]string, error)
 	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false)。
 	SetPinned(id int64, userID int64, pinned bool) (bool, error)
 }
@@ -268,4 +279,80 @@ func (r *memoryRepository) SetPinned(id int64, userID int64, pinned bool) (bool,
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil
+}
+
+// ListJournal 时间轴查询(21号 §5.1):有效时间=COALESCE(happened_at,created_at) 降序。
+// 排序/过滤/游标都走同一有效时间表达式,SQLite 与 PG 均支持的写法(布尔排序 + OR 展开谓词)。
+func (r *memoryRepository) ListJournal(userID int64, kinds []string, from, to, afterTime *time.Time, afterID int64, limit int) ([]*memorydomain.Memory, error) {
+	const eff = "COALESCE(happened_at, created_at)"
+	q := r.db.Where("user_id = ?", userID)
+	if len(kinds) > 0 {
+		q = q.Where("kind IN ?", kinds)
+	}
+	if from != nil {
+		q = q.Where(eff+" >= ?", *from)
+	}
+	if to != nil {
+		q = q.Where(eff+" <= ?", *to)
+	}
+	if afterTime != nil {
+		q = q.Where("("+eff+" < ? OR ("+eff+" = ? AND id < ?))", *afterTime, *afterTime, afterID)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []*memorydomain.Memory
+	err := q.Order(eff + " DESC, id DESC").Limit(limit).Find(&out).Error
+	return out, err
+}
+
+func (r *memoryRepository) ListLinksForMemories(memoryIDs []int64) ([]memorydomain.MemoryMessageLink, error) {
+	if len(memoryIDs) == 0 {
+		return nil, nil
+	}
+	var links []memorydomain.MemoryMessageLink
+	err := r.db.Where("memory_id IN ?", memoryIDs).Find(&links).Error
+	return links, err
+}
+
+func (r *memoryRepository) CountByMatter(userID int64) (map[int64]int64, error) {
+	type row struct {
+		MatterID int64
+		Cnt      int64
+	}
+	var rows []row
+	err := r.db.Model(&memorydomain.Memory{}).
+		Select("matter_id, COUNT(*) as cnt").
+		Where("user_id = ? AND matter_id IS NOT NULL", userID).
+		Group("matter_id").Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, r := range rows {
+		out[r.MatterID] = r.Cnt
+	}
+	return out, nil
+}
+
+// ListByMatter 档案时间线(21号 §5.2):pinned 前置,其余按有效时间升序。
+func (r *memoryRepository) ListBlacklistPatterns(userID int64) ([]string, error) {
+	var rows []memorydomain.MemoryBlacklist
+	if err := r.db.Where("user_id = ?", userID).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Pattern)
+	}
+	return out, nil
+}
+
+func (r *memoryRepository) ListByMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error) {
+	const eff = "COALESCE(happened_at, created_at)"
+	var out []*memorydomain.Memory
+	err := r.db.Where("user_id = ? AND matter_id = ?", userID, matterID).
+		Order("pinned DESC, " + eff + " ASC, id ASC").
+		Find(&out).Error
+	return out, err
 }

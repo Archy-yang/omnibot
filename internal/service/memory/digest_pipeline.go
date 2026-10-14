@@ -231,7 +231,7 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 
 	// 对账执行(M6/M8):事项 upsert(覆写状态)+ 原子记忆分层落库 + loop 生命周期。
 	// digests 表退役(只读保留),不再写入切片纪要。
-	stats := p.reconcile(userID, parsed, fromID, toID)
+	stats := p.reconcile(userID, parsed, fromID, toID, messages[0].CreatedAt, messages[len(messages)-1].CreatedAt)
 	if p.audit != nil && taskID != 0 {
 		respJSON, _ := json.Marshal(map[string]int{
 			"matters": stats.MattersUpserted, "created": stats.MemoriesCreated,

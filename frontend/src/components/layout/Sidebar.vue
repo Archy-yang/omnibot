@@ -17,13 +17,14 @@ import { useSettingsStore } from '@/stores/settings';
 
 const props = defineProps<{
   /** 当前高亮的导航项：弹窗打开时对应高亮，都没开时为 chat */
-  current?: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings';
+  current?: 'chat' | 'tasks' | 'memory' | 'journal' | 'subscriptions' | 'tools' | 'settings';
 }>();
 
 const emit = defineEmits<{
   'open-chat': [];
   'open-tasks': [];
   'open-memory': [];
+  'open-journal': [];
   'open-subscriptions': [];
   'open-tools': [];
   'open-settings': [];
@@ -38,16 +39,18 @@ const navItems = [
   { key: 'chat', label: '对话' },
   { key: 'tasks', label: '任务' },
   { key: 'memory', label: '记忆' },
+  { key: 'journal', label: '经历' },
   { key: 'subscriptions', label: '订阅' },
   { key: 'tools', label: '工具' },
   { key: 'settings', label: '设置' },
 ] as const;
 
-const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings') => {
+const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'journal' | 'subscriptions' | 'tools' | 'settings') => {
   switch (key) {
     case 'chat': emit('open-chat'); break;
     case 'tasks': emit('open-tasks'); break;
     case 'memory': emit('open-memory'); break;
+    case 'journal': emit('open-journal'); break;
     case 'subscriptions': emit('open-subscriptions'); break;
     case 'tools': emit('open-tools'); break;
     case 'settings': emit('open-settings'); break;
@@ -105,6 +108,13 @@ const handleNav = (key: 'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' 
           <svg v-else-if="item.key === 'memory'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2 2 0 0 1-2-2V6.5a.5.5 0 0 0-.5-.5H4a2 2 0 0 1 0-4h5.5z"/>
             <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2 2 0 0 0 2-2V6.5a.5.5 0 0 1 .5-.5H20a2 2 0 0 0 0-4h-5.5z"/>
+          </svg>
+          <!-- 经历(书/日志) -->
+          <svg v-else-if="item.key === 'journal'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <line x1="9" y1="7" x2="15" y2="7"/>
+            <line x1="9" y1="11" x2="13" y2="11"/>
           </svg>
           <!-- 订阅(RSS) -->
           <svg v-else-if="item.key === 'subscriptions'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

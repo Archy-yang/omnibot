@@ -21,6 +21,10 @@ type Matter struct {
 	LastMsgID      int64     // 最近一次相关消息(水位簿记)
 	Embedding      []float32 `gorm:"serializer:json"` // (Title+StateDesc) 向量化,供事项命中检索
 	EmbeddingModel string    `gorm:"size:100"`
+	// 23号:个人文档同步(首次 create 后存 token,幂等 overwrite)
+	FeishuDocToken string     `gorm:"size:128"`
+	FeishuDocURL   string     `gorm:"size:512"`
+	SyncedAt       *time.Time
 	CreatedAt      time.Time `gorm:"not null"`
 	UpdatedAt      time.Time `gorm:"not null"`
 }

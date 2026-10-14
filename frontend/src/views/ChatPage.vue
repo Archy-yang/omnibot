@@ -7,6 +7,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import ChatAvatar from '@/components/chat/ChatAvatar.vue';
 import SettingsDrawer from '@/components/functional/SettingsDrawer.vue';
 import MemoryDrawer from '@/components/functional/MemoryDrawer.vue';
+import JournalDrawer from '@/components/functional/JournalDrawer.vue';
 import SubscriptionDialog from '@/components/functional/SubscriptionDialog.vue';
 import TaskDialog from '@/components/functional/TaskDialog.vue';
 import ToolDrawer from '@/components/functional/ToolDrawer.vue';
@@ -23,6 +24,7 @@ const isInitializing = ref(true);
 
 // 记忆/订阅/技能/任务弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
+const showJournalDrawer = ref(false);
 const showSubscriptionDialog = ref(false);
 const showToolDrawer = ref(false);
 const showTaskDialog = ref(false);
@@ -39,8 +41,9 @@ const inputPlaceholder = computed(() =>
 );
 
 // 侧栏导航高亮:弹窗打开时高亮对应项,都没开时高亮「对话」
-const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'tools' | 'settings'>(() => {
+const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'journal' | 'subscriptions' | 'tools' | 'settings'>(() => {
   if (showMemoryDrawer.value) return 'memory';
+  if (showJournalDrawer.value) return 'journal';
   if (showSubscriptionDialog.value) return 'subscriptions';
   if (showToolDrawer.value) return 'tools';
   if (showTaskDialog.value) return 'tasks';
@@ -51,6 +54,7 @@ const navCurrent = computed<'chat' | 'tasks' | 'memory' | 'subscriptions' | 'too
 // 侧栏「对话」:回到对话主页面,收起全部弹窗
 const closeAllDrawers = () => {
   showMemoryDrawer.value = false;
+  showJournalDrawer.value = false;
   showSubscriptionDialog.value = false;
   showToolDrawer.value = false;
   showTaskDialog.value = false;
@@ -92,6 +96,7 @@ const handleSend = async (content: string) => {
       @open-chat="closeAllDrawers"
       @open-tasks="showTaskDialog = true"
       @open-memory="showMemoryDrawer = true"
+      @open-journal="showJournalDrawer = true"
       @open-subscriptions="showSubscriptionDialog = true"
       @open-tools="showToolDrawer = true"
       @open-settings="toggleSettingsPanel"
@@ -154,6 +159,11 @@ const handleSend = async (content: string) => {
     <MemoryDrawer
       :visible="showMemoryDrawer"
       @close="showMemoryDrawer = false"
+    />
+
+    <JournalDrawer
+      :visible="showJournalDrawer"
+      @close="showJournalDrawer = false"
     />
 
     <SubscriptionDialog

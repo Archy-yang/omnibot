@@ -58,6 +58,14 @@ func (m *mockMemoryService) Update(ctx context.Context, userID int64, memoryID i
 	return nil, nil
 }
 
+func (m *mockMemoryService) ListBlacklist(int64) ([]*memorydomain.MemoryBlacklist, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) AddBlacklist(int64, string) (*memorydomain.MemoryBlacklist, int64, error) {
+	return nil, 0, nil
+}
+func (m *mockMemoryService) RemoveBlacklist(int64, int64) (bool, error) { return false, nil }
+
 func (m *mockMemoryService) GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error) {
 	return nil, nil
 }
@@ -266,7 +274,7 @@ func TestHandler_HandleTextMessage_MemoryCommandDoesNotCallLLM(t *testing.T) {
 }
 
 // SearchMemories/SearchDigests 语义检索接口桩(12-记忆系统技术方案):wechat handler 测试不涉及检索,返回空。
-func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MemoryHit, error) {
+func (m *mockMemoryService) SearchMemories(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MemoryHit, error) {
 	return nil, nil
 }
 
@@ -274,7 +282,7 @@ func (m *mockMemoryService) SearchMatters(_ context.Context, _ int64, _ string, 
 	return nil, nil
 }
 
-func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int) ([]memorydomain.MessageHit, error) {
+func (m *mockMemoryService) SearchRecentMessages(_ context.Context, _ int64, _ string, _ int, _ *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error) {
 	return nil, nil
 }
 

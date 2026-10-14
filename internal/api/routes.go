@@ -115,6 +115,26 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMemory)
 		memoryAPIGroup.PUT("/:id/pin", d.webHandler.HandlePinMemory)             // M8.3:置顶(常驻 core)
 		memoryAPIGroup.PUT("/:id/loop-status", d.webHandler.HandleSetLoopStatus) // E3:loop 管理面关闭/重开(§14.2.2 逃生口)
+		memoryAPIGroup.GET("/journal", d.webHandler.HandleGetJournal)            // 21号:个人经历时间轴
+
+	// 记忆规则(22号):沉淀黑名单管理
+	memoryRulesGroup := r.Group("/api/v1/memory-rules")
+	memoryRulesGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		memoryRulesGroup.GET("", d.webHandler.HandleListMemoryRules)
+		memoryRulesGroup.POST("", d.webHandler.HandleAddMemoryRule)
+		memoryRulesGroup.DELETE("/:id", d.webHandler.HandleDeleteMemoryRule)
+	}
+
+	// 个人档案(21号 Archive):主题档案列表/详情/用户纠正口
+	mattersAPIGroup := r.Group("/api/v1/matters")
+	mattersAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		mattersAPIGroup.GET("", d.webHandler.HandleListMatters)
+		mattersAPIGroup.GET("/:id", d.webHandler.HandleGetMatter)
+		mattersAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMatter)
+		mattersAPIGroup.POST("/:id/sync-doc", d.webHandler.HandleSyncMatterDoc) // 23号:同步档案到飞书
+	}
 	}
 
 	// 订阅源管理路由(14-订阅源管理:对话入口之外的页面管理入口)

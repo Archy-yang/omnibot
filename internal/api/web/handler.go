@@ -97,6 +97,12 @@ type Handler struct {
 	skillService SkillManager
 	// 用户级飞书授权(19 号)。nil 时授权接口返回 503(向后兼容)。
 	larkAuthService LarkAuthManager
+	// 个人经历层(21 号 Journal/Archive)。nil 时相关接口返回 503(向后兼容)。
+	journalService JournalService
+	// 记忆规则(22 号黑名单)。nil 时相关接口返回 503(向后兼容)。
+	memoryRuleService MemoryRuleService
+	// 文档同步(23 号)。nil 时相关接口返回 503(向后兼容)。
+	docSyncService DocSyncService
 }
 
 // NewHandler 创建 Web 聊天处理器

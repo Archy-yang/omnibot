@@ -72,9 +72,30 @@ func (s *memoryService) embedQuery(ctx context.Context, provider EmbeddingProvid
 	return vecs[0]
 }
 
+// matchFilter 记忆条目是否落在过滤集内(打分循环内调用;MemoryFilter 定义在 domain)。
+func matchFilter(m *memorydomain.Memory, f *memorydomain.MemoryFilter) bool {
+	if f == nil {
+		return true
+	}
+	if f.From != nil || f.To != nil {
+		eff := effectiveTime(m)
+		if f.From != nil && eff.Before(*f.From) {
+			return false
+		}
+		if f.To != nil && eff.After(*f.To) {
+			return false
+		}
+	}
+	if f.MatterID != nil && (m.MatterID == nil || *m.MatterID != *f.MatterID) {
+		return false
+	}
+	return true
+}
+
 // SearchMemories 语义+子串融合检索长期记忆,按分数降序取 topK。
 // 只与 EmbeddingModel == 当前生效 provider 的向量比较(§6.3,异构模型向量不可比)。
-func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MemoryHit, error) {
+// filter(22号):时间窗/档案过滤,时间锚=有效时间;nil=无过滤(现行为)。
+func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query string, topK int, filter *memorydomain.MemoryFilter) ([]memorydomain.MemoryHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -90,12 +111,19 @@ func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query 
 	if provider != nil {
 		currentModel = provider.Name()
 	}
+	blacklistPatterns := s.listPatterns(userID) // 22号:检索不带已禁止内容
 
 	lowered := strings.ToLower(query)
 	hits := make([]memorydomain.MemoryHit, 0, len(memories))
 	for _, m := range memories {
 		if m.IsClosedLoop() {
 			continue // closed 的 loop 不进检索(§14.2.2),管理面可见可重开
+		}
+		if containsBlacklisted(m.Content, blacklistPatterns) {
+			continue
+		}
+		if !matchFilter(m, filter) {
+			continue // 22号:时间窗/档案过滤
 		}
 		score := 0.0
 		if qvec != nil && len(m.Embedding) > 0 && m.EmbeddingModel == currentModel {
@@ -176,7 +204,7 @@ const midtermRecencyHalfLife = 30 * 24 * time.Hour
 // score = 0.8×cos + 0.2×recency(recency 指数半衰,30 天减半)。
 // 原文不落向量表——按余弦取候选,回表取 content/时间(零抽象,细节永不丢)。
 // embedding 未配置/无向量/回表失败 → 返回空(中期层静默缺失,不报错不阻塞长期/事项)。
-func (s *memoryService) SearchRecentMessages(ctx context.Context, userID int64, query string, topK int) ([]memorydomain.MessageHit, error) {
+func (s *memoryService) SearchRecentMessages(ctx context.Context, userID int64, query string, topK int, filter *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error) {
 	if s.msgEmbRepo == nil || s.msgSource == nil {
 		return nil, nil
 	}
@@ -236,6 +264,15 @@ func (s *memoryService) SearchRecentMessages(ctx context.Context, userID int64, 
 		m, ok := byID[c.msgID]
 		if !ok {
 			continue // 消息已删除
+		}
+		if filter != nil && (filter.From != nil || filter.To != nil) {
+			// 22号:中期层时间语义=消息发生时间
+			if filter.From != nil && m.CreatedAt.Before(*filter.From) {
+				continue
+			}
+			if filter.To != nil && m.CreatedAt.After(*filter.To) {
+				continue
+			}
 		}
 		recency := 0.5
 		if elapsed := now.Sub(m.CreatedAt); elapsed > 0 {

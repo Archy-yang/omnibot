@@ -505,3 +505,77 @@ export interface AgentTaskStep {
   response: string;
   created_at: string;
 }
+
+// ===== 个人经历层(21 号 Journal/Archive) =====
+
+/** 溯源消息摘要:片段 80 字 + 消息时间 */
+export interface JournalLink {
+  message_id: number;
+  occurred_at: string;
+  snippet: string;
+}
+
+/** 时间轴条目(记忆的_journal 视图);happened_at 缺省时展示回落 created_at */
+export interface JournalItem {
+  id: number;
+  content: string;
+  kind: string;
+  source: string;
+  pinned: boolean;
+  happened_at?: string;
+  created_at: string;
+  matter_id?: number;
+  links: JournalLink[];
+}
+
+/** GET /memories/journal 响应 */
+export interface JournalPage {
+  items: JournalItem[];
+  next_cursor: string;
+}
+
+/** 主题档案列表项 */
+export interface MatterSummary {
+  id: number;
+  title: string;
+  state_desc: string;
+  status: string;
+  updated_at: string;
+  memory_count: number;
+  /** 23号:已同步的飞书文档 */
+  doc_url?: string;
+  synced_at?: string;
+}
+
+/** 主题档案详情:元信息 + 演进时间线 */
+export interface MatterDetail {
+  id: number;
+  title: string;
+  state_desc: string;
+  status: string;
+  updated_at: string;
+  memory_count: number;
+  doc_url?: string;
+  synced_at?: string;
+  timeline: JournalItem[];
+}
+
+/** POST /matters/:id/sync-doc 响应(23号) */
+export interface SyncDocResponse {
+  doc_url: string;
+  synced_at: string;
+  created: boolean;
+}
+
+/** 沉淀黑名单规则(22号) */
+export interface MemoryRule {
+  id: number;
+  pattern: string;
+  created_at: string;
+}
+
+/** POST /memory-rules 响应:新规则 + 存量删除条数 */
+export interface AddMemoryRuleResponse {
+  rule: MemoryRule;
+  deleted: number;
+}

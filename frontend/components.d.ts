@@ -16,6 +16,7 @@ declare module 'vue' {
     ChatMessage: typeof import('./src/components/chat/ChatMessage.vue')['default']
     ChatMessageList: typeof import('./src/components/chat/ChatMessageList.vue')['default']
     DialogShell: typeof import('./src/components/layout/DialogShell.vue')['default']
+    JournalDrawer: typeof import('./src/components/functional/JournalDrawer.vue')['default']
     MemoryDrawer: typeof import('./src/components/functional/MemoryDrawer.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"strings"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/pkg/logger"
@@ -20,6 +21,43 @@ const (
 	duplicateSkipThreshold  = 0.92 // 余弦 ≥ 0.92 视为重复 → 跳过
 	conflictUpdateThreshold = 0.80 // 余弦 ∈ [0.80, 0.92) 视为疑似冲突 → 按新事实更新
 )
+
+// happenedAtLayouts 事件时间可接受的输入格式(21号 §4):日期精度足够 Journal 时间轴使用。
+var happenedAtLayouts = []string{
+	"2006-01-02",
+	"2006-01-02 15:04",
+	"2006-01-02 15:04:05",
+	time.RFC3339,
+}
+
+// parseHappenedAt 解析 LLM 抽取的事件发生时间,严格容错:空/不可解析/超界一律 nil
+// (展示回落 created_at,语义仍正确——"至少那天谈起过")。
+// 超界窗口 [fromTime-1年, toTime+24h]:早于下界视为过于陈旧不可信,晚于上界视为幻觉日期。
+// 相对时间("上周三")由提示词要求 LLM 换算成绝对时间,解析层不做猜测。
+func parseHappenedAt(raw string, fromTime, toTime time.Time) *time.Time {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	var t time.Time
+	var err error
+	for _, layout := range happenedAtLayouts {
+		t, err = time.Parse(layout, s)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil
+	}
+	// 窗口按日历日对齐:日期精度(00:00)的时间不得卡在带时刻的下界上
+	lower := fromTime.AddDate(-1, 0, 0).Truncate(24 * time.Hour)
+	upper := toTime.Add(24 * time.Hour)
+	if t.Before(lower) || t.After(upper) {
+		return nil
+	}
+	return &t
+}
 
 // memoryCandidate 溯源数组的载体(解析与校验共用;M6 沉淀 schema 见 digest_reconcile.go)。
 type memoryCandidate struct {
@@ -40,13 +78,15 @@ func validSourceIDs(c memoryCandidate, fromID, toID int64) []int64 {
 	return out
 }
 
-// createAutoMemory 新增一条自动记忆(带分层 kind/挂靠 matter/溯源 links),失败仅记日志。
+// createAutoMemory 新增一条自动记忆(带分层 kind/挂靠 matter/事件时间/溯源 links),失败仅记日志。
 func (p *DigestPipeline) createAutoMemory(
 	userID int64, content string, sourceMsgID *int64, validIDs []int64,
-	vec []float32, model, kind string, matterID *int64, existing *[]*memorydomain.Memory,
+	vec []float32, model, kind string, matterID *int64, happenedAt *time.Time,
+	existing *[]*memorydomain.Memory,
 ) {
 	m := memorydomain.NewAutoMemory(userID, content, sourceMsgID)
 	m.Kind = memorydomain.NormalizeKind(kind)
+	m.HappenedAt = happenedAt // 21号:事件时间(NULL=未识别,展示回落 created_at)
 	// M8.4 §14.2.3:episode 已断源;架构复评 P2-7:未知 kind(模型漂移,如 "experience")
 	// 同样不得静默降级——凡非 fact/loop 的输入都显式 warn。
 	// (空 kind 视为模型省略,按 fact 正常处理,不告警以免噪声)
