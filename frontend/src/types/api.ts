@@ -505,3 +505,52 @@ export interface AgentTaskStep {
   response: string;
   created_at: string;
 }
+
+// ===== 个人经历层(21 号 Journal/Archive) =====
+
+/** 溯源消息摘要:片段 80 字 + 消息时间 */
+export interface JournalLink {
+  message_id: number;
+  occurred_at: string;
+  snippet: string;
+}
+
+/** 时间轴条目(记忆的_journal 视图);happened_at 缺省时展示回落 created_at */
+export interface JournalItem {
+  id: number;
+  content: string;
+  kind: string;
+  source: string;
+  pinned: boolean;
+  happened_at?: string;
+  created_at: string;
+  matter_id?: number;
+  links: JournalLink[];
+}
+
+/** GET /memories/journal 响应 */
+export interface JournalPage {
+  items: JournalItem[];
+  next_cursor: string;
+}
+
+/** 主题档案列表项 */
+export interface MatterSummary {
+  id: number;
+  title: string;
+  state_desc: string;
+  status: string;
+  updated_at: string;
+  memory_count: number;
+}
+
+/** 主题档案详情:元信息 + 演进时间线 */
+export interface MatterDetail {
+  id: number;
+  title: string;
+  state_desc: string;
+  status: string;
+  updated_at: string;
+  memory_count: number;
+  timeline: JournalItem[];
+}
