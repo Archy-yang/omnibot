@@ -23,6 +23,8 @@ type MatterRepository interface {
 	ListByUserID(userID int64, status string) ([]*memorydomain.Matter, error)
 	// UpdateFields 用户纠正口(21号 §5.2):只允许 StateDesc/Status;nil=不改;返回是否命中。
 	UpdateFields(userID, id int64, stateDesc, status *string) (bool, error)
+	// UpdateDocInfo 文档同步信息回写(23号 §3)。
+	UpdateDocInfo(userID, id int64, token, url string, syncedAt time.Time) (bool, error)
 }
 
 type matterRepository struct {
@@ -91,6 +93,21 @@ func (r *matterRepository) ListByUserID(userID int64, status string) ([]*memoryd
 	var matters []*memorydomain.Matter
 	err := q.Order("updated_at DESC").Find(&matters).Error
 	return matters, err
+}
+
+func (r *matterRepository) UpdateDocInfo(userID, id int64, token, url string, syncedAt time.Time) (bool, error) {
+	res := r.db.Model(&memorydomain.Matter{}).
+		Where("user_id = ? AND id = ?", userID, id).
+		Updates(map[string]interface{}{
+			"feishu_doc_token": token,
+			"feishu_doc_url":   url,
+			"synced_at":        syncedAt,
+			"updated_at":       time.Now(),
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *matterRepository) UpdateFields(userID, id int64, stateDesc, status *string) (bool, error) {

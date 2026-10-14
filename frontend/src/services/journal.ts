@@ -7,7 +7,7 @@
  * - PUT /matters/:id 用户纠正口(仅 state_desc/status)
  */
 import { request } from '../utils/request';
-import type { ApiResponse, JournalPage, MatterDetail, MatterSummary } from '../types/api';
+import type { ApiResponse, JournalPage, MatterDetail, MatterSummary, SyncDocResponse } from '../types/api';
 
 export interface JournalQuery {
   kind?: 'all' | 'fact' | 'loop';
@@ -48,6 +48,12 @@ export const journalService = {
 
   async updateMatter(id: number, payload: UpdateMatterPayload): Promise<void> {
     await request.put<ApiResponse<null>>(`/matters/${id}`, payload);
+  },
+
+  /** 同步档案到飞书(23号):首建或幂等覆盖,返回文档链接 */
+  async syncMatterDoc(id: number): Promise<SyncDocResponse> {
+    const response = await request.post<ApiResponse<SyncDocResponse>>(`/matters/${id}/sync-doc`);
+    return response.data.data;
   },
 };
 

@@ -43,6 +43,7 @@ import (
 	memoryService "omnibot/internal/service/memory"
 	sandboxsvc "omnibot/internal/service/sandbox"
 	larkauthSvc "omnibot/internal/service/larkauth"
+	feishudocSvc "omnibot/internal/service/feishudoc"
 	skillRepo "omnibot/internal/repository/skill"
 	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
@@ -476,6 +477,14 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if ba, ok := memorySvc.(memoryService.BlacklistAware); ok { // 22号:黑名单仓储注入
 		ba.SetBlacklistRepo(memoryrepo.NewBlacklistRepository(dbConn.GetGormDB()))
 	}
+	// 23号:个人文档同步(按用户 profile 执行 lark-cli docs)
+	docSyncSvc := feishudocSvc.NewService(
+		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
+		memoryRepo.NewMemoryRepository(dbConn.GetGormDB()),
+		feishudocSvc.NewRealRunner(feishudocSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath}),
+		larkauthService,
+	)
+	webHandler.SetDocSyncService(docSyncSvc)
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
 	webHandler.SetSkillService(skillSvc)

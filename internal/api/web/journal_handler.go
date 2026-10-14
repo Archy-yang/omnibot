@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"omnibot/internal/service/feishudoc"
 	memorysvc "omnibot/internal/service/memory"
 
 	"github.com/gin-gonic/gin"
@@ -158,5 +159,44 @@ func mapJournalErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "档案不存在"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "服务暂时不可用"})
+	}
+}
+
+// DocSyncService 档案→飞书文档同步窄接口(23号;feishudoc.Service 实现)。
+type DocSyncService interface {
+	SyncMatter(ctx context.Context, userID, matterID int64) (feishudoc.SyncResult, error)
+}
+
+// SetDocSyncService 注入同步服务。未注入时接口返回 503(向后兼容)。
+func (h *Handler) SetDocSyncService(svc DocSyncService) {
+	h.docSyncService = svc
+}
+
+// HandleSyncMatterDoc POST /api/v1/matters/:id/sync-doc — 同步档案到飞书。
+func (h *Handler) HandleSyncMatterDoc(c *gin.Context) {
+	if h.docSyncService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "文档同步服务未启用"})
+		return
+	}
+	userID, ok := h.requireUserID(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "档案 ID 非法"})
+		return
+	}
+	res, err := h.docSyncService.SyncMatter(c.Request.Context(), userID, id)
+	switch {
+	case err == nil:
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": res})
+	case errors.Is(err, feishudoc.ErrMatterNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "档案不存在"})
+	case errors.Is(err, feishudoc.ErrNotAuthorized):
+		// 用 403 而非 401:前端拦截器对 401 会清 token 跳登录页,语义不符
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "尚未完成飞书授权,请在 设置-飞书授权 中连接后重试"})
+	default:
+		c.JSON(http.StatusBadGateway, gin.H{"success": false, "error": err.Error()})
 	}
 }

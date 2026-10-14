@@ -249,6 +249,24 @@ const handleSaveDesc = async (): Promise<void> => {
   }
 };
 
+// ===== 文档同步(23号) =====
+const isSyncingDoc = ref(false);
+const handleSyncDoc = async (): Promise<void> => {
+  if (!detail.value || isSyncingDoc.value) return;
+  if (detail.value.doc_url && !window.confirm('将用 OmniBot 中的当前内容覆盖飞书文档(手动编辑会丢失),继续?')) return;
+  isSyncingDoc.value = true;
+  try {
+    const res = await journalService.syncMatterDoc(detail.value.id);
+    detail.value.doc_url = res.doc_url;
+    detail.value.synced_at = res.synced_at;
+    success(res.created ? '已创建飞书文档。' : '已更新飞书文档。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  } finally {
+    isSyncingDoc.value = false;
+  }
+};
+
 const isChangingStatus = ref(false);
 const handleMatterStatus = async (status: string): Promise<void> => {
   if (!detail.value || detail.value.status === status) return;
@@ -395,6 +413,18 @@ onMounted(() => {
           <div class="matter-meta">
             <span class="status-chip" :class="detail.status">{{ statusLabel(detail.status) }}</span>
             <span class="matter-count">{{ detail.memory_count }} 条记录</span>
+            <button
+              type="button"
+              class="sync-btn"
+              :disabled="isSyncingDoc"
+              @click="handleSyncDoc"
+            >
+              {{ isSyncingDoc ? '同步中...' : (detail.doc_url ? '更新到飞书文档' : '同步到飞书') }}
+            </button>
+          </div>
+          <div v-if="detail.doc_url" class="doc-link-row">
+            <a :href="detail.doc_url" target="_blank" rel="noopener" class="doc-link">打开飞书文档 ↗</a>
+            <span v-if="detail.synced_at" class="doc-synced">上次同步 {{ formatFull(detail.synced_at) }}</span>
           </div>
 
           <div class="desc-section">
@@ -799,6 +829,34 @@ onMounted(() => {
   color: var(--color-text-primary, #333);
   white-space: pre-wrap;
   word-break: break-word;
+}
+.sync-btn {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--color-text-secondary, #555);
+  cursor: pointer;
+}
+.sync-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.doc-link-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.doc-link {
+  color: #3b82f6;
+  text-decoration: none;
+}
+.doc-synced {
+  color: var(--color-text-tertiary, #999);
 }
 .timeline-label {
   margin: 14px 0 8px;

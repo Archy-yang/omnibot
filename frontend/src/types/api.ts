@@ -542,6 +542,9 @@ export interface MatterSummary {
   status: string;
   updated_at: string;
   memory_count: number;
+  /** 23号:已同步的飞书文档 */
+  doc_url?: string;
+  synced_at?: string;
 }
 
 /** 主题档案详情:元信息 + 演进时间线 */
@@ -552,7 +555,16 @@ export interface MatterDetail {
   status: string;
   updated_at: string;
   memory_count: number;
+  doc_url?: string;
+  synced_at?: string;
   timeline: JournalItem[];
+}
+
+/** POST /matters/:id/sync-doc 响应(23号) */
+export interface SyncDocResponse {
+  doc_url: string;
+  synced_at: string;
+  created: boolean;
 }
 
 /** 沉淀黑名单规则(22号) */
