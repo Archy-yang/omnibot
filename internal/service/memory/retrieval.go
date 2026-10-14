@@ -111,12 +111,16 @@ func (s *memoryService) SearchMemories(ctx context.Context, userID int64, query 
 	if provider != nil {
 		currentModel = provider.Name()
 	}
+	blacklistPatterns := s.listPatterns(userID) // 22号:检索不带已禁止内容
 
 	lowered := strings.ToLower(query)
 	hits := make([]memorydomain.MemoryHit, 0, len(memories))
 	for _, m := range memories {
 		if m.IsClosedLoop() {
 			continue // closed 的 loop 不进检索(§14.2.2),管理面可见可重开
+		}
+		if containsBlacklisted(m.Content, blacklistPatterns) {
+			continue
 		}
 		if !matchFilter(m, filter) {
 			continue // 22号:时间窗/档案过滤

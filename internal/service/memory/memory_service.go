@@ -37,6 +37,10 @@ type MemoryService interface {
 	// SearchRecentMessages 中期记忆检索(M7 §10.6):消息级向量 + 时间加权,原文直达。
 	// embedding 未配置/无向量时返回空(中期层静默缺失,不报错)。
 	SearchRecentMessages(ctx context.Context, userID int64, query string, topK int, filter *memorydomain.MemoryFilter) ([]memorydomain.MessageHit, error)
+	// 沉淀黑名单(22号 §5.3):add 返回(规则, 存量删除条数)
+	ListBlacklist(userID int64) ([]*memorydomain.MemoryBlacklist, error)
+	AddBlacklist(userID int64, pattern string) (*memorydomain.MemoryBlacklist, int64, error)
+	RemoveBlacklist(userID, id int64) (bool, error)
 	// GetMemoryInjection 常驻注入数据(注入分层,§6.5 修订 + M8.3 §14.2.4):
 	// Manual=手动全量(用户意志,时间正序);PinnedAuto=置顶自动记忆(pinned_at 倒序,
 	// 唯一进常驻的自动记忆);AutoCount=自动记忆总数(注入端换算未列出条数)。
@@ -63,6 +67,8 @@ type memoryService struct {
 	msgSource  RecentMessageSource
 	embedding  EmbeddingProvider // 系统默认;SetEmbeddingProvider 注入,nil=子串降级
 	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
+	// 沉淀黑名单(22号):SetBlacklistRepo 注入,nil=禁用(向后兼容)
+	blacklistRepo memoryrepo.BlacklistRepository
 }
 
 func NewMemoryService(repo memoryrepo.MemoryRepository, matterRepo memoryrepo.MatterRepository, msgEmbRepo memoryrepo.MessageEmbeddingRepository, msgSource RecentMessageSource) MemoryService {
@@ -141,6 +147,7 @@ func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*
 	for _, m := range manuals {
 		manual = append(manual, m.Content)
 	}
+	manual = s.filterByBlacklist(userID, manual)
 	pinned, err := s.repo.ListPinnedAutoByUserID(userID)
 	if err != nil {
 		// 置顶列表读取失败降级为无置顶,不阻断手动注入
@@ -152,6 +159,7 @@ func (s *memoryService) GetMemoryInjection(ctx context.Context, userID int64) (*
 	for _, m := range pinned {
 		pinnedAuto = append(pinnedAuto, m.Content)
 	}
+	pinnedAuto = s.filterByBlacklist(userID, pinnedAuto)
 	auto, err := s.repo.CountByUserIDAndSource(userID, memorydomain.MemorySourceAuto)
 	if err != nil {
 		// 计数失败不影响常驻注入,只不出提示行
@@ -231,7 +239,7 @@ func (s *memoryService) GetRecentForContext(ctx context.Context, userID int64, l
 	for _, memory := range memories {
 		contents = append(contents, memory.Content)
 	}
-	return contents, nil
+	return s.filterByBlacklist(userID, contents), nil
 }
 
 func (s *memoryService) Delete(ctx context.Context, userID int64, memoryID int64) (bool, error) {
@@ -312,4 +320,9 @@ func (s *memoryService) SetLoopStatus(ctx context.Context, userID int64, memoryI
 			zap.String("action", action), zap.String("operation", "memory_loop_status"))
 	}
 	return ok, nil
+}
+
+// BlacklistAware 支持注入黑名单仓储的实现增强接口(22号;可选能力)。
+type BlacklistAware interface {
+	SetBlacklistRepo(r memoryrepo.BlacklistRepository)
 }

@@ -73,7 +73,7 @@ func pipelineSetup(t *testing.T) (*DigestPipeline, *gorm.DB, *fakePipelineLLM, *
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}); err != nil {
+	if err := db.AutoMigrate(&conversation.Message{}, &memorydomain.DigestWatermark{}, &memorydomain.Memory{}, &memorydomain.MemoryMessageLink{}, &memorydomain.Matter{}, &memorydomain.MemoryBlacklist{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	// 默认返回:纪要 + 无记忆候选

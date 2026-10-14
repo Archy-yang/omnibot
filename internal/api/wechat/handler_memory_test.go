@@ -58,6 +58,14 @@ func (m *mockMemoryService) Update(ctx context.Context, userID int64, memoryID i
 	return nil, nil
 }
 
+func (m *mockMemoryService) ListBlacklist(int64) ([]*memorydomain.MemoryBlacklist, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) AddBlacklist(int64, string) (*memorydomain.MemoryBlacklist, int64, error) {
+	return nil, 0, nil
+}
+func (m *mockMemoryService) RemoveBlacklist(int64, int64) (bool, error) { return false, nil }
+
 func (m *mockMemoryService) GetRecentForContext(ctx context.Context, userID int64, limit int) ([]string, error) {
 	return nil, nil
 }

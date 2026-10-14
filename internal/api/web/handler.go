@@ -99,6 +99,8 @@ type Handler struct {
 	larkAuthService LarkAuthManager
 	// 个人经历层(21 号 Journal/Archive)。nil 时相关接口返回 503(向后兼容)。
 	journalService JournalService
+	// 记忆规则(22 号黑名单)。nil 时相关接口返回 503(向后兼容)。
+	memoryRuleService MemoryRuleService
 }
 
 // NewHandler 创建 Web 聊天处理器

@@ -378,3 +378,6 @@ func (m *mockMemoryRepository) CountByMatter(int64) (map[int64]int64, error) {
 func (m *mockMemoryRepository) ListByMatter(int64, int64) ([]*memorydomain.Memory, error) {
 	return nil, nil
 }
+
+// ---- 22号 R2:黑名单仓储方法的桩 ----
+func (m *mockMemoryRepository) ListBlacklistPatterns(int64) ([]string, error) { return nil, nil }

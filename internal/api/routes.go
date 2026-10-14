@@ -117,6 +117,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.PUT("/:id/loop-status", d.webHandler.HandleSetLoopStatus) // E3:loop 管理面关闭/重开(§14.2.2 逃生口)
 		memoryAPIGroup.GET("/journal", d.webHandler.HandleGetJournal)            // 21号:个人经历时间轴
 
+	// 记忆规则(22号):沉淀黑名单管理
+	memoryRulesGroup := r.Group("/api/v1/memory-rules")
+	memoryRulesGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		memoryRulesGroup.GET("", d.webHandler.HandleListMemoryRules)
+		memoryRulesGroup.POST("", d.webHandler.HandleAddMemoryRule)
+		memoryRulesGroup.DELETE("/:id", d.webHandler.HandleDeleteMemoryRule)
+	}
+
 	// 个人档案(21号 Archive):主题档案列表/详情/用户纠正口
 	mattersAPIGroup := r.Group("/api/v1/matters")
 	mattersAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))

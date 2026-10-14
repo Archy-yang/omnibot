@@ -30,6 +30,7 @@ import (
 	"omnibot/internal/realtime"
 	agentRepo "omnibot/internal/repository/agent"
 	chatRepo "omnibot/internal/repository/chat"
+	memoryrepo "omnibot/internal/repository/memory"
 	mcpRepo "omnibot/internal/repository/mcp"
 	memoryRepo "omnibot/internal/repository/memory"
 	subscriptionRepo "omnibot/internal/repository/subscription"
@@ -312,6 +313,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
 	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateMemoryRulesTool(memorySvc) }) // 22号:沉淀黑名单
 	// 订阅源管理(14 §6.1):主 Agent 管理订阅;子 Agent list 取清单选源(能力打标 research/memory)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateManageSubscriptionsTool(subscriptionSvc) })
 	// 天气(内置,NMC 中央气象台 REST,零 key):主 Agent 直调即答("今天穿什么"),子 Agent(白名单
@@ -467,6 +469,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	webHandler := web.NewHandler(userSvc, msgSvc, llmClient, llmConfigSvc, memorySvc, agentSvc)
 	if js, ok := memorySvc.(web.JournalService); ok { // 21号:memoryService 兼具个人经历层
 		webHandler.SetJournalService(js)
+	}
+	if rs, ok := memorySvc.(web.MemoryRuleService); ok { // 22号:沉淀黑名单管理
+		webHandler.SetMemoryRuleService(rs)
+	}
+	if ba, ok := memorySvc.(memoryService.BlacklistAware); ok { // 22号:黑名单仓储注入
+		ba.SetBlacklistRepo(memoryrepo.NewBlacklistRepository(dbConn.GetGormDB()))
 	}
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)

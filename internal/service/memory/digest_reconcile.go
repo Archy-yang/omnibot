@@ -208,10 +208,14 @@ func (p *DigestPipeline) applyFacts(
 		currentModel = emb.Name()
 	}
 
+	blacklistPatterns, _ := p.memoryRepo.ListBlacklistPatterns(userID) // 22号:沉淀黑名单
 	for _, f := range facts {
 		content := strings.TrimSpace(f.Content)
 		if content == "" || utf8.RuneCountInString(content) > MaxMemoryContentLength {
 			continue
+		}
+		if containsBlacklisted(content, blacklistPatterns) {
+			continue // 用户禁止沉淀的内容静默跳过(水位照常推进)
 		}
 		validIDs := validSourceIDs(memoryCandidate{SourceMessageIDs: f.SourceMessageIDs}, fromID, toID)
 		var sourceMsgID *int64

@@ -49,6 +49,8 @@ type MemoryRepository interface {
 	CountByMatter(userID int64) (map[int64]int64, error)
 	// ListByMatter 档案时间线(21号 §5.2):pinned 前置,其余按有效时间升序;user+matter 双重隔离。
 	ListByMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
+	// ListBlacklistPatterns 黑名单关键词集(22号 §5.2:沉淀/注入/检索三处过滤共用)。
+	ListBlacklistPatterns(userID int64) ([]string, error)
 	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false)。
 	SetPinned(id int64, userID int64, pinned bool) (bool, error)
 }
@@ -334,6 +336,18 @@ func (r *memoryRepository) CountByMatter(userID int64) (map[int64]int64, error) 
 }
 
 // ListByMatter 档案时间线(21号 §5.2):pinned 前置,其余按有效时间升序。
+func (r *memoryRepository) ListBlacklistPatterns(userID int64) ([]string, error) {
+	var rows []memorydomain.MemoryBlacklist
+	if err := r.db.Where("user_id = ?", userID).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Pattern)
+	}
+	return out, nil
+}
+
 func (r *memoryRepository) ListByMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error) {
 	const eff = "COALESCE(happened_at, created_at)"
 	var out []*memorydomain.Memory
