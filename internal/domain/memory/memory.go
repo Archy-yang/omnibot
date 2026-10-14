@@ -24,13 +24,14 @@ const (
 
 type Memory struct {
 	ID              int64      `gorm:"primaryKey;autoIncrement"`
-	UserID          int64      `gorm:"index;not null"`
+	UserID          int64      `gorm:"index;index:idx_user_happened,priority:1;not null"`
 	Content         string     `gorm:"type:text;not null"`
 	Source          string     `gorm:"size:20;not null;default:manual"` // manual/auto
 	Kind            string     `gorm:"size:20;not null;default:fact"`   // M6 分层:fact/loop(episode 为历史兼容值,M8.4 起断源并归一为 fact)
 	LoopStatus      string     `gorm:"size:20;not null;default:open"`   // M8:loop 生命周期 open/closed(仅 kind=loop 有意义)
 	SourceMessageID *int64     // 溯源:首个来源消息 ID(主指针,展示兼容;完整映射见 memory_message_links)
 	MatterID        *int64     `gorm:"index"`           // M6:可选挂靠事项;独立事实/闲聊经历为 NULL
+	HappenedAt      *time.Time `gorm:"index:idx_user_happened,priority:2"` // 21号:事件发生时间(NULL=未识别,展示回落 CreatedAt);抽取见 digest_extract.parseHappenedAt
 	Embedding       []float32  `gorm:"serializer:json"` // JSON 向量列,SQLite/PG 通吃;NULL=未嵌入(检索走子串降级)
 	EmbeddingModel  string     `gorm:"size:100"`        // 生成向量的模型标识,检索只比同模型向量(§6.3)
 	Category        string     `gorm:"size:50"`         // 预留列,本期恒空

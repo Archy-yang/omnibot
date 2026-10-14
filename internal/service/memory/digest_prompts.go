@@ -48,7 +48,11 @@ const pipelineSystemPrompt = `你是一位私人助理，正在整理自己对�
      不属于任何事项就留空 ""；
    - 严禁提取一次性讨论、临时情绪、寒暄；宁可漏记，不可错记；没有就输出空数组 []；
    - source_message_ids：该信息依据的全部消息编号（原文中 [消息#N|...] 的 N，可多条；
-     信息常由多轮交叉得出）；无法确定填 []。
+     信息常由多轮交叉得出）；无法确定填 []；
+   - happened_at：该信息所指事件的**发生时间**（区别于今天的整理时间）。对话中提到
+     日期或相对时间（"上周三""10月1号那天"）时，换算成绝对时间填入：
+     "YYYY-MM-DD"，已知具体时刻则 "YYYY-MM-DD HH:MM"。
+     对话没提时间就留空 ""；**不要编造**，不要用今天的日期顶替。
 
    facts 三条红线（违反任何一条都不许输出该条；这是"禁切片流水账"的落点）：
    a. 时效红线：写之前先问"这条三个月后还有效吗"。新闻事件的进展与细节
@@ -71,5 +75,5 @@ const pipelineSystemPrompt = `你是一位私人助理，正在整理自己对�
 
 只输出 JSON，不要任何其他文字，格式如下：
 {"matter_updates":[{"title":"...","state_desc":"...","status":"active","source_message_ids":[0]}],
- "facts":[{"content":"...","kind":"fact","matter_title":"","source_message_ids":[0]}],
+ "facts":[{"content":"...","kind":"fact","matter_title":"","happened_at":"","source_message_ids":[0]}],
  "loop_closes":[],"loop_reopens":[]}`
