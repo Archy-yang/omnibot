@@ -136,5 +136,24 @@ MemoryDrawer（碎片管理）保留不动；pinned 逻辑不受影响。
 
 ---
 
-**文档版本**：v1.0
+**文档版本**：v1.1
 **创建日期**：2026-10-14
+
+---
+
+## 落地记录（J1 + J2 + J3，2026-10-14）
+
+- **J1**：`memories.happened_at` 列 + `(user_id, happened_at)` 索引（AutoMigrate,存量不回填）；
+  沉淀 facts schema 增加 `happened_at`（提示词明令"对话没提就留空,不要编造"）；
+  `parseHappenedAt` 严格容错——空/垃圾/相对时间/超窗 [区间起点-1年, 区间末+24h]（按日历日对齐,
+  日期精度 00:00 不卡带时刻的下界）一律 NULL；冲突更新路径不改写既有时间。
+- **J2**：仓储 `ListJournal`（有效时间=`COALESCE(happened_at,created_at)` 降序,游标谓词 OR 展开,
+  SQLite/PG 通吃）+ `ListLinksForMemories`/`CountByMatter`/`ListByMatter`（pinned 前置,有效时间升序）
+  + matter `GetByID`/`ListByUserID`/`UpdateFields`；service `Journal`（溯源拼装,片段 80 字,
+  已消失消息静默缺失,游标 base64 不透明串）+ `Matters`/`MatterDetail`/`UpdateMatter`（仅
+  state_desc/status,title 不可改,未命中一律 ErrMatterNotFound 防存在性泄露）；API
+  `GET /memories/journal` + `GET/PUT /matters(/:id)`,JWT 归属隔离。
+- **J3**：`JournalDrawer` 双 tab（时间轴按月分组/kind 过滤/翻页/条目展开溯源/编辑删除复用记忆
+  CRUD/跳档案 + 档案列表/详情时间线/纠正口）,侧栏新增「经历」导航,抽屉内部状态不进 Store。
+- 测试：解析 14 断言/对账 3 场景/提示词守护 + 仓储 5 项/service 5 项/handler 6 项,
+  全量 39 包绿；vue-tsc 干净,vite build 通过；`happened_at` 列与索引 DB 实查确认。
