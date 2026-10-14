@@ -21,10 +21,25 @@ import (
 // M8 §14.2.2:loop 生命周期——loop_closes 关闭快照中列出的未决 loop,
 // loop_reopens 重开明确重新托付的 closed loop(仅快照可引用,防幻觉)。
 type reconcileResult struct {
-	MatterUpdates []matterUpdate  `json:"matter_updates"`
-	Facts         []factCandidate `json:"facts"`
-	LoopCloses    []int64         `json:"loop_closes"`
-	LoopReopens   []int64         `json:"loop_reopens"`
+	MatterUpdates     []matterUpdate       `json:"matter_updates"`
+	Facts             []factCandidate      `json:"facts"`
+	LoopCloses        []int64              `json:"loop_closes"`
+	LoopReopens       []int64              `json:"loop_reopens"`
+	StyleNotes        []styleNoteCandidate `json:"style_notes"`        // 24号:风格观察(常态空数组)
+	PreferenceChanges []changeCandidate    `json:"preference_changes"` // 24号:认知变化
+}
+
+// styleNoteCandidate 风格观察(24号 §4):只观察用户侧表达,必须引用依据消息。
+type styleNoteCandidate struct {
+	Dimension        string  `json:"dimension"`
+	Content          string  `json:"content"`
+	SourceMessageIDs []int64 `json:"source_message_ids"`
+}
+
+// changeCandidate 偏好/决策变化("从 X 改为 Y")。
+type changeCandidate struct {
+	Content          string  `json:"content"`
+	SourceMessageIDs []int64 `json:"source_message_ids"`
 }
 
 type matterUpdate struct {
@@ -180,7 +195,60 @@ func (p *DigestPipeline) reconcile(
 	}
 	applyLoop(result.LoopCloses, memorydomain.MemoryLoopStatusOpen, memorydomain.MemoryLoopStatusClosed, &stats.LoopsClosed, "close")
 	applyLoop(result.LoopReopens, memorydomain.MemoryLoopStatusClosed, memorydomain.MemoryLoopStatusOpen, &stats.LoopsReopened, "reopen")
+
+	// 风格与认知证据(24号 §4):常态空数组;单轮上限 3 条;失败仅记日志(证据层不阻断沉淀)
+	p.applyStyleEvidence(userID, result, fromID, toID)
 	return stats
+}
+
+// styleEvidenceCap 单轮每类证据上限(24号 §1.1:风格是慢变量,防噪声)。
+const styleEvidenceCap = 3
+
+func (p *DigestPipeline) applyStyleEvidence(userID int64, result reconcileResult, fromID, toID int64) {
+	notes := result.StyleNotes
+	if len(notes) > styleEvidenceCap {
+		notes = notes[:styleEvidenceCap]
+	}
+	if len(notes) > 0 {
+		rows := make([]memorydomain.StyleObservation, 0, len(notes))
+		for _, n := range notes {
+			content := strings.TrimSpace(n.Content)
+			if content == "" {
+				continue
+			}
+			rows = append(rows, memorydomain.StyleObservation{
+				UserID: userID, Dimension: memorydomain.NormalizeDimension(n.Dimension), Content: content,
+				SourceMessageIDs: validSourceIDs(memoryCandidate{SourceMessageIDs: n.SourceMessageIDs}, fromID, toID),
+				CreatedAt:        time.Now(),
+			})
+		}
+		if err := p.memoryRepo.CreateStyleObservations(rows); err != nil {
+			logger.WarnWithFields("memory: 风格观察落库失败(不阻断沉淀)",
+				zap.Int64("user_id", userID), zap.Error(err))
+		}
+	}
+	changes := result.PreferenceChanges
+	if len(changes) > styleEvidenceCap {
+		changes = changes[:styleEvidenceCap]
+	}
+	if len(changes) > 0 {
+		rows := make([]memorydomain.CognitionChange, 0, len(changes))
+		for _, c := range changes {
+			content := strings.TrimSpace(c.Content)
+			if content == "" {
+				continue
+			}
+			rows = append(rows, memorydomain.CognitionChange{
+				UserID: userID, Content: content,
+				SourceMessageIDs: validSourceIDs(memoryCandidate{SourceMessageIDs: c.SourceMessageIDs}, fromID, toID),
+				CreatedAt:        time.Now(),
+			})
+		}
+		if err := p.memoryRepo.CreateCognitionChanges(rows); err != nil {
+			logger.WarnWithFields("memory: 认知变化落库失败(不阻断沉淀)",
+				zap.Int64("user_id", userID), zap.Error(err))
+		}
+	}
 }
 
 // applyFacts 原子信息落库:过滤 → 溯源校验 → 事件时间 → 挂 matter → 嵌入 → 去重裁决 → 落库。

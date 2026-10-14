@@ -474,6 +474,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if rs, ok := memorySvc.(web.MemoryRuleService); ok { // 22号:沉淀黑名单管理
 		webHandler.SetMemoryRuleService(rs)
 	}
+	if sp, ok := memorySvc.(web.StyleProfileService); ok { // 24号:风格与认知画像
+		webHandler.SetStyleProfileService(sp)
+	}
 	if ba, ok := memorySvc.(memoryService.BlacklistAware); ok { // 22号:黑名单仓储注入
 		ba.SetBlacklistRepo(memoryrepo.NewBlacklistRepository(dbConn.GetGormDB()))
 	}

@@ -579,3 +579,32 @@ export interface AddMemoryRuleResponse {
   rule: MemoryRule;
   deleted: number;
 }
+
+// ===== 风格与认知画像(24 号 M1) =====
+
+/** 溯源消息摘要(与 JournalLink 同形,独立定义避免耦合) */
+export interface StyleLink {
+  message_id: number;
+  occurred_at: string;
+  snippet: string;
+}
+
+export interface StyleObservationItem {
+  id: number;
+  dimension: string;
+  content: string;
+  created_at: string;
+  links?: StyleLink[];
+}
+
+export interface StyleChangeItem {
+  id: number;
+  content: string;
+  created_at: string;
+  links?: StyleLink[];
+}
+
+export interface StyleProfileView {
+  observations: StyleObservationItem[];
+  changes: StyleChangeItem[];
+}

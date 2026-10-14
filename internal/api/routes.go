@@ -126,6 +126,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryRulesGroup.DELETE("/:id", d.webHandler.HandleDeleteMemoryRule)
 	}
 
+	// 风格与认知画像(24号)
+	styleProfileGroup := r.Group("/api/v1/style-profile")
+	styleProfileGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		styleProfileGroup.GET("", d.webHandler.HandleGetStyleProfile)
+		styleProfileGroup.DELETE("/observation/:id", d.webHandler.HandleDeleteStyleObservation)
+		styleProfileGroup.DELETE("/change/:id", d.webHandler.HandleDeleteCognitionChange)
+	}
+
 	// 个人档案(21号 Archive):主题档案列表/详情/用户纠正口
 	mattersAPIGroup := r.Group("/api/v1/matters")
 	mattersAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))

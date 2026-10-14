@@ -103,6 +103,8 @@ type Handler struct {
 	memoryRuleService MemoryRuleService
 	// 文档同步(23 号)。nil 时相关接口返回 503(向后兼容)。
 	docSyncService DocSyncService
+	// 风格与认知画像(24 号)。nil 时相关接口返回 503(向后兼容)。
+	styleProfileService StyleProfileService
 }
 
 // NewHandler 创建 Web 聊天处理器

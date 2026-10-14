@@ -51,6 +51,13 @@ type MemoryRepository interface {
 	ListByMatter(userID int64, matterID int64) ([]*memorydomain.Memory, error)
 	// ListBlacklistPatterns 黑名单关键词集(22号 §5.2:沉淀/注入/检索三处过滤共用)。
 	ListBlacklistPatterns(userID int64) ([]string, error)
+	// 风格与认知证据(24号 §3):管线落库 + 画像视图。
+	CreateStyleObservations(rows []memorydomain.StyleObservation) error
+	CreateCognitionChanges(rows []memorydomain.CognitionChange) error
+	ListStyleObservations(userID int64, limit int) ([]*memorydomain.StyleObservation, error)
+	ListCognitionChanges(userID int64, limit int) ([]*memorydomain.CognitionChange, error)
+	DeleteStyleObservation(userID, id int64) (bool, error)
+	DeleteCognitionChange(userID, id int64) (bool, error)
 	// SetPinned 置顶/取消置顶(M8.3)。返回是否命中(他人/不存在 → false)。
 	SetPinned(id int64, userID int64, pinned bool) (bool, error)
 }
@@ -355,4 +362,54 @@ func (r *memoryRepository) ListByMatter(userID int64, matterID int64) ([]*memory
 		Order("pinned DESC, " + eff + " ASC, id ASC").
 		Find(&out).Error
 	return out, err
+}
+
+// ---- 风格与认知证据层(24号 §3) ----
+
+func (r *memoryRepository) CreateStyleObservations(rows []memorydomain.StyleObservation) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return r.db.Create(&rows).Error
+}
+
+func (r *memoryRepository) CreateCognitionChanges(rows []memorydomain.CognitionChange) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return r.db.Create(&rows).Error
+}
+
+func (r *memoryRepository) ListStyleObservations(userID int64, limit int) ([]*memorydomain.StyleObservation, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []*memorydomain.StyleObservation
+	err := r.db.Where("user_id = ?", userID).Order("created_at DESC, id DESC").Limit(limit).Find(&out).Error
+	return out, err
+}
+
+func (r *memoryRepository) ListCognitionChanges(userID int64, limit int) ([]*memorydomain.CognitionChange, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []*memorydomain.CognitionChange
+	err := r.db.Where("user_id = ?", userID).Order("created_at DESC, id DESC").Limit(limit).Find(&out).Error
+	return out, err
+}
+
+func (r *memoryRepository) DeleteStyleObservation(userID, id int64) (bool, error) {
+	res := r.db.Where("user_id = ? AND id = ?", userID, id).Delete(&memorydomain.StyleObservation{})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *memoryRepository) DeleteCognitionChange(userID, id int64) (bool, error) {
+	res := r.db.Where("user_id = ? AND id = ?", userID, id).Delete(&memorydomain.CognitionChange{})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
