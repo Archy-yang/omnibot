@@ -30,14 +30,18 @@ const dsmlTag = string(rune(0xFF5C)) + "DSML" + string(rune(0xFF5C))
 // 谨慎:DSML 是 DeepSeek 内部实现细节,官方不保证格式稳定。本层仅作故障恢复兜底,
 // 不作为主要工具调用机制;标准 tool_calls 通道仍优先。
 var (
-	// dsmlTagRe 是 dsmlTag 的正则转义版(QuoteMeta),避免全角竖线等字符被当正则元字符。
-	dsmlTagRe = regexp.QuoteMeta(dsmlTag)
-	// `<dsmlTag>invoke name="..."` 块(分隔符可选,兼容 <invoke>/<｜DSML｜invoke> 两种形态)。
-	dsmlInvokeRe = regexp.MustCompile(`(?s)<(?:` + dsmlTagRe + `)?invoke name="([^"]+)"[^>]*>(.*?)</(?:` + dsmlTagRe + `)?invoke>`)
-	// `<dsmlTag>parameter name="..." ...>` 值 `</dsmlTag>parameter`。
-	dsmlParamRe = regexp.MustCompile(`(?s)<(?:` + dsmlTagRe + `)?parameter name="([^"]+)"([^>]*)>(.*?)</(?:` + dsmlTagRe + `)?parameter>`)
-	// 残留的外层包裹标签(tool_calls/tool_call),从清理文本里去掉。
-	dsmlResidueRe = regexp.MustCompile(`(?s)</?(?:` + dsmlTagRe + `)?(?:tool_calls|tool_call)>`)
+	// dsmlTagPart 是分隔符的宽容匹配:1-2 条全角竖线包 DSML(模型输出有单竖线/双竖线
+	// 两种实录,task45 为双),且与关键词之间允许空白(有无空格均见实录)。
+	// 不能只 QuoteMeta(dsmlTag)(单竖线定长):双竖线变体整块漏匹配,工具调用会被
+	// 当散文透传,半截 DSML 语法存成 artifact(主 Agent 视角"回传被截断")。
+	dsmlTagPart = `｜{1,2}DSML｜{1,2}\s*`
+	// `<分隔符>invoke name="..."` 块(分隔符可选,兼容 <invoke>/<｜DSML｜invoke>/<｜｜DSML｜｜ invoke>)。
+	dsmlInvokeRe = regexp.MustCompile(`(?s)<(?:` + dsmlTagPart + `)?invoke name="([^"]+)"[^>]*>(.*?)</(?:` + dsmlTagPart + `)?invoke>`)
+	// `<分隔符>parameter name="..." ...>` 值 `</分隔符>parameter`。
+	dsmlParamRe = regexp.MustCompile(`(?s)<(?:` + dsmlTagPart + `)?parameter name="([^"]+)"([^>]*)>(.*?)</(?:` + dsmlTagPart + `)?parameter>`)
+	// 残留的外层包裹标签(tool_calls/tool_call/calls),从清理文本里去掉。
+	// calls:task45 实录,模型把外层包裹写成 <｜｜DSML｜｜calls> 而非 tool_calls。
+	dsmlResidueRe = regexp.MustCompile(`(?s)</?(?:` + dsmlTagPart + `)?(?:tool_calls|tool_call|calls)>`)
 )
 
 // parseDSML 从 content 识别 DSML 工具调用标记,提取为 []ToolCallDelta(Index/ID/Name/ArgumentsDelta),

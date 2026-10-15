@@ -56,7 +56,10 @@ build-all: build-frontend build-backend  ## Build both backend and frontend
 
 start: stop  ## Start the server in background (idempotent: stops old process first)
 	@mkdir -p logs
-	@nohup ./$(SERVER_BIN) -config $(CONFIG_PATH) >> $(LOG_FILE) 2>&1 & \
+	@# setsid 脱离当前 session/进程组:AI 开发环境的命令生命周期会清理同会话遗留进程,
+	@# nohup(只挡 SIGHUP、不换组)拉起的 server 会被连带 SIGTERM(两次 502 根因)。
+	@# 本机无 setsid 命令,用 perl 等价实现;exec 后 pid 不变,$$! 即 server pid。
+	@perl -e 'setsid; exec @ARGV' ./$(SERVER_BIN) -config $(CONFIG_PATH) >> $(LOG_FILE) 2>&1 < /dev/null & \
 	echo "$$!" > $(PID_FILE)
 	@sleep 1; if kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
 		echo "✅ 已启动 PID=$$(cat $(PID_FILE))  日志: $(LOG_FILE)"; \
@@ -116,7 +119,7 @@ dev: build start dev-frontend  ## 一键开发模式:后端构建并启动 + 前
 
 dev-frontend: dev-stop  ## Start frontend dev server (Vite hot reload, daemon)
 	@mkdir -p $(BIN_DIR) logs
-	@cd $(FRONTEND_DIR) && ( nohup $(NPM_CMD) run dev -- --port $(VITE_PORT) --strictPort > ../$(VITE_LOG_FILE) 2>&1 < /dev/null & echo $$! > ../$(VITE_PID_FILE) )
+	@cd $(FRONTEND_DIR) && ( perl -e 'setsid; exec @ARGV' $(NPM_CMD) run dev -- --port $(VITE_PORT) --strictPort > ../$(VITE_LOG_FILE) 2>&1 < /dev/null & echo $$! > ../$(VITE_PID_FILE) )
 	@sleep 2; if curl -sf -o /dev/null http://localhost:$(VITE_PORT)/chat/; then \
 		echo "✅ 前端开发服务器已启动 PID=$$(cat $(VITE_PID_FILE))  打开: http://localhost:$(VITE_PORT)/chat/"; \
 	else \
@@ -246,6 +249,13 @@ db-purge:  ## Purge Docker volumes (WARNING: all data lost!)
 	@echo "⚠️  Purging Docker volumes - ALL DATA WILL BE LOST!"
 	@docker compose down -v
 	@echo "✅ Docker volumes purged"
+
+##@ Evaluation
+
+eval-memory:  ## 24号 M3:金样本真实回放——真实 LLM 跑沉淀管线,输出命中/漏抽/误抽报告(eval-out/)
+	@echo "🔍 Running memory digest evaluation with real LLM..."
+	@CGO_ENABLED=0 go run ./cmd/eval-memory -config configs/config.yaml
+	@echo "✅ Evaluation completed (report in eval-out/, 人工审阅反哺提示词)"
 
 ##@ Testing Database
 
