@@ -188,8 +188,13 @@ func (p *DigestPipeline) RunOnce(ctx context.Context, userID int64) error {
 	}
 	toID = messages[len(messages)-1].ID
 	transcript := buildTranscript(messages)
-	// 对账式输入(M6):世界观快照 + 新增对话——LLM 必须看到已有事项才能增量更新
-	userPayload := p.buildWorldViewSnapshot(userID) + "\n\n" + transcript
+	// 对账式输入(M6):世界观快照 + 新增对话——LLM 必须看到已有事项才能增量更新。
+	// 今天日期紧贴对话原文(相对时间"上周三"换算的基准就在它旁边;eval-memory 实录
+	// 缺它年代靠猜)。刻意不放 payload 头部:日变内容前置会毒化未来任何可缓存的
+	// payload 前缀(缓存友好性,用户明确要求)。
+	userPayload := p.buildWorldViewSnapshot(userID) + "\n\n" +
+		fmt.Sprintf("(今天是 %s,对话中的相对时间以此为准)\n\n", time.Now().Format("2006-01-02")) +
+		transcript
 
 	// 单次 LLM 调用完成对账(事项覆写 + 分层事实提取)。
 	// 调用失败或结果 schema 非法 → 整批作废,水位不动,下轮重试同一区间。
