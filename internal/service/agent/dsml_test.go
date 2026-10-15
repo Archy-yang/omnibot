@@ -81,6 +81,35 @@ func TestParseDSML_Task49Origin(t *testing.T) {
 	assert.NotContains(t, clean, "tool_calls")
 }
 
+// TestParseDSML_Task45Variant 变体容错(task45 实录):模型输出双全角竖线(｜｜DSML｜｜,
+// 非 dsmlTag 的单竖线)、tag 与关键词之间的空格不稳定(有/无)、外层包裹用 `calls`
+// (非 tool_calls)。任一变体都不得把工具调用当散文透传——那会让半截 DSML 语法
+// 存成 artifact 并标 completed(主 Agent 拿到"被截断的垃圾")。
+func TestParseDSML_Task45Variant(t *testing.T) {
+	// task45 seq13 原样字节:<｜｜DSML｜｜calls> 无空格;invoke/parameter 带空格
+	content := "<｜｜DSML｜｜calls>\n" +
+		"<｜｜DSML｜｜ invoke name=\"web_search\">\n" +
+		"<｜｜DSML｜｜ parameter name=\"query\" string=\"true\">博查 Bocha AI 搜索 API 价格 定价 元/千次</｜｜DSML｜｜ parameter>\n" +
+		"</｜｜DSML｜｜ invoke>\n" +
+		"</｜｜DSML｜｜ calls>"
+
+	tools, clean := parseDSML(content)
+	require.Len(t, tools, 1, "双竖线+空格变体必须被识别为工具调用")
+	assert.Equal(t, "web_search", tools[0].Name)
+	assert.JSONEq(t, `{"query":"博查 Bocha AI 搜索 API 价格 定价 元/千次"}`, tools[0].ArgumentsDelta)
+	assert.NotContains(t, clean, "DSML", "外层 calls 包裹残留必须清理")
+
+	// 无空格的 invoke/parameter 变体同样识别
+	content2 := "<｜｜DSML｜｜calls>" +
+		"<｜｜DSML｜｜invoke name=\"web_read\">" +
+		"<｜｜DSML｜｜parameter name=\"url\" string=\"true\">https://example.com</｜｜DSML｜｜parameter>" +
+		"</｜｜DSML｜｜invoke></｜｜DSML｜｜calls>"
+	tools2, clean2 := parseDSML(content2)
+	require.Len(t, tools2, 1, "无空格变体必须被识别")
+	assert.Equal(t, "web_read", tools2[0].Name)
+	assert.NotContains(t, clean2, "DSML")
+}
+
 // TestParseDSML_NoDelimiterPlainInvoke 兼容无分隔符的简单形态(<invoke name=...> 老实现也覆盖)。
 func TestParseDSML_NoDelimiterPlainInvoke(t *testing.T) {
 	content := `<invoke name="web_read"><parameter name="url" string="true">https://a</parameter></invoke>`
