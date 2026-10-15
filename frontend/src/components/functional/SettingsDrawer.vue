@@ -17,6 +17,8 @@ import { ref, watch, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import { feishuAuthService } from '@/services/feishuAuth';
+import { styleProfileService } from '@/services/styleProfile';
+import type { StyleProfileView } from '@/types/api';
 import type { FeishuAuthView } from '@/types/api';
 import type { LLMConfig } from '@/types/api';
 import type { LLMProviderOption } from '@/types/llmProvider';
@@ -46,6 +48,7 @@ const navItems = [
   { key: 'chat-model', label: '对话模型' },
   { key: 'embedding-model', label: '向量模型' },
   { key: 'feishu-auth', label: '飞书授权' },
+  { key: 'style-profile', label: '风格与认知' },
   { key: 'about', label: '关于' },
 ] as const;
 const activeSection = ref<string>('chat-model');
@@ -123,7 +126,59 @@ const handleFaDisconnect = async () => {
 watch(activeSection, (v) => {
   if (v === 'feishu-auth') loadFaStatus();
   else stopFaPoll();
+  if (v === 'style-profile') loadStyleProfile();
 });
+
+// ===== 风格与认知画像(24 号 M1) =====
+const spView = ref<StyleProfileView | null>(null);
+const spLoading = ref(false);
+
+const dimensionLabel = (d: string): string =>
+  ({ tone: '语气', length: '长度', formality: '礼节', humor: '幽默', format: '格式', address: '称呼' })[d] ?? '观察';
+
+const formatSpTime = (iso: string): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const getStyleErr = (err: unknown): string =>
+  err instanceof Error ? err.message : '服务暂时不可用,请稍后再试。';
+
+const loadStyleProfile = async (): Promise<void> => {
+  spLoading.value = true;
+  try {
+    spView.value = await styleProfileService.getProfile();
+  } catch (err) {
+    error(getStyleErr(err));
+  } finally {
+    spLoading.value = false;
+  }
+};
+
+const handleDeleteObservation = async (id: number): Promise<void> => {
+  if (!window.confirm('删除这条观察?它是从你的对话中总结的,删除后不再展示。')) return;
+  try {
+    await styleProfileService.deleteObservation(id);
+    if (spView.value) spView.value.observations = spView.value.observations.filter((o) => o.id !== id);
+    success('已删除观察');
+  } catch (err) {
+    error(getStyleErr(err));
+  }
+};
+
+const handleDeleteChange = async (id: number): Promise<void> => {
+  if (!window.confirm('删除这条认知变化记录?')) return;
+  try {
+    await styleProfileService.deleteChange(id);
+    if (spView.value) spView.value.changes = spView.value.changes.filter((c) => c.id !== id);
+    success('已删除记录');
+  } catch (err) {
+    error(getStyleErr(err));
+  }
+};
 
 // Local form state — 编辑时不直接改 store,取消时恢复
 const localConfig = ref<LLMConfig>({
@@ -784,6 +839,45 @@ const showEmbeddingApiKey = ref(false);
     </div>
 
     <div class="drawer-footer-spacer"></div>
+    <!-- ===== 风格与认知 section(24-风格与认知演化证据层) ===== -->
+    <div v-show="activeSection === 'style-profile'" class="section-pane">
+    <div class="section-title">风格与认知</div>
+    <p class="section-hint">助手从你们的长期对话中总结的沟通风格观察与偏好变化记录。这些只是原始观察,不会被自动使用;你可以随时删除不准确的记录。</p>
+
+    <div v-if="spLoading" class="form-hint">加载中...</div>
+    <template v-else>
+      <div class="sp-group">
+        <div class="sp-group-title">沟通风格观察 <span v-if="spView?.observations?.length">({{ spView.observations.length }})</span></div>
+        <p v-if="!spView?.observations?.length" class="form-hint">还没有观察记录。正常聊天即可,明显的表达习惯会被总结到这里。</p>
+        <div v-for="o in spView?.observations ?? []" :key="o.id" class="sp-item">
+          <div class="sp-item-head">
+            <span class="sp-dim">{{ dimensionLabel(o.dimension) }}</span>
+            <span class="sp-time">{{ formatSpTime(o.created_at) }}</span>
+            <button type="button" class="sp-del" @click="handleDeleteObservation(o.id)">删除</button>
+          </div>
+          <div class="sp-content">{{ o.content }}</div>
+          <div v-if="o.links?.length" class="sp-links">
+            <span v-for="l in o.links" :key="l.message_id" class="sp-link" :title="l.snippet">依据:{{ l.snippet.slice(0, 30) }}…</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-group">
+        <div class="sp-group-title">偏好与认知变化 <span v-if="spView?.changes?.length">({{ spView.changes.length }})</span></div>
+        <p v-if="!spView?.changes?.length" class="form-hint">还没有记录。当你明确表达"以前 X,现在要 Y"时,会沉淀在这里。</p>
+        <div v-for="c in spView?.changes ?? []" :key="c.id" class="sp-item">
+          <div class="sp-item-head">
+            <span class="sp-time">{{ formatSpTime(c.created_at) }}</span>
+            <button type="button" class="sp-del" @click="handleDeleteChange(c.id)">删除</button>
+          </div>
+          <div class="sp-content">{{ c.content }}</div>
+          <div v-if="c.links?.length" class="sp-links">
+            <span v-for="l in c.links" :key="l.message_id" class="sp-link" :title="l.snippet">依据:{{ l.snippet.slice(0, 30) }}…</span>
+          </div>
+        </div>
+      </div>
+    </template>
+    </div>
   </DialogShell>
 </template>
 
@@ -1295,4 +1389,67 @@ const showEmbeddingApiKey = ref(false);
 }
 .fa-btn.is-primary { color: var(--label-primary); font-weight: 500; }
 .fa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== 风格与认知(24号) ===== */
+.sp-group {
+  margin-bottom: 20px;
+}
+.sp-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  margin-bottom: 8px;
+}
+.sp-item {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-color, #eee);
+  border-radius: 8px;
+}
+.sp-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-dim {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  font-size: 11px;
+}
+.sp-time {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+}
+.sp-del {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: #dc2626;
+  cursor: pointer;
+}
+.sp-content {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sp-links {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sp-link {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

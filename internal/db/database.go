@@ -174,6 +174,8 @@ func autoMigrate(db *gorm.DB) error {
 		&memory.Memory{},
 		&memory.MemoryMessageLink{},  // M5.2:记忆↔消息多对多溯源映射(§7.3)
 		&memory.MemoryBlacklist{},    // 22号:沉淀黑名单
+		&memory.StyleObservation{},   // 24号:风格证据
+		&memory.CognitionChange{},    // 24号:认知变化
 		&memory.Matter{},             // M6:事项层(助理人视角,状态覆写式)
 		&memory.DigestWatermark{},    // §4.3:摘要管线水位(单用户单行)
 		&memory.MessageEmbedding{},   // M7 §10.4:消息级向量(中期=原文直达)

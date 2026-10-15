@@ -381,3 +381,15 @@ func (m *mockMemoryRepository) ListByMatter(int64, int64) ([]*memorydomain.Memor
 
 // ---- 22号 R2:黑名单仓储方法的桩 ----
 func (m *mockMemoryRepository) ListBlacklistPatterns(int64) ([]string, error) { return nil, nil }
+
+// ---- 24号 M1 仓储方法桩 ----
+func (m *mockMemoryRepository) CreateStyleObservations([]memorydomain.StyleObservation) error { return nil }
+func (m *mockMemoryRepository) CreateCognitionChanges([]memorydomain.CognitionChange) error   { return nil }
+func (m *mockMemoryRepository) ListStyleObservations(int64, int) ([]*memorydomain.StyleObservation, error) {
+	return nil, nil
+}
+func (m *mockMemoryRepository) ListCognitionChanges(int64, int) ([]*memorydomain.CognitionChange, error) {
+	return nil, nil
+}
+func (m *mockMemoryRepository) DeleteStyleObservation(int64, int64) (bool, error) { return false, nil }
+func (m *mockMemoryRepository) DeleteCognitionChange(int64, int64) (bool, error)  { return false, nil }

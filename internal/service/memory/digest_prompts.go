@@ -73,7 +73,16 @@ const pipelineSystemPrompt = `你是一位私人助理，正在整理自己对�
      才输出；同样只允许填快照中列出的编号；没有就输出空数组 []；
    - 只是重复提起某个未决的 loop（"那个事怎么样了"）既不算 close 也不算 reopen，输出 []。
 
+4. style_notes / preference_changes：对用户本人的长期观察（24号），**常态输出空数组 []**：
+   - style_notes：仅在对话中出现**明显**表达风格信号时输出（称呼习惯、长度/详略偏好、正式度、
+     幽默感、格式偏好），单轮最多 3 条；只观察**用户侧**的表达，禁止对助手的回复做观察；
+     dimension 取 tone/length/formality/humor/format/address 之一；content 写成有依据的陈述句；
+   - preference_changes：仅当用户**明确表达**偏好或决策改变时输出（"以前 X,现在要 Y"），
+     content 写成"从 X 改为 Y"叙事，单轮最多 3 条；普通事实进 facts,不要重复记；
+   - 两者都必须引用 source_message_ids（依据消息）；拿不准就输出空数组，宁缺毋滥。
+
 只输出 JSON，不要任何其他文字，格式如下：
 {"matter_updates":[{"title":"...","state_desc":"...","status":"active","source_message_ids":[0]}],
  "facts":[{"content":"...","kind":"fact","matter_title":"","happened_at":"","source_message_ids":[0]}],
- "loop_closes":[],"loop_reopens":[]}`
+ "loop_closes":[],"loop_reopens":[],
+ "style_notes":[],"preference_changes":[]}`
