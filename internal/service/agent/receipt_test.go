@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 
@@ -79,6 +80,8 @@ func TestBuildTaskReceipt_SummaryTruncates(t *testing.T) {
 	assert.Contains(t, summary, "完整结果可查任务产物")
 	assert.False(t, strings.Contains(summary, strings.Repeat("详", 201)),
 		"摘要不应含超长全文")
+	assert.True(t, utf8.ValidString(summary),
+		"截断摘要必须是合法 UTF-8(字节切片切坏多字节字符会被 PG 拒收 22021)")
 
 	// 完整模式(report 接口):不截断,给全文
 	full := buildTaskReceiptForReport(task, true)

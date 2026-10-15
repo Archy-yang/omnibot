@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	memorydomain "omnibot/internal/domain/memory"
 	"omnibot/internal/pkg/toolcore"
+	"omnibot/pkg/textutil"
 )
 
 type MemoryProvider interface {
@@ -140,8 +142,8 @@ func writeRecentSection(ctx context.Context, recent RecentMessageSearcher, userI
 	fmt.Fprintf(b, "【近期对话】%d 段相关原文:\n", len(msgHits))
 	for _, mh := range msgHits {
 		content := strings.ReplaceAll(mh.Content, "\n", " ")
-		if len(content) > 120 {
-			content = content[:120] + "…"
+		if utf8.RuneCountInString(content) > 120 {
+			content = textutil.TruncateRunes(content, 120) + "…"
 		}
 		fmt.Fprintf(b, "- [%s %s] [#%d] %s\n",
 			mh.CreatedAt.Format("2006-01-02 15:04"), mh.Role, mh.MessageID, content)

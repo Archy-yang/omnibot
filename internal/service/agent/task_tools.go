@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	domainagent "omnibot/internal/domain/agent"
+	"omnibot/pkg/textutil"
 )
 
 // CreateQueryTaskTool 创建 query_task 工具:主 Agent 主动查任务状态/列表。
@@ -179,10 +181,10 @@ func parseTaskID(raw interface{}) (int64, error) {
 func formatTaskSummary(s *TaskSummary) string {
 	artifactHint := ""
 	if s.Artifact != nil && *s.Artifact != "" {
-		// 摘要前 60 字
+		// 摘要前 60 字(rune 截断,字节切片会切坏多字节字符→非法 UTF-8 被 PG 拒收)
 		a := *s.Artifact
-		if len(a) > 60 {
-			a = a[:60] + "..."
+		if utf8.RuneCountInString(a) > 60 {
+			a = textutil.TruncateRunes(a, 60) + "..."
 		}
 		artifactHint = fmt.Sprintf("\n  产出摘要: %s", a)
 	}
@@ -250,10 +252,10 @@ func CreateRequestInputTool(svc *SubAgentService) Tool {
 	}
 }
 
-// truncateGoal 截断 goal 摘要。
+// truncateGoal 截断 goal 摘要(rune 截断,防切坏多字节字符)。
 func truncateGoal(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "..."
+	return textutil.TruncateRunes(s, max) + "..."
 }
