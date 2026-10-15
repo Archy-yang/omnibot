@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"omnibot/pkg/textutil"
 )
 
 const (
@@ -52,7 +54,8 @@ func readViaJina(ctx context.Context, targetURL string) (string, error) {
 		return "", formatWebFailure(0, targetURL, "读取到空正文(可能是 JS 渲染页面或反爬)")
 	}
 	if len(text) > webReaderMaxBytes {
-		text = text[:webReaderMaxBytes] + "\n...(正文过长已截断)"
+		// 字节预算截断须落在合法 UTF-8 边界,非法序列会被 PG 拒收(22021)
+		text = textutil.TruncateUTF8Safe(text, webReaderMaxBytes) + "\n...(正文过长已截断)"
 	}
 	return formatWebSuccess(resp.StatusCode, targetURL, text), nil
 }

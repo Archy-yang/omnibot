@@ -13,6 +13,8 @@ import (
 
 	readability "codeberg.org/readeck/go-readability"
 	"github.com/PuerkitoBio/goquery"
+
+	"omnibot/pkg/textutil"
 )
 
 // ssrfPolicy 校验 URL 是否安全可访问(防 SSRF:服务器端请求伪造)。
@@ -140,7 +142,8 @@ func fetchAndExtract(ctx context.Context, urlStr string) (string, error) {
 		return "", formatWebFailure(0, urlStr, "抓取到空正文(可能是 JS 渲染页面,换用 web_reader)")
 	}
 	if len(text) > webFetchMaxBytes {
-		text = text[:webFetchMaxBytes] + "\n...(正文过长已截断)"
+		// 字节预算截断须落在合法 UTF-8 边界,非法序列会被 PG 拒收(22021)
+		text = textutil.TruncateUTF8Safe(text, webFetchMaxBytes) + "\n...(正文过长已截断)"
 	}
 
 	result := text

@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,6 +188,24 @@ func TestFormatTaskSummary_Times(t *testing.T) {
 	out = formatTaskSummary(cancelled)
 	assert.Contains(t, out, "取消于 2026-09-11 13:07")
 	assert.NotContains(t, out, "完成于")
+}
+
+// TestFormatTaskSummary_ArtifactHintUTF8Safe 产出摘要截断必须是合法 UTF-8:
+// 中文物件按字节切片会切坏多字节字符,非法序列被 PG 拒收(22021,agent_steps 整批丢失的根因)。
+func TestFormatTaskSummary_ArtifactHintUTF8Safe(t *testing.T) {
+	longArtifact := strings.Repeat("博", 100) // 300 字节,> 60 rune
+	summary := formatTaskSummary(&TaskSummary{
+		ID: 1, Status: "completed", Goal: "g", Artifact: &longArtifact, CreatedAt: time.Now(),
+	})
+	assert.Contains(t, summary, "产出摘要:")
+	assert.True(t, utf8.ValidString(summary), "摘要必须为合法 UTF-8")
+}
+
+// TestTruncateGoalUTF8Safe truncateGoal 中文超长截断不产出非法 UTF-8。
+func TestTruncateGoalUTF8Safe(t *testing.T) {
+	got := truncateGoal(strings.Repeat("研", 50), 20)
+	assert.True(t, utf8.ValidString(got))
+	assert.Contains(t, got, "...")
 }
 
 // TestFormatTaskSummary_Name 任务短名渲染:有名字带「短名」,无名字不出现空引号。

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	domainagent "omnibot/internal/domain/agent"
+	"omnibot/pkg/textutil"
 )
 
 // BuildTaskReceipt 构造子任务回执(08 §3.4 固定格式),供主 Agent 识别并汇报。
@@ -85,11 +86,12 @@ func writeTaskContract(b *strings.Builder, task *domainagent.AgentTask) {
 const receiptSummaryMax = 200
 
 // truncateForReceipt 截断到摘要长度,超长加省略号。
+// 按 rune 截断:字节切片会切坏多字节字符,非法 UTF-8 被 PG 拒收(22021)。
 func truncateForReceipt(s string) string {
 	if len(s) <= receiptSummaryMax {
 		return s
 	}
-	return s[:receiptSummaryMax] + "..."
+	return textutil.TruncateRunes(s, receiptSummaryMax) + "..."
 }
 
 // extractInputQuestion 从 Notes 提取[需要输入]问题(input_required 态用)。
