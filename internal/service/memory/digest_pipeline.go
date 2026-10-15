@@ -66,6 +66,12 @@ func (p *DigestPipeline) SetAudit(a DigestAudit) {
 	p.audit = a
 }
 
+// SetSilenceGap 覆写段落边界阈值(0 = 旧契约整窗收口,关闭切分)。
+// 构造器会把 0 规范化为默认值,跨包调用方(如 eval-memory 工具)需显式关闭切分时用。
+func (p *DigestPipeline) SetSilenceGap(d time.Duration) {
+	p.silenceGap = d
+}
+
 const digestMaxBatchMessages = 40 // 单轮块上限:两倍默认阈值,兼顾摊销与请求体积
 
 // digestDefaultSilenceGap 段落边界静默阈值默认值(M8.1):相邻消息间隔 ≥ 10 分钟视为话题自然收尾。

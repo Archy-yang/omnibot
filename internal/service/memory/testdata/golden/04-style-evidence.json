@@ -1,0 +1,41 @@
+{
+  "name": "04-风格与偏好证据抽取",
+  "description": "24号新增段:用户明确表达的风格信号与偏好改变;只观察用户侧,单轮上限 3",
+  "user_id": 42,
+  "snapshot": {
+    "matters": [],
+    "loops": []
+  },
+  "messages": [
+    {"role": "user", "content": "跟你说过别整那些客套话,直接说结论就行。", "created_at": "2026-10-15T16:00:00+08:00"},
+    {"role": "user", "content": "还有,以后这种整理类的报告都给我控制在半页以内。", "created_at": "2026-10-15T16:01:00+08:00"},
+    {"role": "assistant", "content": "明白,后面都直接给结论,篇幅控制住。", "created_at": "2026-10-15T16:02:00+08:00"},
+    {"role": "user", "content": "对了,我咖啡改喝燕麦拿铁了,以前的美式别再默认给我推荐。", "created_at": "2026-10-15T16:03:00+08:00"}
+  ],
+  "scripted_output": {
+    "matter_updates": [],
+    "facts": [],
+    "loop_closes": [],
+    "loop_reopens": [],
+    "style_notes": [
+      {"dimension": "formality", "content": "用户偏好直接、少客套的沟通方式,要求直接说结论", "source_message_ids": [1]},
+      {"dimension": "length", "content": "整理类报告偏好半页以内的简短篇幅", "source_message_ids": [2]}
+    ],
+    "preference_changes": [
+      {"content": "咖啡偏好从美式改为燕麦拿铁", "source_message_ids": [4]}
+    ]
+  },
+  "expected": {
+    "matters": [],
+    "facts": [],
+    "loop_closed_contents": [],
+    "loop_open_contents": [],
+    "style_notes": [
+      {"dimension": "formality", "content_contains": ["直接"]},
+      {"dimension": "length", "content_contains": ["半页"]}
+    ],
+    "preference_changes": [
+      {"content_contains": ["燕麦拿铁"]}
+    ]
+  }
+}

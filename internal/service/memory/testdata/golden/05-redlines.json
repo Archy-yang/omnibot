@@ -1,0 +1,36 @@
+{
+  "name": "05-时效红线与负断言",
+  "description": "新闻进展与一次性调研不得进 facts(红线);仅稳定事实入库;负断言(content_not_contains)机制验证。E2 真实回放时此样本检验真实 LLM 的红线遵从——违反会体现在误抽候选里",
+  "user_id": 42,
+  "snapshot": {
+    "matters": [],
+    "loops": []
+  },
+  "messages": [
+    {"role": "user", "content": "看到新闻说 X 厂商今天发布新款手机了,搭载什么什么芯片。", "created_at": "2026-10-15T18:00:00+08:00"},
+    {"role": "assistant", "content": "是的,今天下午刚官宣的,详细参数陆续放出。", "created_at": "2026-10-15T18:01:00+08:00"},
+    {"role": "user", "content": "帮我把它和其他两款旗舰的参数对比整理一下,今天就要用。", "created_at": "2026-10-15T18:02:00+08:00"},
+    {"role": "assistant", "content": "好的,我整理好发您。", "created_at": "2026-10-15T18:03:00+08:00"},
+    {"role": "user", "content": "不急的话明天也行。我闺女叫安安,今年 5 岁,回头买手机壳按她的型号来。", "created_at": "2026-10-15T18:04:00+08:00"}
+  ],
+  "scripted_output": {
+    "matter_updates": [],
+    "facts": [
+      {"content": "他的女儿叫安安,今年 5 岁", "kind": "fact", "matter_title": "", "happened_at": "", "source_message_ids": [5]}
+    ],
+    "loop_closes": [],
+    "loop_reopens": [],
+    "style_notes": [],
+    "preference_changes": []
+  },
+  "expected": {
+    "matters": [],
+    "facts": [
+      {"content_contains": ["安安"], "content_not_contains": ["发布会", "芯片"]}
+    ],
+    "loop_closed_contents": [],
+    "loop_open_contents": [],
+    "style_notes": [],
+    "preference_changes": []
+  }
+}

@@ -70,6 +70,9 @@ const (
 func (p *DigestPipeline) buildWorldViewSnapshot(userID int64) string {
 	var b strings.Builder
 	b.WriteString("【世界观快照】\n")
+	// 显式告知今天日期:相对时间("上周三""10月3号")换算绝对时间的基准。
+	// 缺它模型靠猜年代(eval-memory 实录:"10月3号"被换算成 2025 年,窗口守卫拦下但漏记)。
+	fmt.Fprintf(&b, "(今天是 %s)\n", time.Now().Format("2006-01-02"))
 
 	b.WriteString("当前记住的事项:\n")
 	matters, err := p.matterRepo.ListActiveByUserID(userID)
