@@ -98,6 +98,26 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		agentTaskGroup.POST("/tasks/:id/report", d.agentTaskHandler.HandleReportTask)
 	}
 
+	// 持久任务接口(25 号):列表 + 控制;创建走对话内工具
+	ptGroup := r.Group("/api/v1/persistent-tasks")
+	ptGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		ptGroup.GET("", d.webHandler.HandleListPersistentTasks)
+		ptGroup.POST("/:id/:action", d.webHandler.HandleControlPersistentTask)
+		ptGroup.DELETE("/:id", d.webHandler.HandleDeletePersistentTask)
+	}
+
+	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。
+	// 放在路由装配尾部,与飞书长连接同款 goroutine 纪律(独立 background ctx)。
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorWithFields("persistent task scheduler panic", zap.Any("recover", r))
+			}
+		}()
+		d.persistentScheduler.Start(context.Background())
+	}()
+
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。

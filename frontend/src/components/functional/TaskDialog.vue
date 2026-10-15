@@ -14,6 +14,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import DialogShell from '@/components/layout/DialogShell.vue';
 import { agentTaskService } from '@/services/agentTask';
+import { persistentTaskService, type PersistentTaskItem } from '@/services/persistentTasks';
 import { useToast } from '@/composables/useToast';
 import type { AgentTaskItem, AgentTaskDetail, AgentTaskStep } from '@/types/api';
 
@@ -40,6 +41,60 @@ const steps = ref<AgentTaskStep[]>([]);
 const isLoadingList = ref(false);
 const isLoadingDetail = ref(false);
 
+// ===== 周期任务(25 号) =====
+const persistentTasks = ref<PersistentTaskItem[]>([]);
+// 两段式删除确认:记录处于"确认删除"态的持久任务 id,再点一次才真删
+const confirmingDeleteId = ref<number | null>(null);
+const controllingId = ref<number | null>(null);
+
+const loadPersistentTasks = async () => {
+  try {
+    persistentTasks.value = await persistentTaskService.list();
+  } catch (err) {
+    // 周期任务是增量能力,加载失败不阻塞主列表(静默降级,控制台留痕)
+    console.error('Failed to load persistent tasks:', err);
+  }
+};
+
+const controlPersistentTask = async (pt: PersistentTaskItem, action: 'pause' | 'resume') => {
+  controllingId.value = pt.id;
+  try {
+    if (action === 'pause') {
+      await persistentTaskService.pause(pt.id);
+    } else {
+      await persistentTaskService.resume(pt.id);
+    }
+    await loadPersistentTasks();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : '操作失败');
+  } finally {
+    controllingId.value = null;
+  }
+};
+
+const removePersistentTask = async (pt: PersistentTaskItem) => {
+  // 两段式确认:第一次点进入确认态,再点才删(误触保护)
+  if (confirmingDeleteId.value !== pt.id) {
+    confirmingDeleteId.value = pt.id;
+    return;
+  }
+  confirmingDeleteId.value = null;
+  controllingId.value = pt.id;
+  try {
+    await persistentTaskService.remove(pt.id);
+    await loadPersistentTasks();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : '删除失败');
+  } finally {
+    controllingId.value = null;
+  }
+};
+
+const persistentStateLabel = (pt: PersistentTaskItem): string => {
+  if (pt.enabled) return '运行中';
+  return pt.auto_paused ? `连续失败已停用` : '已暂停';
+};
+
 // 展开的步骤 seq 集合(默认全收起,点击展开)
 const expandedSeqs = ref<Set<number>>(new Set());
 
@@ -47,6 +102,7 @@ const loadList = async () => {
   isLoadingList.value = true;
   try {
     tasks.value = await agentTaskService.listAll();
+    loadPersistentTasks();
   } catch (err) {
     toastError(err instanceof Error ? err.message : '加载任务失败');
   } finally {
@@ -191,6 +247,35 @@ const stepStatusClass = (s: string) =>
   <DialogShell :visible="visible" title="任务" width="760px" height="min(640px, calc(100vh - 48px))" @close="emit('close')">
     <!-- ===== 列表页 ===== -->
     <template v-if="view === 'list'">
+      <!-- 周期任务(25 号):仅在有数据时展示,空态不打扰 -->
+      <div v-if="persistentTasks.length > 0" class="pt-section">
+        <div class="pt-section-title">周期任务</div>
+        <div v-for="pt in persistentTasks" :key="pt.id" class="pt-row">
+          <span class="pt-dot" :class="pt.enabled ? 'dot-on' : 'dot-off'"></span>
+          <span class="pt-main">
+            <span class="pt-name">{{ pt.name || pt.goal }}</span>
+            <span class="pt-meta">周期 {{ pt.cron }} · 下次 {{ pt.next_run_at }}<template v-if="pt.fail_streak > 0"> · 连续失败 {{ pt.fail_streak }}</template></span>
+          </span>
+          <span class="pt-state" :class="pt.enabled ? 'on' : 'off'">{{ persistentStateLabel(pt) }}</span>
+          <span class="pt-actions">
+            <button
+              type="button"
+              class="pt-btn"
+              :disabled="controllingId === pt.id"
+              @click="controlPersistentTask(pt, pt.enabled ? 'pause' : 'resume')"
+            >{{ pt.enabled ? '暂停' : '恢复' }}</button>
+            <button
+              type="button"
+              class="pt-btn danger"
+              :class="{ confirming: confirmingDeleteId === pt.id }"
+              :disabled="controllingId === pt.id"
+              @click="removePersistentTask(pt)"
+            >{{ confirmingDeleteId === pt.id ? '确认删除' : '删除' }}</button>
+          </span>
+        </div>
+        <p class="pt-hint">在对话里说「以后每天早上抓一次 AI 资讯」即可创建;停机期间错过的执行不补跑。</p>
+      </div>
+
       <div v-if="isLoadingList && !hasListData" class="task-loading">加载中…</div>
 
       <div v-else-if="tasks.length === 0" class="task-empty">
@@ -314,6 +399,125 @@ const stepStatusClass = (s: string) =>
 </template>
 
 <style scoped>
+/* ===== 周期任务(25 号) ===== */
+.pt-section {
+  margin-bottom: 16px;
+  padding: 12px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.pt-section-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--label-secondary);
+  margin-bottom: 8px;
+}
+
+.pt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.pt-row + .pt-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pt-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+}
+
+.pt-dot.dot-on {
+  background: #10a34a;
+}
+
+.pt-dot.dot-off {
+  background: var(--label-tertiary);
+}
+
+.pt-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pt-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pt-meta {
+  font-size: 11px;
+  color: var(--label-tertiary);
+}
+
+.pt-state {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.pt-state.on {
+  color: #0a7d33;
+  background: rgba(16, 163, 74, 0.12);
+}
+
+.pt-state.off {
+  color: var(--label-tertiary);
+  background: var(--bg-active);
+}
+
+.pt-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.pt-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--label-secondary);
+  cursor: pointer;
+}
+
+.pt-btn:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.pt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pt-btn.danger.confirming {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.pt-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--label-tertiary);
+  line-height: 1.6;
+}
+
 .task-loading,
 .task-empty {
   padding: 40px 0;

@@ -43,6 +43,7 @@ type SubAgentService struct {
 	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
 	notifier     TaskNotifier                  // 任务完成主动推送(方案A:飞书主动消息)
 	publisher    TaskCompletionPublisher       // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
+	finishedObserver func(*domainagent.AgentTask) // 任务终态观察者(25 号:持久任务 fail_streak/自动停用)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -468,6 +469,10 @@ func (s *SubAgentService) notifyCompleted(taskID int64) {
 	if err != nil || task == nil {
 		return
 	}
+	// 终态观察者(25 号):先于推送渠道分支,所有终态(含取消)都到达
+	if s.finishedObserver != nil {
+		s.finishedObserver(task)
+	}
 	// web:实时推送事件(08 §4.8),前端收到后走 /report 链路拉取汇报。
 	// 不标 reported——reported 由 /report 处理,推送丢失时轮询兜底仍可发现。
 	if task.Source == domainagent.SourceWeb && s.publisher != nil {
@@ -503,6 +508,13 @@ func (s *SubAgentService) SetNotifier(n TaskNotifier) {
 // SetCompletionPublisher 注入 web 实时推送器(08 §4.8;realtime.Hub)。
 func (s *SubAgentService) SetCompletionPublisher(p TaskCompletionPublisher) {
 	s.publisher = p
+}
+
+// SetFinishedObserver 注入任务终态观察者(25 号:持久任务调度器维护 fail_streak/
+// 自动停用)。notifyCompleted 加载终态任务后触发,成功/失败/取消都会到达,
+// 观察者自行过滤;单槽位(当前只有调度器一个观察方)。
+func (s *SubAgentService) SetFinishedObserver(fn func(*domainagent.AgentTask)) {
+	s.finishedObserver = fn
 }
 
 // ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。
