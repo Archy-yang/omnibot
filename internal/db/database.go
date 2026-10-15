@@ -181,6 +181,7 @@ func autoMigrate(db *gorm.DB) error {
 		&memory.MessageEmbedding{},   // M7 §10.4:消息级向量(中期=原文直达)
 		&memory.EmbeddingWatermark{}, // M7 §10.4:消息嵌入水位(独立于 digest 水位)
 		&agent.AgentTask{},
+		&agent.PersistentTask{},      // 25 号:持久任务(周期调度宿主)
 		&agent.Artifact{},            // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{},           // #22 任务事件流(状态变化历史,供审计/未来推送)
 		&tool.Tool{},                 // 13-插件系统:工具定义+启停(单一事实源)

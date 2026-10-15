@@ -105,6 +105,8 @@ type Handler struct {
 	docSyncService DocSyncService
 	// 风格与认知画像(24 号)。nil 时相关接口返回 503(向后兼容)。
 	styleProfileService StyleProfileService
+	// 持久任务(25 号:周期调度)。nil 时相关接口返回 503(向后兼容)。
+	persistentTaskService PersistentTaskAPIService
 }
 
 // NewHandler 创建 Web 聊天处理器

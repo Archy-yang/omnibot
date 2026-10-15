@@ -26,7 +26,10 @@ type AgentTask struct {
 	Notes        []string  `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
 	TaskSpec     TaskSpec  `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
 	ParentTaskID *int64    `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
-	Source       string    `gorm:"size:20;index"`          // 来源渠道:"web"/"feishu"。空=web(老数据兼容)。决定完成时往哪推送
+	// ScheduleID 派生本实例的持久任务 ID(25 号,source=schedule 时必填)。
+	// 与 ParentTaskID 分列:两者 ID 空间不同,不得混用。
+	ScheduleID   *int64    `gorm:"index"`
+	Source       string    `gorm:"size:20;index"`          // 来源渠道:"web"/"feishu"/"schedule"。空=web(老数据兼容)。决定完成时往哪推送
 	NotifyTarget string    `gorm:"size:128"`               // 主动推送目标:feishu=open_id;web=空(靠轮询)。source=feishu 时必填
 	// OriginTurnID Phase 1(16-架构迭代路线图 §5.3):触发本任务的用户意图 Turn。
 	// delegate 从 ctx(WithTurnID)取;NULL=存量任务/无 Turn 上下文。Report 据此回挂原始对话。

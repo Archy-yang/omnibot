@@ -78,6 +78,9 @@ type appDeps struct {
 	llmConfigSvc userService.LLMConfigService
 	subAgentSvc  *agentpkg.SubAgentService
 
+	// 25 号:持久任务调度器(进程级后台循环,routes.go 启动)
+	persistentScheduler *agentpkg.PersistentTaskScheduler
+
 	// 沉淀管线(可空:extraction.enabled=false 未启用)。
 	// 暴露给手动触发工具(digest_manual_test.go,env 门控)复用同一装配。
 	digestPipeline *memoryService.DigestPipeline
@@ -436,6 +439,14 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	agentToolRegistry.Register(agentpkg.CreateQueryTaskTool(subAgentSvc))
 	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
 	agentToolRegistry.Register(agentpkg.CreateCancelTaskTool(subAgentSvc))
+	// 25 号:持久任务(周期调度)。宿主只管"何时派活",到点 StartTask 派实例,
+	// 执行/汇报链路与 delegate 同构;终态观察者维护 fail_streak(≥3 自动停用)。
+	persistentTaskRepo := agentRepo.NewPersistentTaskRepository(dbConn.GetGormDB())
+	persistentTaskSvc := agentpkg.NewPersistentTaskService(persistentTaskRepo)
+	persistentScheduler := agentpkg.NewPersistentTaskScheduler(persistentTaskRepo, persistentTaskSvc)
+	persistentScheduler.WireStarter(subAgentSvc)
+	subAgentSvc.SetFinishedObserver(persistentScheduler.ObserveFinished)
+	agentToolRegistry.Register(agentpkg.CreateManagePersistentTaskTool(persistentTaskSvc))
 
 	// 主 Agent 服务:system prompt 由 PromptRegistry 组装(11-Prompt管理),toolRegistry 含 delegate
 	// 派活只走循环内的 delegate 工具一条抽象框架路径:任务在循环内创建,task_id 由框架解析。
@@ -494,6 +505,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 用户级飞书授权(19 号 M1):device flow 编排 + 状态管理
 	webHandler.SetLarkAuthService(larkauthService)
 	webHandler.SetMCPManager(mcpSvc)
+	// 25 号:持久任务 API(列表+控制;创建走对话内工具)
+	webHandler.SetPersistentTaskService(persistentTaskSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -527,6 +540,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		agentSvc:            agentSvc,
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
+		persistentScheduler: persistentScheduler,
 		digestPipeline:      digestPipeline,
 		chunkEmbedder:       chunkEmbedder,
 	}
