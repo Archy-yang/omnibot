@@ -1,0 +1,43 @@
+{
+  "name": "01-事项进展覆写与loop收口",
+  "description": "既有事项(西双版纳旅行)有新进展:覆写 state_desc、挂靠 fact、loop(待核实机票价格)随对话完结关闭",
+  "user_id": 42,
+  "snapshot": {
+    "matters": [
+      {"title": "西双版纳旅行", "state_desc": "10/1-10/4 共 4 天行程已排定,酒店已订;机票未订", "status": "active"}
+    ],
+    "loops": [
+      {"id": 101, "content": "待核实西双版纳往返机票的实时价格后告知"}
+    ]
+  },
+  "messages": [
+    {"role": "user", "content": "刚看到去版纳的机票降价了,10月2日直飞单程只要 1200。", "created_at": "2026-10-15T09:00:00+08:00"},
+    {"role": "assistant", "content": "我对比了一下,10月2日直飞确实划算,返程 10月4日也有同价位的。", "created_at": "2026-10-15T09:01:00+08:00"},
+    {"role": "user", "content": "那就把往返机票订了吧,别超过人均 5000 的预算。", "created_at": "2026-10-15T09:02:00+08:00"},
+    {"role": "assistant", "content": "已订好 10月2日去程和 10月4日返程,两人往返总价 3600,在预算内。", "created_at": "2026-10-15T09:03:00+08:00"}
+  ],
+  "scripted_output": {
+    "matter_updates": [
+      {"title": "西双版纳旅行", "state_desc": "10/1-10/4 行程与酒店已定;10/15 已订往返机票(10/2 去、10/4 回),两人总价 3600,在人均 5000 预算内", "status": "active", "source_message_ids": [3, 4]}
+    ],
+    "facts": [
+      {"content": "版纳旅行的预算红线是人均 5000 以内", "kind": "fact", "matter_title": "西双版纳旅行", "happened_at": "", "source_message_ids": [3]}
+    ],
+    "loop_closes": [101],
+    "loop_reopens": [],
+    "style_notes": [],
+    "preference_changes": []
+  },
+  "expected": {
+    "matters": [
+      {"title": "西双版纳旅行", "state_desc_contains": ["3600", "机票"], "status": "active"}
+    ],
+    "facts": [
+      {"content_contains": ["人均 5000"], "matter_title": "西双版纳旅行"}
+    ],
+    "loop_closed_contents": ["待核实西双版纳往返机票"],
+    "loop_open_contents": [],
+    "style_notes": [],
+    "preference_changes": []
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "03-loop生命周期边界",
+  "description": "完成的承诺关闭;只是重复提起的未决 loop 不关闭也不重开(边界负例)",
+  "user_id": 42,
+  "snapshot": {
+    "matters": [],
+    "loops": [
+      {"id": 101, "content": "待把上周项目评审会的会议纪要整理后发给他"},
+      {"id": 102, "content": "待查下周三亚的天气情况"}
+    ]
+  },
+  "messages": [
+    {"role": "user", "content": "上次让你整理的评审会纪要弄好了吗?", "created_at": "2026-10-15T10:00:00+08:00"},
+    {"role": "assistant", "content": "已经整理好发到您邮箱了,重点结论是 A 方案通过。", "created_at": "2026-10-15T10:01:00+08:00"},
+    {"role": "user", "content": "收到。对了,三亚天气那个查得怎么样了?", "created_at": "2026-10-15T10:02:00+08:00"}
+  ],
+  "scripted_output": {
+    "matter_updates": [],
+    "facts": [],
+    "loop_closes": [101],
+    "loop_reopens": [],
+    "style_notes": [],
+    "preference_changes": []
+  },
+  "expected": {
+    "matters": [],
+    "facts": [],
+    "loop_closed_contents": ["会议纪要"],
+    "loop_open_contents": ["三亚的天气"],
+    "style_notes": [],
+    "preference_changes": []
+  }
+}
