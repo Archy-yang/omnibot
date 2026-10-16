@@ -11,6 +11,8 @@ type UserRepository interface {
 	GetByID(id int64) (*user.User, error)
 	GetByPhone(phone string) (*user.User, error)
 	Update(u *user.User) error
+	// ListProactiveEnabled 开启主动管家的用户清单(26 号调度器枚举用)。
+	ListProactiveEnabled() ([]*user.User, error)
 }
 
 // GormUserRepository GORM 实现
@@ -47,4 +49,10 @@ func (r *GormUserRepository) GetByPhone(phone string) (*user.User, error) {
 
 func (r *GormUserRepository) Update(u *user.User) error {
 	return r.db.Save(u).Error
+}
+
+func (r *GormUserRepository) ListProactiveEnabled() ([]*user.User, error) {
+	var out []*user.User
+	err := r.db.Where("proactive_enabled = ?", true).Find(&out).Error
+	return out, err
 }

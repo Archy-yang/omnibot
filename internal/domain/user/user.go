@@ -18,6 +18,9 @@ type User struct {
 	PhoneVerified bool    `gorm:"default:false"`
 	PhoneBindTime *time.Time
 	Status        int8      `gorm:"default:0;not null"` // 0-正常, 1-封禁, 2-删除
+	// 26 号主动管家授权(红线:默认关闭,显式开启才工作;关 = 立即静默)
+	ProactiveEnabled bool `gorm:"not null;default:false"`
+	ProactiveHour    int  `gorm:"not null;default:9"` // 每日主动关心时刻(0-23,默认 9 点;22:00-08:00 触发被代码层拒绝)
 	CreatedAt     time.Time `gorm:"not null"`
 	UpdatedAt     time.Time `gorm:"not null"`
 }

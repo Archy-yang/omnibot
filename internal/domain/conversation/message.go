@@ -106,8 +106,17 @@ func NewAssistantMessageWithSegments(userID int64, content string, segments []Me
 // 消息种类常量。空串 Kind 表示普通对话消息(向后兼容,老数据无需迁移);
 // KindReport 标记主 Agent 主动汇报子任务结果的消息(由 HandleReportTask 落库)。
 const (
-	KindReport = "report" // 子任务汇报消息
+	KindReport    = "report"    // 子任务汇报消息
+	KindProactive = "proactive" // 26 号:主动管家开口消息(每日主动关心,历史可还原)
 )
+
+// NewProactiveMessage 创建一条主动管家开口消息(Kind=proactive)。
+// content 是管家口吻的主动消息纯文本;无 task_id/segments(单段文本)。
+func NewProactiveMessage(userID int64, content string) *Message {
+	msg := NewAssistantMessage(userID, content)
+	msg.Kind = KindProactive
+	return msg
+}
 
 // NewReportMessage 创建一条子任务汇报消息(Kind=report,关联 task_id)。
 // content 是主 Agent 汇报的纯文本投影(供复制/上下文/搜索),segments 是按时序的展示片段

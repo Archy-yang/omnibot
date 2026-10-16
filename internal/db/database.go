@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"omnibot/internal/domain/agent"
+	"omnibot/internal/domain/butler"
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/mcp"
 	"omnibot/internal/domain/memory"
@@ -182,6 +183,7 @@ func autoMigrate(db *gorm.DB) error {
 		&memory.EmbeddingWatermark{}, // M7 §10.4:消息嵌入水位(独立于 digest 水位)
 		&agent.AgentTask{},
 		&agent.PersistentTask{},      // 25 号:持久任务(周期调度宿主)
+		&butler.ProactiveNote{},      // 26 号:主动管家开口记录(送达/冷却/反馈的宿主)
 		&agent.Artifact{},            // #18 子 Agent 结构化产物(独立表)
 		&agent.TaskEvent{},           // #22 任务事件流(状态变化历史,供审计/未来推送)
 		&tool.Tool{},                 // 13-插件系统:工具定义+启停(单一事实源)

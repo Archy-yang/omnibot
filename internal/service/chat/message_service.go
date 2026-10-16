@@ -484,6 +484,17 @@ func (s *messageService) SaveReportMessage(ctx context.Context, userID, taskID, 
 	return nil
 }
 
+// SaveProactiveMessage 保存一条主动管家开口消息(Kind=proactive,26 号)。
+// 供 butler 扫描服务落库,使刷新后历史仍能还原管家的主动开口。
+func (s *messageService) SaveProactiveMessage(ctx context.Context, userID int64, content string) error {
+	msg := conversation.NewProactiveMessage(userID, content)
+	if err := s.msgRepo.Create(msg); err != nil {
+		return err
+	}
+	s.notifyTurn(userID)
+	return nil
+}
+
 // notifyTurn 轮次收尾广播给所有观察者(nil 安全;各 sink 自行异步、不阻塞)。
 func (s *messageService) notifyTurn(userID int64) {
 	for _, sink := range s.turnSinks {

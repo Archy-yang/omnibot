@@ -9,7 +9,7 @@
 | 项 | 内容 |
 |----|------|
 | 版本 | v1.0 |
-| 状态 | 方案评审中 |
+| 状态 | 已落地(N1~N3 全量,默认关闭待开启) |
 | 上游 | 21号经历层(信号源)、25号持久任务(调度/通知先例)、14号订阅源(定时推送雏形)、[20-路线图](./20-个人管家演进路线图.md) §5 |
 | 红线 | **默认关闭**(用户显式开启才工作);频率克制;可一键关闭;20号 §5 原文"授权范围内、频率克制、可一键关闭" |
 
@@ -120,6 +120,33 @@ type ProactiveNote struct {
 | N1 | 表+开关列+信号收集+LLM 裁决+克制闸门+落库 | §3~§4 + 测试 1~5 |
 | N2 | 送达(飞书/仅落库)+ 每日调度接线 + 消息还原 | §4 + 测试 6 部分 |
 | N3 | 设置页「主动关心」区 + settings API | §5 + 测试 6~7 |
+
+## 8.1 落地记录
+
+### N1(2026-10-16 完成,未接线调度)
+
+- `internal/domain/butler/proactive_note.go`:ProactiveNote(Status=delivered/skipped、DedupKey、MatterID 溯源、Feedback 预留);已注册 AutoMigrate
+- `internal/domain/user`:User 加 `ProactiveEnabled bool`(default false)/`ProactiveHour int`(default 9)
+- `internal/repository/butler/`:Create / CountDeliveredOnDay(自然日 delivered 计数,skipped 不计)/ HasDeliveredSince(dedup 7 天窗口);sqlite 单测
+- `internal/service/butler/scan_service.go`:RunOnce 单用户扫描,门槛依次 开关→夜间窗(8:00-22:00 之外硬拒)→hour 对位→日限(代码闸门在 LLM 前,省一次调用)→空快照→LLM 裁决→dedup 冷却(裁决后,命中记 skipped 留痕不送)
+- 信号快照:活跃事项(`[matter:N]` 标题+state_desc)/ open>3 天 loop(`[loop:N]`)/ 近 7 天 fact+loop(`[recent:N]`,ListJournal);单条 rune 截断 120,每类上限 20;全空不调 LLM
+- 裁决输出容错:剥代码围栏→取首尾大括号;send:true 但缺 dedup_key/content 一律沉默;matter_id 缺省时从 dedup_key "matter:N" 兜底溯源
+- 实测:N1 尚无调度接线,RunOnce 不会被触发;N2 接 hourly ticker 后生效
+
+### N2(2026-10-16 完成,随服务启动生效;默认关闭故线上行为零变化)
+
+- 消息还原:`conversation.KindProactive="proactive"` + `NewProactiveMessage`;`messageService.SaveProactiveMessage`(方法注入,butler 侧以窄接口 `MessageSink` 断言,不动 MessageService 大接口)
+- 送达:`butler.Notifier` 窄接口 + `internal/channel/feishu/butler_notifier.go`( userID→user_channels 查 feishu open_id→绿色卡片「🌿 管家问候」+ 尾注"不用再提"反馈提示;未绑定渠道静默 nil=仅落库即达;渠道/DB 查询失败仅记日志,note 已持久化不丢)
+- 调度:`butler.ScanScheduler`——30min tick × `ListProactiveEnabled`(user_repo 新增)枚举 × hour 对位 × 进程内 lastRun[userID]=当日 防重(失败不记已跑,下个 tick 重试);routes.go 独立 goroutine(与 25 号同款 panic 兜底)
+- 装配:wire.go 提取 `pipelineLLM` 到 extraction 开关之外(沉淀管线与 butler 共用同一用户级 LLM 解析实例);`appDeps` 增 butlerScan/butlerScheduler/userChannelRepo;飞书送达器在 startFeishuChannel 注入(sender 在此才创建)
+- 前端:Kind=proactive 消息按普通助手消息渲染(v1 不加徽标,与设置页一起走 N3)
+
+### N3(2026-10-16 完成,26 号全量落地)
+
+- API:`GET/PUT /api/v1/proactive-settings`(enabled/hour;hour 未传保留现值,0-23 校验——夜间时段配置合法,触发层代码硬拒绝)+ `GET /api/v1/proactive-notes?limit≤50`(显式 DTO);归属隔离一律取 auth userID
+- 服务:`butler.SettingsService`(users 读写 + notes ListRecent);repo 增 `ListRecent`(创建时间倒序)
+- 前端:设置抽屉新增「主动关心」section——开关/时刻即改即存 + 静默时段说明 + 最近主动记录列表(类型/状态/时间/内容)+ 空态文案;`services/proactive.ts`;Kind=proactive 徽标暂不做(记录列表已覆盖回看诉求)
+- 测试:repo ListRecent/用户隔离、service 默认关/更新/校验/列表、API 契约(GET/PUT/hour 未传/校验失败 400/未装配 503);vue-tsc + build 通过
 
 ## 9. 边界与不做(v1)
 
