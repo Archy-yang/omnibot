@@ -17,7 +17,9 @@ import (
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/middleware"
 	agentpkg "omnibot/internal/service/agent"
+	butlerpkg "omnibot/internal/service/butler"
 	chatService "omnibot/internal/service/chat"
+	userRepo "omnibot/internal/repository/user"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -107,6 +109,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		ptGroup.DELETE("/:id", d.webHandler.HandleDeletePersistentTask)
 	}
 
+	// 主动管家(26 号):设置读写 + 最近主动记录
+	proGroup := r.Group("/api/v1/proactive-settings")
+	proGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		proGroup.GET("", d.webHandler.HandleGetProactiveSettings)
+		proGroup.PUT("", d.webHandler.HandleUpdateProactiveSettings)
+	}
+	proNotesGroup := r.Group("/api/v1/proactive-notes")
+	proNotesGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		proNotesGroup.GET("", d.webHandler.HandleListProactiveNotes)
+	}
+
 	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。
 	// 放在路由装配尾部,与飞书长连接同款 goroutine 纪律(独立 background ctx)。
 	go func() {
@@ -118,11 +133,24 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		d.persistentScheduler.Start(context.Background())
 	}()
 
+	// 主动管家调度循环(26 号):30min tick × hour 对位 × 当日已跑判定。
+	// 克制闸门(日限/冷却/夜间窗)在 ScanService 代码层,调度器只管"何时喊人"。
+	if d.butlerScheduler != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorWithFields("butler scheduler panic", zap.Any("recover", r))
+				}
+			}()
+			d.butlerScheduler.Start(context.Background())
+		}()
+	}
+
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc)
+	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.userChannelRepo)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -301,6 +329,8 @@ func startFeishuChannel(
 	agentSvc *agentpkg.AgentService,
 	llmConfigSvc userService.LLMConfigService,
 	subAgentSvc *agentpkg.SubAgentService,
+	butlerScan *butlerpkg.ScanService,
+	userChannelRepo userRepo.UserChannelRepository,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -324,6 +354,10 @@ func startFeishuChannel(
 	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
 	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
 	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, agentSvc, msgSvc, llmConfigSvc))
+	// 26 号:主动管家飞书送达器(sender 在此才创建;未绑定渠道由 notifier 内静默降级为仅落库)
+	if butlerScan != nil && userChannelRepo != nil {
+		butlerScan.SetNotifier(channelfeishu.NewFeishuButlerNotifier(sender, userChannelRepo))
+	}
 	channel := channelfeishu.NewChannel(feishuCfg, handler, sender)
 
 	channelfactory.Register(channel)

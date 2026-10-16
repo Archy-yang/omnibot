@@ -18,6 +18,8 @@ import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import { feishuAuthService } from '@/services/feishuAuth';
 import { styleProfileService } from '@/services/styleProfile';
+import { proactiveService } from '@/services/proactive';
+import type { ProactiveSettings, ProactiveNoteItem } from '@/services/proactive';
 import type { StyleProfileView } from '@/types/api';
 import type { FeishuAuthView } from '@/types/api';
 import type { LLMConfig } from '@/types/api';
@@ -49,6 +51,7 @@ const navItems = [
   { key: 'embedding-model', label: '向量模型' },
   { key: 'feishu-auth', label: '飞书授权' },
   { key: 'style-profile', label: '风格与认知' },
+  { key: 'proactive', label: '主动关心' },
   { key: 'about', label: '关于' },
 ] as const;
 const activeSection = ref<string>('chat-model');
@@ -64,6 +67,59 @@ let faPollTimer: number | null = null;
 const stopFaPoll = () => {
   if (faPollTimer !== null) { window.clearInterval(faPollTimer); faPollTimer = null; }
 };
+
+// ===== 主动管家(26 号) =====
+const pbSettings = ref<ProactiveSettings>({ enabled: false, hour: 9 });
+const pbNotes = ref<ProactiveNoteItem[]>([]);
+const pbLoading = ref(false);
+const pbBusy = ref(false);
+
+const loadProactive = async () => {
+  pbLoading.value = true;
+  try {
+    const [settings, notes] = await Promise.all([
+      proactiveService.getSettings(),
+      proactiveService.listNotes(20),
+    ]);
+    pbSettings.value = settings;
+    pbNotes.value = notes;
+  } catch (err) {
+    console.error('Failed to load proactive settings:', err);
+  } finally {
+    pbLoading.value = false;
+  }
+};
+
+// 开关/时刻即改即存(关闭 = 立即静默,无需确认)
+const handleProactiveEnabled = async (event: Event) => {
+  if (pbBusy.value) return;
+  const enabled = (event.target as HTMLInputElement).checked;
+  await saveProactive({ enabled });
+};
+
+const handleProactiveHour = async (event: Event) => {
+  if (pbBusy.value) return;
+  const hour = Number((event.target as HTMLSelectElement).value);
+  await saveProactive({ hour });
+};
+
+const saveProactive = async (patch: Partial<ProactiveSettings>) => {
+  pbBusy.value = true;
+  const next = { ...pbSettings.value, ...patch };
+  try {
+    pbSettings.value = await proactiveService.updateSettings(next.enabled, next.hour);
+    success(pbSettings.value.enabled ? '已开启主动关心' : '已关闭主动关心');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '保存失败');
+  } finally {
+    pbBusy.value = false;
+  }
+};
+
+const proactiveKindLabel = (kind: string): string =>
+  ({ matter_due: '事项临近', loop_stale: '待办搁置', recent_followup: '近况跟进' }[kind] ?? kind);
+
+const proactiveTimeLabel = (hour: number): string => `${String(hour).padStart(2, '0')}:00`;
 
 const loadFaStatus = async () => {
   faLoading.value = true;
@@ -277,6 +333,7 @@ watch(
       settingsStore.loadConfig();
       showApiKey.value = false; // 每次打开重置密码显示态(安全)
       loadChannelBinding();
+      loadProactive();
     }
   }
 );
@@ -739,6 +796,44 @@ const showEmbeddingApiKey = ref(false);
       </div>
     </template>
     </div><!-- /飞书授权 section -->
+
+    <!-- ===== 主动关心 section(26-主动管家ProactiveButler) ===== -->
+    <div v-show="activeSection === 'proactive'" class="section-pane">
+    <div class="section-title">主动关心</div>
+    <p class="section-hint">默认关闭。开启后,管家每天最多主动找你一次,只在真有事时开口。不需要再提的话,在对话里回复「不用再提」,它从此不再说这件事。</p>
+
+    <div v-if="pbLoading" class="form-hint">加载中...</div>
+    <template v-else>
+      <div class="form-field">
+        <label class="thinking-toggle">
+          <input type="checkbox" class="thinking-checkbox" :checked="pbSettings.enabled" :disabled="pbBusy"
+            @change="handleProactiveEnabled" />
+          开启主动关心
+        </label>
+      </div>
+      <div class="form-field">
+        <label class="form-label">主动联系时刻</label>
+        <select class="form-select" :value="pbSettings.hour" :disabled="pbBusy || !pbSettings.enabled"
+          @change="handleProactiveHour">
+          <option v-for="h in 24" :key="h - 1" :value="h - 1">{{ proactiveTimeLabel(h - 1) }}</option>
+        </select>
+        <p class="form-hint">22:00 - 08:00 静默时段,不会打扰休息。</p>
+      </div>
+
+      <div class="sp-group">
+        <div class="sp-group-title">最近主动记录 <span v-if="pbNotes.length">({{ pbNotes.length }})</span></div>
+        <p v-if="!pbNotes.length" class="form-hint">还没有主动说过什么。开启后,值得提的事会出现在这里。</p>
+        <div v-for="n in pbNotes" :key="n.id" class="sp-item">
+          <div class="sp-item-head">
+            <span class="sp-dim">{{ proactiveKindLabel(n.kind) }}</span>
+            <span v-if="n.status === 'skipped'" class="sp-dim">已拦下</span>
+            <span class="sp-time">{{ n.created_at }}</span>
+          </div>
+          <div class="sp-content">{{ n.content }}</div>
+        </div>
+      </div>
+    </template>
+    </div>
 
     <!-- ===== 关于 section ===== -->
     <div v-show="activeSection === 'about'" class="section-about">

@@ -38,6 +38,8 @@ import (
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
+	butlerRepo "omnibot/internal/repository/butler"
+	butlerpkg "omnibot/internal/service/butler"
 	chatService "omnibot/internal/service/chat"
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
@@ -72,14 +74,19 @@ type appDeps struct {
 	realtimeHub *realtime.Hub
 
 	// 飞书渠道启动所需
-	bindingSvc   *userService.BindingService
-	msgSvc       chatService.MessageService
-	agentSvc     *agentpkg.AgentService
-	llmConfigSvc userService.LLMConfigService
-	subAgentSvc  *agentpkg.SubAgentService
+	bindingSvc        *userService.BindingService
+	msgSvc            chatService.MessageService
+	agentSvc          *agentpkg.AgentService
+	llmConfigSvc      userService.LLMConfigService
+	subAgentSvc       *agentpkg.SubAgentService
+	userChannelRepo   userRepo.UserChannelRepository // 26 号:butler 送达器查 open_id
 
 	// 25 号:持久任务调度器(进程级后台循环,routes.go 启动)
 	persistentScheduler *agentpkg.PersistentTaskScheduler
+
+	// 26 号:主动管家(扫描服务供飞书送达器注入;调度器进程级后台循环,routes.go 启动)
+	butlerScan      *butlerpkg.ScanService
+	butlerScheduler *butlerpkg.ScanScheduler
 
 	// 沉淀管线(可空:extraction.enabled=false 未启用)。
 	// 暴露给手动触发工具(digest_manual_test.go,env 门控)复用同一装配。
@@ -174,6 +181,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// LLM/embedding 均按用户解析:用户 Web 端配置优先,系统默认兜底,皆无则静默跳过。
 	// extraction.enabled=false 时管线整体不注入(对话零开销)。
 	agentLLMClient := newAgentLLMClient(cfg)
+	// 管线 LLM 按用户解析:沉淀管线与 26 号主动管家共用同一实例(用户配置优先、系统默认兜底)。
+	// 提在 extraction 开关之外:butler 不依赖沉淀开关。
+	pipelineLLM := &userPipelineLLM{svc: llmConfigSvc, system: agentLLMClient, cache: make(map[int64]struct {
+		fingerprint string
+		client      agentpkg.LLMClient
+	})}
 	var digestPipeline *memoryService.DigestPipeline
 	if cfg.Memory.Extraction.Enabled {
 		digestThreshold := cfg.Memory.Extraction.BatchSize
@@ -185,10 +198,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			memoryRepository,
 			memoryRepo.NewMatterRepository(dbConn.GetGormDB()), // M6:事项层
 			msgRepo, // chat 仓储实现 ConversationSource
-			&userPipelineLLM{svc: llmConfigSvc, system: agentLLMClient, cache: make(map[int64]struct {
-				fingerprint string
-				client      agentpkg.LLMClient
-			})},
+			pipelineLLM,
 			memoryEmbedding,
 			digestThreshold,
 			cfg.Memory.Extraction.SilenceGap, // M8.1:段落边界静默阈值(0 → 管线默认 10m)
@@ -448,6 +458,21 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	subAgentSvc.SetFinishedObserver(persistentScheduler.ObserveFinished)
 	agentToolRegistry.Register(agentpkg.CreateManagePersistentTaskTool(persistentTaskSvc))
 
+	// 26 号:主动管家(每日主动关心扫描)。克制闸门在 ScanService 代码层,
+	// 调度器只管"何时喊人";送达器在飞书启动后注入(startFeishuChannel)。
+	butlerScanSvc := butlerpkg.NewScanService(
+		butlerRepo.NewProactiveNoteRepository(dbConn.GetGormDB()),
+		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
+		memoryRepo.NewMemoryRepository(dbConn.GetGormDB()),
+		userRepo.NewUserRepository(dbConn.GetGormDB()),
+		pipelineLLM, // 与沉淀管线同款按用户解析通路
+	)
+	if sink, ok := msgSvc.(butlerpkg.MessageSink); ok {
+		butlerScanSvc.SetMessageSink(sink) // Kind=proactive 消息还原
+	}
+	butlerScheduler := butlerpkg.NewScanScheduler(butlerScanSvc,
+		userRepo.NewUserRepository(dbConn.GetGormDB()))
+
 	// 主 Agent 服务:system prompt 由 PromptRegistry 组装(11-Prompt管理),toolRegistry 含 delegate
 	// 派活只走循环内的 delegate 工具一条抽象框架路径:任务在循环内创建,task_id 由框架解析。
 	// 静态 section 组装不可能失败,故忽略 error。
@@ -507,6 +532,11 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	webHandler.SetMCPManager(mcpSvc)
 	// 25 号:持久任务 API(列表+控制;创建走对话内工具)
 	webHandler.SetPersistentTaskService(persistentTaskSvc)
+	// 26 号:主动管家设置 API(开关/时刻读写 + 最近记录列表)
+	webHandler.SetProactiveService(butlerpkg.NewSettingsService(
+		userRepo.NewUserRepository(dbConn.GetGormDB()),
+		butlerRepo.NewProactiveNoteRepository(dbConn.GetGormDB()),
+	))
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -540,7 +570,10 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		agentSvc:            agentSvc,
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
+		userChannelRepo:     userChannelRepository,
 		persistentScheduler: persistentScheduler,
+		butlerScan:          butlerScanSvc,
+		butlerScheduler:     butlerScheduler,
 		digestPipeline:      digestPipeline,
 		chunkEmbedder:       chunkEmbedder,
 	}
