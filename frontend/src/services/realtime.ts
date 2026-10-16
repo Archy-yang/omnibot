@@ -99,6 +99,11 @@ export function connectRealtime(opts: RealtimeOptions): void {
   };
 }
 
+/** 连接是否健康(OPEN 态:auth 已发出;token 无效服务端会立即断开,状态随之翻 false)。 */
+export function isRealtimeConnected(): boolean {
+  return socket !== null && socket.readyState === WebSocket.OPEN;
+}
+
 /** disconnect 关闭连接并停止重连(登出/页面卸载用)。 */
 export function disconnectRealtime(): void {
   closedByUser = true;

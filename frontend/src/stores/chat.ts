@@ -3,7 +3,7 @@ import { ref, computed, reactive } from 'vue';
 import type { Message } from '../types/chat';
 import { chatService } from '../services/chat';
 import { agentTaskService } from '../services/agentTask';
-import { connectRealtime, disconnectRealtime } from '../services/realtime';
+import { connectRealtime, disconnectRealtime, isRealtimeConnected } from '../services/realtime';
 import { useAuthStore } from './user';
 
 // v2.1: 身份由后端 JWT 中间件解析,前端不再维护 sessionId
@@ -305,7 +305,9 @@ export const useChatStore = defineStore(
     };
 
     // pollOnce 查一次未汇报任务,有则依次汇报。
+    let lastPollAt = 0; // 上次实际轮询时刻(WS 健康时 5 分钟保底对账的基准)
     const pollOnce = async (): Promise<void> => {
+      lastPollAt = Date.now();
       if (isReporting.value) return; // 正在汇报时跳过,避免并发
       const tasks = await agentTaskService.listUnreported();
       if (tasks.length === 0) return;
@@ -321,11 +323,12 @@ export const useChatStore = defineStore(
 
     // startPollingUnreported 任务完成感知(08 §4.8):
     // 主路径 = WS 实时推送(task.completed → 立即拉取汇报);
-    // 兜底 = 60s 低频轮询(WS 断开/丢帧时系统仍不哑,重连成功也会立即 poll 一次)。
+    // 兜底 = WS 断开时 60s 轮询;WS 健康时跳过,仅保留 5 分钟保底对账
+    // (防"连接看似健康但推送静默丢失"——汇报永不出现比多一条请求严重)。
     const startPollingUnreported = (): void => {
       if (pollingTimer !== null) return; // 已启动
-      // 低频兜底轮询
       pollingTimer = setInterval(() => {
+        if (isRealtimeConnected() && Date.now() - lastPollAt < 300_000) return; // WS 健康,推送触发即可
         pollOnce().catch((err) => console.error('Fallback poll failed:', err));
       }, 60_000);
       // 启动时立即查一次
