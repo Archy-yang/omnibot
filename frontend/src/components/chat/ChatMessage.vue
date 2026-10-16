@@ -85,6 +85,16 @@ watch(
   { immediate: true },
 );
 
+// 主回复开始即收起思考块(不等整轮结束):role=final 的正文段首个 chunk 一到,
+// 思考过程就让位——否则长思考流式期间正文完全被淹没。用户仍可手动点开;
+// 此 watch 只在"无 -> 有"转变时触发一次,之后的手动操作不受干扰。
+const hasMainReply = computed(() =>
+  segments.value.some((s) => s.type === 'text' && s.role === 'final' && s.content.length > 0),
+);
+watch(hasMainReply, (v) => {
+  if (v && props.message.streaming) thoughtCollapsed.value = true;
+});
+
 // 深度思考段逐段折叠(嵌套在已思考块内,与 tool 段同级交互):
 // 用户手动 toggle 记录在 reasoningToggles;未动过的段默认态 = 流式中最后一段
 // (正在流式的)展开,其余收起。

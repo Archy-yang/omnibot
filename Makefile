@@ -56,10 +56,12 @@ build-all: build-frontend build-backend  ## Build both backend and frontend
 
 start: stop  ## Start the server in background (idempotent: stops old process first)
 	@mkdir -p logs
-	@# setsid 脱离当前 session/进程组:AI 开发环境的命令生命周期会清理同会话遗留进程,
-	@# nohup(只挡 SIGHUP、不换组)拉起的 server 会被连带 SIGTERM(两次 502 根因)。
-	@# 本机无 setsid 命令,用 perl 等价实现;exec 后 pid 不变,$$! 即 server pid。
-	@perl -e 'setsid; exec @ARGV' ./$(SERVER_BIN) -config $(CONFIG_PATH) >> $(LOG_FILE) 2>&1 < /dev/null & \
+	@# setsid 脱离当前 session/进程组:终端关闭/AI 开发环境清理会给同会话进程组发信号,
+	@# 没脱离的 server 会被连带杀掉(多次 502 根因)。macOS perl 的 setsid 是静默无效的
+	@# (实测调用后 pgid 不变),python3 的 os.setsid() 真实生效——用 python 执行 exec;
+	@# exec 后 pid 不变,$$! 即 server pid。setsid 失败时 python 非零退出,下方健康检查兜住。
+	@python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+		./$(SERVER_BIN) -config $(CONFIG_PATH) >> $(LOG_FILE) 2>&1 < /dev/null & \
 	echo "$$!" > $(PID_FILE)
 	@sleep 1; if kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
 		echo "✅ 已启动 PID=$$(cat $(PID_FILE))  日志: $(LOG_FILE)"; \
@@ -90,7 +92,7 @@ stop:  ## Stop the running server (pidfile first, pgrep fallback)
 
 status:  ## Show server status + recent log tail
 	@if [ -f $(PID_FILE) ] && kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
-		echo "🟢 后端 运行中 PID=$$(cat $(PID_FILE))  http://localhost:8080/chat/"; \
+		echo "🟢 后端 运行中 PID=$$(cat $(PID_FILE))  http://localhost:8090/chat/"; \
 	else \
 		echo "🔴 后端 未运行"; \
 	fi
@@ -113,13 +115,13 @@ run: build  ## Build and run the server (foreground)
 	@echo "🚀 Starting OmniBot server..."
 	@./$(SERVER_BIN)
 
-# 前后端分离工作流:后端二进制照常 serve 8080,前端改动走 Vite 热更新,
+# 前后端分离工作流:后端二进制照常 serve 8090,前端改动走 Vite 热更新,
 # 免 go:embed 重编译。后端改了代码 → make dev 重跑;只改前端 → 存盘即生效。
 dev: build start dev-frontend  ## 一键开发模式:后端构建并启动 + 前端热更新服务
 
 dev-frontend: dev-stop  ## Start frontend dev server (Vite hot reload, daemon)
 	@mkdir -p $(BIN_DIR) logs
-	@cd $(FRONTEND_DIR) && ( perl -e 'setsid; exec @ARGV' $(NPM_CMD) run dev -- --port $(VITE_PORT) --strictPort > ../$(VITE_LOG_FILE) 2>&1 < /dev/null & echo $$! > ../$(VITE_PID_FILE) )
+	@cd $(FRONTEND_DIR) && ( python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' $(NPM_CMD) run dev -- --port $(VITE_PORT) --strictPort > ../$(VITE_LOG_FILE) 2>&1 < /dev/null & echo $$! > ../$(VITE_PID_FILE) )
 	@sleep 2; if curl -sf -o /dev/null http://localhost:$(VITE_PORT)/chat/; then \
 		echo "✅ 前端开发服务器已启动 PID=$$(cat $(VITE_PID_FILE))  打开: http://localhost:$(VITE_PORT)/chat/"; \
 	else \
@@ -249,6 +251,41 @@ db-purge:  ## Purge Docker volumes (WARNING: all data lost!)
 	@echo "⚠️  Purging Docker volumes - ALL DATA WILL BE LOST!"
 	@docker compose down -v
 	@echo "✅ Docker volumes purged"
+
+##@ Docker App(服务生命周期交给 Docker,本地验证不再受宿主进程干扰)
+
+COMPOSE_APP = NPM_GLOBAL_DIR=$(HOME)/.npm-global docker compose -f docker-compose.app.yml
+
+docker-config: ## 生成容器专用配置(gitignored;dsn 指向 host.docker.internal,其余原样)
+	@sed 's/host=localhost port=15432/host=host.docker.internal port=15432/' configs/config.yaml > configs/config.docker.yaml
+	@echo "✅ configs/config.docker.yaml 已生成"
+
+docker-build: ## 构建应用镜像(前端 dist 嵌入 + 后端)
+	$(COMPOSE_APP) build
+
+docker-up: docker-config ## 构建并启动应用容器(幂等)
+	$(COMPOSE_APP) up -d --build
+	@echo "⏳ 等待服务就绪..."
+	@ok=0; for i in $$(seq 1 15); do \
+		curl -sf -o /dev/null http://localhost:8090/chat/ && ok=1 && break; \
+		sleep 2; \
+	done; \
+	if [ $$ok -eq 1 ]; then echo "✅ Docker 服务就绪: http://localhost:8090/chat/"; \
+	else echo "❌ 未就绪,查看日志: make docker-logs"; exit 1; fi
+
+docker-restart: ## 重启应用容器(重新构建)
+	$(COMPOSE_APP) down
+	@$(MAKE) docker-up
+
+docker-down: ## 停止应用容器
+	$(COMPOSE_APP) down
+
+docker-logs: ## 跟踪应用容器日志
+	$(COMPOSE_APP) logs -f app
+
+docker-status: ## 应用容器状态
+	@$(COMPOSE_APP) ps
+	@curl -s -o /dev/null -w "backend: %{http_code}\n" http://localhost:8090/chat/ || true
 
 ##@ Evaluation
 
