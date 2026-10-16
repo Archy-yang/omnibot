@@ -14,3 +14,4 @@ logs/
 # 数据库备份(见 make backup)
 backups/
 eval-out/
+configs/config.docker.yaml
