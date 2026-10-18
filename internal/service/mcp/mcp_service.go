@@ -2,11 +2,14 @@ package mcp
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
+	"omnibot/pkg/logger"
+
 	memoryservice "omnibot/internal/service/memory"
+
+	"go.uber.org/zap"
 )
 
 // MCPService MCP 连接器调度中枢:server 配置管理(增删改查/同步/OAuth 授权)
@@ -69,7 +72,8 @@ func (s *MCPService) embedToolDesc(provider memoryservice.EmbeddingProvider, too
 	}
 	vecs, err := provider.Embed(context.Background(), []string{toolName + "\n" + desc})
 	if err != nil || len(vecs) != 1 {
-		fmt.Printf("[mcp] tool %q (server %s) 向量化失败,不参与语义匹配: %v\n", toolName, serverName, err)
+		logger.ErrorWithFields("mcp: tool 描述向量化失败,不参与语义匹配",
+			zap.String("tool", toolName), zap.String("server", serverName), zap.Error(err))
 		return nil, ""
 	}
 	return vecs[0], provider.Name()
