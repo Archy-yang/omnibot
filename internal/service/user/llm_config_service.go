@@ -122,7 +122,7 @@ func (s *GormLLMConfigService) invalidate(userID int64) {
 func (s *GormLLMConfigService) fetchBoth(userID int64) (*llmConfigCacheEntry, error) {
 	entry := &llmConfigCacheEntry{fetchedAt: time.Now()}
 	cfg, err := s.repo.GetByUserID(userID)
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	if cfg != nil {
@@ -213,13 +213,13 @@ func (s *GormLLMConfigService) SetAPIKey(userID int64, apiKey string) error {
 
 	// 检查是否已存在配置
 	cfg, err := s.repo.GetByUserID(userID)
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 
 	now := time.Now()
 
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// 创建新配置
 		cfg = &user.LLMConfig{
 			UserID:    userID,
@@ -248,7 +248,7 @@ func (s *GormLLMConfigService) SetAPIKey(userID int64, apiKey string) error {
 func (s *GormLLMConfigService) SetBaseURL(userID int64, baseURL string) error {
 	cfg, err := s.repo.GetByUserID(userID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("请先设置 API Key")
 		}
 		return err
@@ -271,7 +271,7 @@ func (s *GormLLMConfigService) SetBaseURL(userID int64, baseURL string) error {
 func (s *GormLLMConfigService) SetModel(userID int64, model string) error {
 	cfg, err := s.repo.GetByUserID(userID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("请先设置 API Key")
 		}
 		return err
@@ -293,7 +293,7 @@ func (s *GormLLMConfigService) SetModel(userID int64, model string) error {
 func (s *GormLLMConfigService) GetConfigView(userID int64) (*LLMConfigView, error) {
 	cfg, err := s.repo.GetByUserID(userID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &LLMConfigView{
 				HasConfig:  false,
 				StatusText: "使用系统默认模型",
@@ -435,7 +435,7 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 
 	// 检查是否已存在配置
 	cfg, err := s.repo.GetByUserID(userID)
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 
@@ -451,7 +451,7 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 		encryptedKey = encrypted
 	}
 
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// 创建新配置 - 必须提供 API Key
 		if req.APIKey == "" {
 			return errors.New("首次配置必须提供 API Key")

@@ -1,6 +1,8 @@
 package user
 
 import (
+	"errors"
+
 	"gorm.io/gorm"
 	"omnibot/internal/domain/user"
 )
@@ -55,7 +57,7 @@ func (s *UserService) GetOrCreateByChannel(channelType, channelUserID string) (*
 	}
 
 	// 2. 渠道关联不存在，创建新用户和渠道关联
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil, false, err
 	}
 
