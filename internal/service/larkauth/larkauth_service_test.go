@@ -57,25 +57,25 @@ type mockCLI struct {
 	logouts       []string
 }
 
-func (m *mockCLI) ProfileAdd(profile, appID, appSecret string) error {
+func (m *mockCLI) ProfileAdd(_ int64, profile, appID, appSecret string) error {
 	m.profileAdds = append(m.profileAdds, [2]string{profile, appID})
 	return m.addErr
 }
 
-func (m *mockCLI) LoginStart(profile, domains string) (url, userCode, deviceCode string, err error) {
+func (m *mockCLI) LoginStart(_ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
 	return m.startURL, m.startUserCode, m.startDevice, m.startErr
 }
 
-func (m *mockCLI) LoginComplete(ctx context.Context, profile, deviceCode string) error {
+func (m *mockCLI) LoginComplete(_ context.Context, _ int64, profile, deviceCode string) error {
 	m.completed = append(m.completed, profile)
 	return m.completeErr
 }
 
-func (m *mockCLI) Status(profile string) (openID, userName string, err error) {
+func (m *mockCLI) Status(_ int64, profile string) (openID, userName string, err error) {
 	return m.statusOpenID, m.statusName, m.statusErr
 }
 
-func (m *mockCLI) Logout(profile string) error { m.logouts = append(m.logouts, profile); return nil }
+func (m *mockCLI) Logout(_ int64, profile string) error { m.logouts = append(m.logouts, profile); return nil }
 
 func newService(repo *mockRepo, cli *mockCLI) *Service {
 	return NewService(repo, cli)
@@ -243,7 +243,7 @@ type logoutErrCLI struct {
 	logoutErr bool
 }
 
-func (m *logoutErrCLI) Logout(profile string) error {
+func (m *logoutErrCLI) Logout(_ int64, profile string) error {
 	m.logouts = append(m.logouts, profile)
 	if m.logoutErr {
 		return errors.New("cli not found")

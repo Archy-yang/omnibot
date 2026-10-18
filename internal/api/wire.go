@@ -24,24 +24,25 @@ import (
 	"omnibot/internal/pkg/crypto"
 	"omnibot/internal/realtime"
 	agentRepo "omnibot/internal/repository/agent"
+	butlerRepo "omnibot/internal/repository/butler"
 	chatRepo "omnibot/internal/repository/chat"
-	memoryrepo "omnibot/internal/repository/memory"
 	mcpRepo "omnibot/internal/repository/mcp"
 	memoryRepo "omnibot/internal/repository/memory"
+	memoryrepo "omnibot/internal/repository/memory"
+	skillRepo "omnibot/internal/repository/skill"
 	subscriptionRepo "omnibot/internal/repository/subscription"
 	toolRepo "omnibot/internal/repository/tool"
 	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
-	butlerRepo "omnibot/internal/repository/butler"
 	butlerpkg "omnibot/internal/service/butler"
 	chatService "omnibot/internal/service/chat"
+	feishudocSvc "omnibot/internal/service/feishudoc"
+	larkauthSvc "omnibot/internal/service/larkauth"
+	"omnibot/internal/service/larkhome"
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
 	sandboxsvc "omnibot/internal/service/sandbox"
-	larkauthSvc "omnibot/internal/service/larkauth"
-	feishudocSvc "omnibot/internal/service/feishudoc"
-	skillRepo "omnibot/internal/repository/skill"
 	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
 	toolService "omnibot/internal/service/tool"
@@ -69,12 +70,12 @@ type appDeps struct {
 	realtimeHub *realtime.Hub
 
 	// 飞书渠道启动所需
-	bindingSvc        *userService.BindingService
-	msgSvc            chatService.MessageService
-	agentSvc          *agentpkg.AgentService
-	llmConfigSvc      userService.LLMConfigService
-	subAgentSvc       *agentpkg.SubAgentService
-	userChannelRepo   userRepo.UserChannelRepository // 26 号:butler 送达器查 open_id
+	bindingSvc      *userService.BindingService
+	msgSvc          chatService.MessageService
+	agentSvc        *agentpkg.AgentService
+	llmConfigSvc    userService.LLMConfigService
+	subAgentSvc     *agentpkg.SubAgentService
+	userChannelRepo userRepo.UserChannelRepository // 26 号:butler 送达器查 open_id
 
 	// 25 号:持久任务调度器(进程级后台循环,routes.go 启动)
 	persistentScheduler *agentpkg.PersistentTaskScheduler
@@ -308,10 +309,18 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc := toolService.NewToolService(toolRepoImpl)
 	// Skill 技能服务(18 号 §4):DB 为事实源,内存目录缓存 CRUD 即失效(load_skill/目录注入即时生效)
 	skillSvc := skillService.NewSkillService(skillRepo.NewSkillRepository(dbConn.GetGormDB()))
+	// 27 号:lark-cli 状态 DB 物化——统一执行入口(hydrate → HOME 物化 → exec → 回写)。
+	// 三个调用点(larkauth/feishu_tool/feishudoc)全走它,漏一处即 token 分叉。
+	larkHomeMgr := larkhome.NewManager(userRepo.NewLarkCLIStateRepository(dbConn.GetGormDB()))
+	larkExecutor := larkhome.NewExecutor(larkHomeMgr, cfg.Feishu.CLI.BinPath)
 	// 用户级飞书授权服务(19 号 M1):device flow 编排 + feishu_tool 的 profile 解析
+	larkauthCLI := larkauthSvc.NewRealCLI(larkauthSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath})
+	if sr, ok := larkauthCLI.(interface{ SetRunner(larkauthSvc.Runner) }); ok {
+		sr.SetRunner(larkExecutor)
+	}
 	larkauthService := larkauthSvc.NewService(
 		userRepo.NewLarkCLIAuthRepo(dbConn.GetGormDB()),
-		larkauthSvc.NewRealCLI(larkauthSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath}),
+		larkauthCLI,
 	)
 	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
 	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
@@ -330,6 +339,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			BinPath:  cfg.Feishu.CLI.BinPath,
 			Timeout:  time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
 			Resolver: larkauthService, // 19 号 M2:按 ctx 用户动态 --profile;nil 时行为同现状
+			Runner:   larkExecutor,    // 27 号:按用户物化执行(HOME+回写)
 		})
 	})
 	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
@@ -506,10 +516,14 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		ba.SetBlacklistRepo(memoryrepo.NewBlacklistRepository(dbConn.GetGormDB()))
 	}
 	// 23号:个人文档同步(按用户 profile 执行 lark-cli docs)
+	docSyncRunner := feishudocSvc.NewRealRunner(feishudocSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath})
+	if sr, ok := docSyncRunner.(interface{ SetRunner(feishudocSvc.Runner) }); ok {
+		sr.SetRunner(larkExecutor)
+	}
 	docSyncSvc := feishudocSvc.NewService(
 		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
 		memoryRepo.NewMemoryRepository(dbConn.GetGormDB()),
-		feishudocSvc.NewRealRunner(feishudocSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath}),
+		docSyncRunner,
 		larkauthService,
 	)
 	webHandler.SetDocSyncService(docSyncSvc)
@@ -603,4 +617,3 @@ func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
 	}
 	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
 }
-

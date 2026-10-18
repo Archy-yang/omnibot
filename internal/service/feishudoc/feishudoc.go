@@ -26,9 +26,18 @@ var (
 // LarkDocRunner lark-cli 文档能力窄接口(单测 stub)。
 type LarkDocRunner interface {
 	// CreateDoc 在用户空间(my_library)创建 markdown 文档,返回 (token, url)。
-	CreateDoc(ctx context.Context, profile, title, markdown string) (string, string, error)
+	// userID:27 号 DB 物化后执行需按用户 hydrate/回写。
+	CreateDoc(ctx context.Context, userID int64, profile, title, markdown string) (string, string, error)
 	// OverwriteDoc 全量覆盖既有文档内容。
-	OverwriteDoc(ctx context.Context, profile, docToken, markdown string) error
+	OverwriteDoc(ctx context.Context, userID int64, profile, docToken, markdown string) error
+
+	// SetRunner 注入统一执行入口(27 号;nil = 直跑本地 CLI)。
+	SetRunner(r Runner)
+}
+
+// Runner 统一执行入口(27 号 larkhome.Executor;nil = 直跑本地 CLI)。
+type Runner interface {
+	RunLarkCLI(ctx context.Context, userID int64, stdin string, args ...string) (string, error)
 }
 
 // ProfileSource 按用户解析 lark-cli profile(19 号;实现=larkauth.Service)。
@@ -145,7 +154,7 @@ func (s *Service) SyncMatter(ctx context.Context, userID, matterID int64) (SyncR
 	created := false
 	docURL := m.FeishuDocURL
 	if m.FeishuDocToken == "" {
-		token, url, err := s.runner.CreateDoc(ctx, profile, m.Title, markdown)
+		token, url, err := s.runner.CreateDoc(ctx, userID, profile, m.Title, markdown)
 		if err != nil {
 			return SyncResult{}, err
 		}
@@ -156,7 +165,7 @@ func (s *Service) SyncMatter(ctx context.Context, userID, matterID int64) (SyncR
 			return SyncResult{}, fmt.Errorf("feishudoc: 文档信息回写失败: %w", err)
 		}
 	} else {
-		if err := s.runner.OverwriteDoc(ctx, profile, m.FeishuDocToken, markdown); err != nil {
+		if err := s.runner.OverwriteDoc(ctx, userID, profile, m.FeishuDocToken, markdown); err != nil {
 			return SyncResult{}, err
 		}
 		ok, err := s.matterRepo.UpdateDocInfo(userID, m.ID, m.FeishuDocToken, m.FeishuDocURL, now)
@@ -192,10 +201,15 @@ func (c CLIConfig) timeout() time.Duration {
 // NewRealRunner 构建真实 CLI runner。
 func NewRealRunner(cfg CLIConfig) LarkDocRunner { return &cliRunner{cfg: cfg} }
 
-type cliRunner struct{ cfg CLIConfig }
+type cliRunner struct{ cfg CLIConfig; runner Runner }
 
 // run 执行 lark-cli(argv 直传,stdin 传正文),返回 stdout。
-func (r *cliRunner) run(ctx context.Context, stdin, profile string, args ...string) (string, error) {
+func (r *cliRunner) SetRunner(runner Runner) { r.runner = runner }
+
+func (r *cliRunner) run(ctx context.Context, userID int64, stdin, profile string, args ...string) (string, error) {
+	if r.runner != nil {
+		return r.runner.RunLarkCLI(ctx, userID, stdin, args...)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, r.cfg.timeout())
 	defer cancel()
 	full := append([]string{"--profile", profile}, args...)
@@ -247,8 +261,8 @@ func parseDocOutput(out string) (token, url string, err error) {
 	return token, url, nil
 }
 
-func (r *cliRunner) CreateDoc(ctx context.Context, profile, title, markdown string) (string, string, error) {
-	out, err := r.run(ctx, markdown, profile,
+func (r *cliRunner) CreateDoc(ctx context.Context, userID int64, profile, title, markdown string) (string, string, error) {
+	out, err := r.run(ctx, userID, markdown, profile,
 		"docs", "+create", "--title", title, "--doc-format", "markdown",
 		"--content", "-", "--parent-position", "my_library")
 	if err != nil {
@@ -257,8 +271,8 @@ func (r *cliRunner) CreateDoc(ctx context.Context, profile, title, markdown stri
 	return parseDocOutput(out)
 }
 
-func (r *cliRunner) OverwriteDoc(ctx context.Context, profile, docToken, markdown string) error {
-	_, err := r.run(ctx, markdown, profile,
+func (r *cliRunner) OverwriteDoc(ctx context.Context, userID int64, profile, docToken, markdown string) error {
+	_, err := r.run(ctx, userID, markdown, profile,
 		"docs", "+update", "--doc", docToken, "--command", "overwrite",
 		"--doc-format", "markdown", "--content", "-")
 	return err
