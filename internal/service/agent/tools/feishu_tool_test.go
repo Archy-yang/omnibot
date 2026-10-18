@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,4 +140,25 @@ func TestFeishuTool_EmptyArgs(t *testing.T) {
 	tool := CreateFeishuTool(feishuTestConfig(bin, 5*time.Second))
 	_, err := tool.Execute(context.Background(), map[string]interface{}{})
 	require.Error(t, err)
+}
+
+// capturingRunner 捕获 Runner 路径实际收到的 argv(27 号回归:--profile 不得被丢)。
+type capturingRunner struct{ gotArgs []string }
+
+func (c *capturingRunner) RunLarkCLI(_ context.Context, _ int64, _ string, args ...string) (string, error) {
+	c.gotArgs = args
+	return "ok", nil
+}
+
+func TestRunFeishuCLI_RunnerPathKeepsProfileFlag(t *testing.T) {
+	runner := &capturingRunner{}
+	cfg := feishuTestConfig("/nonexistent/lark-cli", 5*time.Second)
+	cfg.Runner = runner
+
+	_, err := runFeishuCLI(context.Background(), cfg, 42, []string{"docs", "+fetch"}, "", "user-42")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(runner.gotArgs), 2)
+	assert.Equal(t, "--profile", runner.gotArgs[0], "Runner 路径必须前插 --profile(缺省会落错身份)")
+	assert.Equal(t, "user-42", runner.gotArgs[1])
+	assert.Equal(t, []string{"docs", "+fetch"}, runner.gotArgs[2:], "业务参数原样跟随")
 }

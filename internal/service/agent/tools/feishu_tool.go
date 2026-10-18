@@ -174,8 +174,13 @@ func validateFeishuArgs(cliArgs []string) error {
 // runFeishuCLI 执行 lark-cli:超时控制 + stdin 透传 + 输出截断。
 // profile 非空时 argv 前插 --profile(19 号 M2:按当前用户隔离授权)。
 func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, userID int64, cliArgs []string, stdin, profile string) (string, error) {
-	// 27 号:已授权用户走物化执行(HOME 物化+回写);未授权/未注入 runner 直跑本地
+	// 27 号:已授权用户走物化执行(HOME 物化+回写);未授权/未注入 runner 直跑本地。
+	// --profile 必须与直跑路径一致地带上:物化 HOME 可能含多个 profile(迁移 blob 整目录),
+	// 缺省选择会落错身份(实测:默认 profile 无 user token → 执行错)
 	if cfg.Runner != nil && userID > 0 {
+		if profile != "" {
+			cliArgs = append([]string{"--profile", profile}, cliArgs...)
+		}
 		return cfg.Runner.RunLarkCLI(ctx, userID, stdin, cliArgs...)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, cfg.timeout())
