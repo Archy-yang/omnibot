@@ -87,3 +87,11 @@ func TestExecutor_Stdin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "secret-material", out)
 }
+
+// 回归(27 号上线首日):config 无 feishu.cli 段 → BinPath="" → 空命令静默失败。
+// Executor 必须与既有三处 bin() 同款回落 "lark-cli"。
+func TestExecutor_EmptyBinFallsBackToDefault(t *testing.T) {
+	mgr, _ := setupManager(t)
+	exec := NewExecutor(mgr, "")
+	assert.Equal(t, "lark-cli", exec.bin, "空 BinPath 应回落 lark-cli")
+}

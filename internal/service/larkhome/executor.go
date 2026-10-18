@@ -33,6 +33,9 @@ type Executor struct {
 }
 
 func NewExecutor(mgr *Manager, bin string) *Executor {
+	if bin == "" {
+		bin = "lark-cli" // 与 larkauth/feishudoc/feishu_tool 的 bin() 回落一致;空串会让 exec 静默失败
+	}
 	return &Executor{mgr: mgr, bin: bin}
 }
 
