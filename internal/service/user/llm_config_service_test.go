@@ -2,6 +2,7 @@ package user
 
 import (
 	"encoding/base64"
+	"sync/atomic"
 	"strings"
 	"testing"
 
@@ -663,4 +664,63 @@ func TestUpdateFullConfig_EmbeddingFirstTimeRequiresKey(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Key")
+}
+
+// countingLLMRepo 计数装饰器:断言缓存生效(repo 实际命中次数)。
+type countingLLMRepo struct {
+	repo.LLMConfigRepository
+	getCalls int32
+}
+
+func (c *countingLLMRepo) GetByUserID(id int64) (*domain.LLMConfig, error) {
+	atomic.AddInt32(&c.getCalls, 1)
+	return c.LLMConfigRepository.GetByUserID(id)
+}
+
+func TestLLMConfigService_Cache_HitAndInvalidate(t *testing.T) {
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+	db := setupServiceDB(t)
+	counting := &countingLLMRepo{LLMConfigRepository: repo.NewLLMConfigRepository(db)}
+	service := NewLLMConfigService(counting)
+	require.NoError(t, service.SetAPIKey(1, "sk-test-cache-hit-1234567890-abcdef"))
+	base := atomic.LoadInt32(&counting.getCalls) // SetAPIKey 内部自带一次 GetByUserID,作为基线
+
+	// 三次读(三种入口):首次 fetchBoth 后全部命中缓存,repo 不再被查
+	_, ok1, err := service.GetFullConfigForUser(1)
+	require.NoError(t, err)
+	require.True(t, ok1)
+	_, _, _, _, err = service.GetConfigForUser(1)
+	require.NoError(t, err)
+	_, ok, err := service.GetEmbeddingConfigForUser(1)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, base+1, atomic.LoadInt32(&counting.getCalls), "三次读应命中缓存,repo 只新增一次查询")
+
+	// 写路径精确失效:更新后下轮读重新落库
+	require.NoError(t, service.SetModel(1, "gpt-x"))
+	_, _, err = service.GetFullConfigForUser(1)
+	require.NoError(t, err)
+	// SetModel 内部 1 次(GetByUserID) + 失效后读 1 次
+	assert.Equal(t, base+3, atomic.LoadInt32(&counting.getCalls), "写后读应穿透缓存")
+
+	// ClearConfig 失效:读回到"无配置"且不再返回旧缓存
+	require.NoError(t, service.ClearConfig(1))
+	_, ok2, err := service.GetFullConfigForUser(1)
+	require.NoError(t, err)
+	assert.False(t, ok2, "清空后应返回无配置")
+	assert.Equal(t, base+4, atomic.LoadInt32(&counting.getCalls))
+}
+
+func TestLLMConfigService_Cache_NoConfigRow(t *testing.T) {
+	db := setupServiceDB(t)
+	counting := &countingLLMRepo{LLMConfigRepository: repo.NewLLMConfigRepository(db)}
+	service := NewLLMConfigService(counting)
+
+	// 无配置行也缓存(负缓存):多次读只查一次,避免"未配置用户"每消息打 DB
+	for i := 0; i < 3; i++ {
+		_, ok, err := service.GetFullConfigForUser(99)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&counting.getCalls), "负缓存应生效")
 }
