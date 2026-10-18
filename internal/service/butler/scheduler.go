@@ -10,6 +10,7 @@ import (
 	"time"
 
 	userdomain "omnibot/internal/domain/user"
+	"omnibot/internal/pkg/backtask"
 	"omnibot/pkg/logger"
 
 	"go.uber.org/zap"
@@ -35,16 +36,7 @@ func NewScanScheduler(scan *ScanService, list EnabledUserLister) *ScanScheduler 
 // Start 启动调度循环(阻塞,应在 goroutine 中运行;ctx 结束即退出)。
 func (s *ScanScheduler) Start(ctx context.Context) {
 	// 30min tick:任何配置时刻(h ∈ [8,22))必然被某个 tick 覆盖在 30 分钟内
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.tick(ctx)
-		}
-	}
+	backtask.RunTickerLoop(ctx, 30*time.Minute, s.tick)
 }
 
 func (s *ScanScheduler) tick(ctx context.Context) {

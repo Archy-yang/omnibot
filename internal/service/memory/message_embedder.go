@@ -3,11 +3,11 @@ package memory
 import (
 	"context"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	memorydomain "omnibot/internal/domain/memory"
+	"omnibot/internal/pkg/backtask"
 	memoryrepo "omnibot/internal/repository/memory"
 	"omnibot/pkg/logger"
 
@@ -35,7 +35,7 @@ type MessageEmbedder struct {
 	embedding     EmbeddingProvider
 	// embeddingResolver 用户级向量解析(与沉淀管线同源);非 nil 且返回非 nil 时优先
 	embeddingResolver func(userID int64) EmbeddingProvider
-	inflight          sync.Map // userID → struct{} (per-user 单飞)
+	gate              *backtask.Gate // per-user 单飞(2026-10 审计 #2:NotifyTurn 模板收编)
 }
 
 func NewMessageEmbedder(
@@ -66,26 +66,17 @@ func (e *MessageEmbedder) providerFor(userID int64) EmbeddingProvider {
 	return e.embedding
 }
 
-// NotifyTurn 对话轮次结束钩子:异步触发,绝不阻塞对话,绝不 panic 外泄。
+// NotifyTurn 对话轮次结束钩子:per-user 单飞,绝不阻塞对话,绝不 panic 外泄。
 func (e *MessageEmbedder) NotifyTurn(userID int64) {
-	if _, busy := e.inflight.LoadOrStore(userID, struct{}{}); busy {
-		return // per-user 单飞:上轮没跑完不叠跑(下轮消息下一轮补)
+	if e.gate == nil {
+		e.gate = backtask.NewGate("memory: 消息嵌入")
 	}
-	go func() {
-		defer e.inflight.Delete(userID)
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorWithFields("memory: 消息嵌入 panic",
-					zap.Int64("user_id", userID), zap.Any("recover", r))
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+	e.gate.Go(userID, 2*time.Minute, func(ctx context.Context) {
 		if err := e.RunOnce(ctx, userID); err != nil {
 			logger.WarnWithFields("memory: 消息嵌入本轮未完成,水位停在失败批次前,下轮重试",
 				zap.Int64("user_id", userID), zap.Error(err))
 		}
-	}()
+	})
 }
 
 // RunOnce 执行一轮增量嵌入:从水位到最新,逐批嵌入落库推进。返回错误表示中途失败(已完成的批次已持久化)。

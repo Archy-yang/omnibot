@@ -16,10 +16,11 @@ import (
 	channelweb "omnibot/internal/channel/web"
 	channelwechat "omnibot/internal/channel/wechat"
 	"omnibot/internal/middleware"
+	"omnibot/internal/pkg/backtask"
+	userRepo "omnibot/internal/repository/user"
 	agentpkg "omnibot/internal/service/agent"
 	butlerpkg "omnibot/internal/service/butler"
 	chatService "omnibot/internal/service/chat"
-	userRepo "omnibot/internal/repository/user"
 	userService "omnibot/internal/service/user"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
@@ -124,26 +125,16 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。
 	// 放在路由装配尾部,与飞书长连接同款 goroutine 纪律(独立 background ctx)。
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorWithFields("persistent task scheduler panic", zap.Any("recover", r))
-			}
-		}()
+	backtask.RunDetached("persistent task scheduler", func() {
 		d.persistentScheduler.Start(context.Background())
-	}()
+	})
 
 	// 主动管家调度循环(26 号):30min tick × hour 对位 × 当日已跑判定。
 	// 克制闸门(日限/冷却/夜间窗)在 ScanService 代码层,调度器只管"何时喊人"。
 	if d.butlerScheduler != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorWithFields("butler scheduler panic", zap.Any("recover", r))
-				}
-			}()
+		backtask.RunDetached("butler scheduler", func() {
 			d.butlerScheduler.Start(context.Background())
-		}()
+		})
 	}
 
 	// v1.6: 飞书机器人接入(长连接)。enabled=false 时跳过,不影响 Web/微信启动。
@@ -165,33 +156,33 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		memoryAPIGroup.PUT("/:id/loop-status", d.webHandler.HandleSetLoopStatus) // E3:loop 管理面关闭/重开(§14.2.2 逃生口)
 		memoryAPIGroup.GET("/journal", d.webHandler.HandleGetJournal)            // 21号:个人经历时间轴
 
-	// 记忆规则(22号):沉淀黑名单管理
-	memoryRulesGroup := r.Group("/api/v1/memory-rules")
-	memoryRulesGroup.Use(middleware.AuthRequired(d.jwtSvc))
-	{
-		memoryRulesGroup.GET("", d.webHandler.HandleListMemoryRules)
-		memoryRulesGroup.POST("", d.webHandler.HandleAddMemoryRule)
-		memoryRulesGroup.DELETE("/:id", d.webHandler.HandleDeleteMemoryRule)
-	}
+		// 记忆规则(22号):沉淀黑名单管理
+		memoryRulesGroup := r.Group("/api/v1/memory-rules")
+		memoryRulesGroup.Use(middleware.AuthRequired(d.jwtSvc))
+		{
+			memoryRulesGroup.GET("", d.webHandler.HandleListMemoryRules)
+			memoryRulesGroup.POST("", d.webHandler.HandleAddMemoryRule)
+			memoryRulesGroup.DELETE("/:id", d.webHandler.HandleDeleteMemoryRule)
+		}
 
-	// 风格与认知画像(24号)
-	styleProfileGroup := r.Group("/api/v1/style-profile")
-	styleProfileGroup.Use(middleware.AuthRequired(d.jwtSvc))
-	{
-		styleProfileGroup.GET("", d.webHandler.HandleGetStyleProfile)
-		styleProfileGroup.DELETE("/observation/:id", d.webHandler.HandleDeleteStyleObservation)
-		styleProfileGroup.DELETE("/change/:id", d.webHandler.HandleDeleteCognitionChange)
-	}
+		// 风格与认知画像(24号)
+		styleProfileGroup := r.Group("/api/v1/style-profile")
+		styleProfileGroup.Use(middleware.AuthRequired(d.jwtSvc))
+		{
+			styleProfileGroup.GET("", d.webHandler.HandleGetStyleProfile)
+			styleProfileGroup.DELETE("/observation/:id", d.webHandler.HandleDeleteStyleObservation)
+			styleProfileGroup.DELETE("/change/:id", d.webHandler.HandleDeleteCognitionChange)
+		}
 
-	// 个人档案(21号 Archive):主题档案列表/详情/用户纠正口
-	mattersAPIGroup := r.Group("/api/v1/matters")
-	mattersAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
-	{
-		mattersAPIGroup.GET("", d.webHandler.HandleListMatters)
-		mattersAPIGroup.GET("/:id", d.webHandler.HandleGetMatter)
-		mattersAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMatter)
-		mattersAPIGroup.POST("/:id/sync-doc", d.webHandler.HandleSyncMatterDoc) // 23号:同步档案到飞书
-	}
+		// 个人档案(21号 Archive):主题档案列表/详情/用户纠正口
+		mattersAPIGroup := r.Group("/api/v1/matters")
+		mattersAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+		{
+			mattersAPIGroup.GET("", d.webHandler.HandleListMatters)
+			mattersAPIGroup.GET("/:id", d.webHandler.HandleGetMatter)
+			mattersAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMatter)
+			mattersAPIGroup.POST("/:id/sync-doc", d.webHandler.HandleSyncMatterDoc) // 23号:同步档案到飞书
+		}
 	}
 
 	// 订阅源管理路由(14-订阅源管理:对话入口之外的页面管理入口)
@@ -362,17 +353,12 @@ func startFeishuChannel(
 
 	channelfactory.Register(channel)
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorWithFields("feishu: long connection goroutine panic", zap.Any("recover", r))
-			}
-		}()
-		// 用独立 background context;主服务退出由进程结束统一回收
+	// 用独立 background context;主服务退出由进程结束统一回收
+	backtask.RunDetached("feishu long connection", func() {
 		if err := channel.Start(context.Background()); err != nil {
 			logger.ErrorWithFields("feishu: long connection ended with error", zap.Error(err))
 		}
-	}()
+	})
 }
 
 func mustReadAll(r io.Reader) []byte {

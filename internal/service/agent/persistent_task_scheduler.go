@@ -11,6 +11,7 @@ import (
 	"time"
 
 	domainagent "omnibot/internal/domain/agent"
+	"omnibot/internal/pkg/backtask"
 	repoagent "omnibot/internal/repository/agent"
 
 	"omnibot/pkg/logger"
@@ -72,16 +73,7 @@ func (s *PersistentTaskScheduler) Start(ctx context.Context) {
 	if err := s.Recover(time.Now()); err != nil {
 		logger.ErrorWithFields("persistent task: recover failed", zap.Error(err))
 	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.tick(ctx)
-		}
-	}
+	backtask.RunTickerLoop(ctx, 30*time.Second, s.tick)
 }
 
 func (s *PersistentTaskScheduler) tick(ctx context.Context) {
