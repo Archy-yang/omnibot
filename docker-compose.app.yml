@@ -1,6 +1,7 @@
 # OmniBot 应用容器(服务生命周期交给 Docker,26 号基础设施调整)。
 # 数据库沿用宿主机已有的 omnibot-postgres-test(5433),经 host.docker.internal 访问;
-# lark-cli 由宿主 ~/.npm-global 挂载(镜像内不含凭证);sandbox_run 走 docker.sock。
+# lark-cli 装在镜像内(Linux 版),授权状态持久化在 named volume(/root/.lark-cli);
+# sandbox_run 走 docker.sock。
 services:
   app:
     build:
@@ -12,9 +13,11 @@ services:
       - "8090:8090"
     volumes:
       - ./configs:/app/configs:ro
-      - ${NPM_GLOBAL_DIR:-./.npm-global-placeholder}:/opt/npm-global:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - app_logs:/app/logs
+      - lark_cli_state:/root/.lark-cli
+      # token 实体在 XDG 数据目录(*.enc),与 profile 配置(~/.lark-cli)分开存——两个都要盖住
+      - lark_token_state:/root/.local/share/lark-cli
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -27,4 +30,8 @@ services:
 
 volumes:
   app_logs:
+    driver: local
+  lark_cli_state:
+    driver: local
+  lark_token_state:
     driver: local

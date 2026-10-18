@@ -254,7 +254,7 @@ db-purge:  ## Purge Docker volumes (WARNING: all data lost!)
 
 ##@ Docker App(服务生命周期交给 Docker,本地验证不再受宿主进程干扰)
 
-COMPOSE_APP = NPM_GLOBAL_DIR=$(HOME)/.npm-global docker compose -f docker-compose.app.yml
+COMPOSE_APP = docker compose -f docker-compose.app.yml
 
 docker-config: ## 生成容器专用配置(gitignored;dsn 指向 host.docker.internal,其余原样)
 	@sed 's/host=localhost port=15432/host=host.docker.internal port=15432/' configs/config.yaml > configs/config.docker.yaml

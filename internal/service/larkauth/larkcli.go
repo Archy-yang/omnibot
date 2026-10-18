@@ -84,19 +84,31 @@ func (c *cliReal) run(ctx context.Context, args ...string) (string, error) {
 	return out.String(), nil
 }
 
+// ProfileAdd 幂等写入 profile:**必须保证 secret 落盘**。
+// 旧实现把 "already" 错误静默当成功——profile 已存在时 secret 不会更新,
+// 存量壳 profile(如宿主迁移来的、secret 在 macOS Keychain 里的)会让
+// device flow 报 "missing required parameter: client_secret"(2026-10-18 实测)。
+// 故遇 "already" 一律删除重建,保证凭据必写入。
 func (c *cliReal) ProfileAdd(profile, appID, appSecret string) error {
-	cmd := exec.Command(c.cfg.bin(), "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin") //nolint:gosec
-	cmd.Stdin = strings.NewReader(appSecret)
-	var errOut bytes.Buffer
-	cmd.Stderr = &errOut
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errOut.String())
-		if strings.Contains(msg, "already") { // 幂等:同名 profile 已存在视为成功
-			return nil
+	add := func() error {
+		cmd := exec.Command(c.cfg.bin(), "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin") //nolint:gosec
+		cmd.Stdin = strings.NewReader(appSecret)
+		var errOut bytes.Buffer
+		cmd.Stderr = &errOut
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("lark-cli profile add 失败: %s", strings.TrimSpace(errOut.String()))
 		}
-		return fmt.Errorf("lark-cli profile add 失败: %s", msg)
+		return nil
 	}
-	return nil
+	err := add()
+	if err == nil || !strings.Contains(err.Error(), "already") {
+		return err
+	}
+	// 已存在(同名 profile / 同 app-id):删除重建
+	if _, rmErr := c.run(context.Background(), "profile", "remove", profile); rmErr != nil {
+		return fmt.Errorf("lark-cli profile remove 失败(重授权前清理 %s): %w", profile, rmErr)
+	}
+	return add()
 }
 
 // cliJSON lark-cli --json 输出的宽容解析:多候选字段名取首个非空(输出 schema 以实跑为准,容错缺字段)。
