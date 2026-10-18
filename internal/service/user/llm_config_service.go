@@ -7,6 +7,7 @@ import (
 	"omnibot/internal/pkg/crypto"
 	repo "omnibot/internal/repository/user"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -85,14 +86,64 @@ type UpdateConfigRequest struct {
 	ClearEmbedding bool
 }
 
+// llmConfigCacheTTL 热点配置缓存 TTL:兜底防"直接改 DB"的旁路写(正常写路径全走本服务,精确失效)。
+const llmConfigCacheTTL = 5 * time.Minute
+
+// llmConfigCacheEntry 单用户缓存行(解密后明文;调用方本来也会在内存持有明文,无新增暴露面)。
+// llm/emb 两个布尔位分别记录"确认无配置"的负缓存,避免未配置用户每消息打 DB。
+type llmConfigCacheEntry struct {
+	fetchedAt time.Time
+	llm       *FullLLMConfig
+	llmOK     bool
+	emb       *EmbeddingAPIConfig
+	embOK     bool
+}
+
 // GormLLMConfigService GORM 实现
 type GormLLMConfigService struct {
-	repo repo.LLMConfigRepository
+	repo  repo.LLMConfigRepository
+	mu    sync.Mutex
+	cache map[int64]*llmConfigCacheEntry
 }
 
 // NewLLMConfigService 创建服务
 func NewLLMConfigService(repo repo.LLMConfigRepository) LLMConfigService {
-	return &GormLLMConfigService{repo: repo}
+	return &GormLLMConfigService{repo: repo, cache: make(map[int64]*llmConfigCacheEntry)}
+}
+
+// invalidate 写路径精确失效(全部写方法收口于此)。
+func (s *GormLLMConfigService) invalidate(userID int64) {
+	s.mu.Lock()
+	delete(s.cache, userID)
+	s.mu.Unlock()
+}
+
+// fetchBoth 拉取并缓存整行(llm+emb 一次 DB 查询填充两个槽位)。
+func (s *GormLLMConfigService) fetchBoth(userID int64) (*llmConfigCacheEntry, error) {
+	entry := &llmConfigCacheEntry{fetchedAt: time.Now()}
+	cfg, err := s.repo.GetByUserID(userID)
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+	if cfg != nil {
+		entry.llm, entry.llmOK = fullConfigFromRow(cfg)
+		entry.emb, entry.embOK = embeddingConfigFromRow(cfg)
+	}
+	s.mu.Lock()
+	s.cache[userID] = entry
+	s.mu.Unlock()
+	return entry, nil
+}
+
+// cached 取缓存行(过期/不存在 → nil)。
+func (s *GormLLMConfigService) cached(userID int64) *llmConfigCacheEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.cache[userID]
+	if !ok || time.Since(entry.fetchedAt) > llmConfigCacheTTL {
+		return nil
+	}
+	return entry
 }
 
 func (s *GormLLMConfigService) ListProviderOptions() []ProviderOption {
@@ -100,25 +151,49 @@ func (s *GormLLMConfigService) ListProviderOptions() []ProviderOption {
 }
 
 func (s *GormLLMConfigService) GetConfigForUser(userID int64) (string, string, string, bool, error) {
-	cfg, err := s.repo.GetByUserID(userID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return "", "", "", false, nil
-		}
+	full, ok, err := s.GetFullConfigForUser(userID)
+	if err != nil || !ok {
 		return "", "", "", false, err
 	}
+	return full.APIKey, full.BaseURL, full.Model, true, nil
+}
 
+// fullConfigFromRow 从 DB 行构造解密后的完整配置(缓存装载共用)。
+func fullConfigFromRow(cfg *user.LLMConfig) (*FullLLMConfig, bool) {
 	if !cfg.IsEnabled() {
-		return "", "", "", false, nil
+		return nil, false
 	}
-
-	// 解密 API Key
 	plainKey, err := crypto.Decrypt(cfg.APIKey)
 	if err != nil {
-		return "", "", "", false, err
+		return nil, false
 	}
+	return &FullLLMConfig{
+		APIKey:          plainKey,
+		BaseURL:         cfg.GetBaseURL(),
+		Model:           cfg.GetModel(),
+		Provider:        cfg.Provider,
+		Temperature:     cfg.GetTemperature(0.7),
+		MaxTokens:       cfg.GetMaxTokens(2048),
+		DisableThinking: cfg.DisableThinking,
+	}, true
+}
 
-	return plainKey, cfg.GetBaseURL(), cfg.GetModel(), true, nil
+// embeddingConfigFromRow 从 DB 行构造解密后的向量配置(缓存装载共用)。
+func embeddingConfigFromRow(cfg *user.LLMConfig) (*EmbeddingAPIConfig, bool) {
+	if !cfg.HasEmbeddingConfig() {
+		return nil, false
+	}
+	plainKey, err := crypto.Decrypt(cfg.EmbeddingAPIKey)
+	if err != nil {
+		return nil, false
+	}
+	return &EmbeddingAPIConfig{
+		Provider: *cfg.EmbeddingProvider,
+		BaseURL:  *cfg.EmbeddingBaseURL,
+		APIKey:   plainKey,
+		Model:    *cfg.EmbeddingModel,
+		Dims:     *cfg.EmbeddingDims,
+	}, true
 }
 
 func (s *GormLLMConfigService) SetAPIKey(userID int64, apiKey string) error {
@@ -153,13 +228,21 @@ func (s *GormLLMConfigService) SetAPIKey(userID int64, apiKey string) error {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		return s.repo.Create(cfg)
+		if err := s.repo.Create(cfg); err != nil {
+			return err
+		}
+		s.invalidate(userID)
+		return nil
 	}
 
 	// 更新现有配置
 	cfg.APIKey = encrypted
 	cfg.UpdatedAt = now
-	return s.repo.Update(cfg)
+	if err := s.repo.Update(cfg); err != nil {
+		return err
+	}
+	s.invalidate(userID)
+	return nil
 }
 
 func (s *GormLLMConfigService) SetBaseURL(userID int64, baseURL string) error {
@@ -178,7 +261,11 @@ func (s *GormLLMConfigService) SetBaseURL(userID int64, baseURL string) error {
 
 	cfg.BaseURL = &baseURL
 	cfg.UpdatedAt = time.Now()
-	return s.repo.Update(cfg)
+	if err := s.repo.Update(cfg); err != nil {
+		return err
+	}
+	s.invalidate(userID)
+	return nil
 }
 
 func (s *GormLLMConfigService) SetModel(userID int64, model string) error {
@@ -196,7 +283,11 @@ func (s *GormLLMConfigService) SetModel(userID int64, model string) error {
 
 	cfg.Model = &model
 	cfg.UpdatedAt = time.Now()
-	return s.repo.Update(cfg)
+	if err := s.repo.Update(cfg); err != nil {
+		return err
+	}
+	s.invalidate(userID)
+	return nil
 }
 
 func (s *GormLLMConfigService) GetConfigView(userID int64) (*LLMConfigView, error) {
@@ -262,64 +353,39 @@ func (s *GormLLMConfigService) maskAPIKey(encryptedKey string) string {
 }
 
 func (s *GormLLMConfigService) ClearConfig(userID int64) error {
-	return s.repo.Delete(userID)
+	if err := s.repo.Delete(userID); err != nil {
+		return err
+	}
+	s.invalidate(userID)
+	return nil
 }
 
 // GetEmbeddingConfigForUser 返回解密后的用户级向量配置(12-记忆系统技术方案 §5.3)。
 // 未配置/不完整/解密失败 → false;密文解密失败按无配置降级(装配点回落系统默认)。
+// 热点路径(沉淀/检索每轮调用):走缓存,写路径精确失效。
 func (s *GormLLMConfigService) GetEmbeddingConfigForUser(userID int64) (*EmbeddingAPIConfig, bool, error) {
-	cfg, err := s.repo.GetByUserID(userID)
+	if entry := s.cached(userID); entry != nil {
+		return entry.emb, entry.embOK, nil
+	}
+	entry, err := s.fetchBoth(userID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, false, nil
-		}
 		return nil, false, err
 	}
-	if !cfg.HasEmbeddingConfig() {
-		return nil, false, nil
-	}
-	plainKey, err := crypto.Decrypt(cfg.EmbeddingAPIKey)
-	if err != nil {
-		return nil, false, nil
-	}
-	return &EmbeddingAPIConfig{
-		Provider: *cfg.EmbeddingProvider,
-		BaseURL:  *cfg.EmbeddingBaseURL,
-		APIKey:   plainKey,
-		Model:    *cfg.EmbeddingModel,
-		Dims:     *cfg.EmbeddingDims,
-	}, true, nil
+	return entry.emb, entry.embOK, nil
 }
 
-// GetFullConfigForUser 获取用户完整配置，用于创建 LLM 客户端
+// GetFullConfigForUser 获取用户完整配置，用于创建 LLM 客户端。
+// 热点路径(每条消息至少 1 次,原来每次都是 DB 查询+AES 解密,10+ 调用点):
+// 走缓存,写路径精确失效 + TTL 兜底。
 func (s *GormLLMConfigService) GetFullConfigForUser(userID int64) (*FullLLMConfig, bool, error) {
-	cfg, err := s.repo.GetByUserID(userID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, false, nil
-		}
-		return nil, false, err
+	if entry := s.cached(userID); entry != nil {
+		return entry.llm, entry.llmOK, nil
 	}
-
-	if !cfg.IsEnabled() {
-		return nil, false, nil
-	}
-
-	// 解密 API Key
-	plainKey, err := crypto.Decrypt(cfg.APIKey)
+	entry, err := s.fetchBoth(userID)
 	if err != nil {
 		return nil, false, err
 	}
-
-	return &FullLLMConfig{
-		APIKey:          plainKey,
-		BaseURL:         cfg.GetBaseURL(),
-		Model:           cfg.GetModel(),
-		Provider:        cfg.Provider,
-		Temperature:     cfg.GetTemperature(0.7),
-		MaxTokens:       cfg.GetMaxTokens(2048),
-		DisableThinking: cfg.DisableThinking,
-	}, true, nil
+	return entry.llm, entry.llmOK, nil
 }
 
 // UpdateFullConfig 完整更新用户配置
@@ -423,7 +489,11 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 			return err
 		}
 
-		return s.repo.Create(cfg)
+		if err := s.repo.Create(cfg); err != nil {
+			return err
+		}
+		s.invalidate(userID)
+		return nil
 	}
 
 	// 更新现有配置
@@ -457,7 +527,11 @@ func (s *GormLLMConfigService) UpdateFullConfig(userID int64, req UpdateConfigRe
 	}
 	cfg.UpdatedAt = now
 
-	return s.repo.Update(cfg)
+	if err := s.repo.Update(cfg); err != nil {
+		return err
+	}
+	s.invalidate(userID)
+	return nil
 }
 
 // applyEmbedding 向量配置合并落库(M7 修订,与主 LLM key 行为对齐):
