@@ -208,7 +208,8 @@ func (r *cliRunner) SetRunner(runner Runner) { r.runner = runner }
 
 func (r *cliRunner) run(ctx context.Context, userID int64, stdin, profile string, args ...string) (string, error) {
 	if r.runner != nil {
-		return r.runner.RunLarkCLI(ctx, userID, stdin, args...)
+		// --profile 与直跑路径一致(物化 HOME 可能含多个 profile,缺省会落错身份)
+		return r.runner.RunLarkCLI(ctx, userID, stdin, append([]string{"--profile", profile}, args...)...)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, r.cfg.timeout())
 	defer cancel()
