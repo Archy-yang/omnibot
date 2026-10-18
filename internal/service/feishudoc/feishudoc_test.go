@@ -49,7 +49,9 @@ type stubRunner struct {
 	overTokens []string
 }
 
-func (s *stubRunner) CreateDoc(_ context.Context, profile, title, markdown string) (string, string, error) {
+func (s *stubRunner) SetRunner(Runner) {}
+
+func (s *stubRunner) CreateDoc(_ context.Context, _ int64, profile, title, markdown string) (string, string, error) {
 	s.createCnt++
 	s.profile, s.title, s.markdown = profile, title, markdown
 	if s.createErr != nil {
@@ -58,7 +60,7 @@ func (s *stubRunner) CreateDoc(_ context.Context, profile, title, markdown strin
 	return s.token, s.url, nil
 }
 
-func (s *stubRunner) OverwriteDoc(_ context.Context, profile, docToken, markdown string) error {
+func (s *stubRunner) OverwriteDoc(_ context.Context, _ int64, profile, docToken, markdown string) error {
 	s.overwrote++
 	s.profile = profile
 	s.overTokens = append(s.overTokens, docToken)

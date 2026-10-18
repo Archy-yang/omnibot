@@ -24,7 +24,7 @@ func TestCliReal_Run_PreservesDeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := cli.run(ctx, "whoami")
+	_, err := cli.run(ctx, 1, "", "whoami")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "超时必须以 DeadlineExceeded 类型透出,而非字符串包装")
 }
@@ -41,7 +41,7 @@ func TestCliReal_Run_WaitDelayBoundsReturn(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := cli.run(ctx, "whoami")
+	_, err := cli.run(ctx, 1, "", "whoami")
 	elapsed := time.Since(start)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, 3*time.Second, "Run 应在超时后立即返回,不得滞留: %v", elapsed)
@@ -54,7 +54,7 @@ func TestCliReal_Run_NonTimeoutErrorIsTyped(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho boom >&2\nexit 7\n"), 0o755))
 
 	cli := &cliReal{cfg: CLIConfig{BinPath: bin}}
-	_, err := cli.run(context.Background(), "whoami")
+	_, err := cli.run(context.Background(), 1, "", "whoami")
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, context.DeadlineExceeded))
 	assert.Contains(t, err.Error(), "boom")

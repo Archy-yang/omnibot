@@ -16,15 +16,21 @@ import (
 )
 
 // LarkCLI lark-cli 的窄接口(真实实现 *cliReal,单测 mock)。
+// userID 贯穿所有方法:27 号 DB 物化后,执行必须按用户 hydrate/回写(Executor 依赖它)。
 type LarkCLI interface {
-	ProfileAdd(profile, appID, appSecret string) error
+	ProfileAdd(userID int64, profile, appID, appSecret string) error
 	// LoginStart 发起 device flow:返回验证地址/用户码/设备码(--no-wait --json)。
-	LoginStart(profile, domains string) (verifyURL, userCode, deviceCode string, err error)
+	LoginStart(userID int64, profile, domains string) (verifyURL, userCode, deviceCode string, err error)
 	// LoginComplete 收尾:轮询至用户确认或超时(ctx 控制)。
-	LoginComplete(ctx context.Context, profile, deviceCode string) error
+	LoginComplete(ctx context.Context, userID int64, profile, deviceCode string) error
 	// Status 授权身份回显(whoami)。
-	Status(profile string) (openID, userName string, err error)
-	Logout(profile string) error
+	Status(userID int64, profile string) (openID, userName string, err error)
+	Logout(userID int64, profile string) error
+}
+
+// Runner 统一执行入口(27 号 larkhome.Executor;nil = 直跑本地 CLI,单机 volume 兜底形态)。
+type Runner interface {
+	RunLarkCLI(ctx context.Context, userID int64, stdin string, args ...string) (string, error)
 }
 
 // CLIConfig 真实实现配置。
@@ -55,16 +61,25 @@ func (c CLIConfig) completeTimeout() time.Duration {
 	return 5 * time.Second
 }
 
-// NewRealCLI 构建真实 CLI 实现。
+// NewRealCLI 构建真实 CLI 实现。runner 非 nil 时走 27 号物化执行(HOME 物化+回写),否则直跑本地。
 func NewRealCLI(cfg CLIConfig) LarkCLI { return &cliReal{cfg: cfg} }
 
-type cliReal struct{ cfg CLIConfig }
+type cliReal struct {
+	cfg    CLIConfig
+	runner Runner
+}
+
+// SetRunner 注入统一执行入口(装配点调用;nil 安全)。
+func (c *cliReal) SetRunner(r Runner) { c.runner = r }
 
 // run 执行 lark-cli(argv 直传),返回 stdout;退出码非零时附尾部输出(错误信息对排障有价值)。
 // 注意:退出码不参与上层成败判定——实测收尾成功也可能非零退出(见 PollAuth)。
 // 超时被杀必须以 context.DeadlineExceeded 类型透出(上层据此判"还没确认");WaitDelay 防
 // 管道被孙进程占用导致 Run 滞留(实测曾把 5s 封顶拖到 10.7s)。
-func (c *cliReal) run(ctx context.Context, args ...string) (string, error) {
+func (c *cliReal) run(ctx context.Context, userID int64, stdin string, args ...string) (string, error) {
+	if c.runner != nil {
+		return c.runner.RunLarkCLI(ctx, userID, stdin, args...)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, c.cfg.bin(), args...) //nolint:gosec // 受控 bin + argv 直传
@@ -89,23 +104,17 @@ func (c *cliReal) run(ctx context.Context, args ...string) (string, error) {
 // 存量壳 profile(如宿主迁移来的、secret 在 macOS Keychain 里的)会让
 // device flow 报 "missing required parameter: client_secret"(2026-10-18 实测)。
 // 故遇 "already" 一律删除重建,保证凭据必写入。
-func (c *cliReal) ProfileAdd(profile, appID, appSecret string) error {
+func (c *cliReal) ProfileAdd(userID int64, profile, appID, appSecret string) error {
 	add := func() error {
-		cmd := exec.Command(c.cfg.bin(), "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin") //nolint:gosec
-		cmd.Stdin = strings.NewReader(appSecret)
-		var errOut bytes.Buffer
-		cmd.Stderr = &errOut
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("lark-cli profile add 失败: %s", strings.TrimSpace(errOut.String()))
-		}
-		return nil
+		_, err := c.run(context.Background(), userID, appSecret, "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin")
+		return err
 	}
 	err := add()
 	if err == nil || !strings.Contains(err.Error(), "already") {
 		return err
 	}
 	// 已存在(同名 profile / 同 app-id):删除重建
-	if _, rmErr := c.run(context.Background(), "profile", "remove", profile); rmErr != nil {
+	if _, rmErr := c.run(context.Background(), userID, "", "profile", "remove", profile); rmErr != nil {
 		return fmt.Errorf("lark-cli profile remove 失败(重授权前清理 %s): %w", profile, rmErr)
 	}
 	return add()
@@ -121,8 +130,8 @@ func pickString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func (c *cliReal) LoginStart(profile, domains string) (string, string, string, error) {
-	out, err := c.run(context.Background(), "--profile", profile, "auth", "login", "--no-wait", "--json", "--domain", domains)
+func (c *cliReal) LoginStart(userID int64, profile, domains string) (string, string, string, error) {
+	out, err := c.run(context.Background(), userID, "", "--profile", profile, "auth", "login", "--no-wait", "--json", "--domain", domains)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -147,15 +156,15 @@ func (c *cliReal) LoginStart(profile, domains string) (string, string, string, e
 	return verifyURL, userCode, deviceCode, nil
 }
 
-func (c *cliReal) LoginComplete(ctx context.Context, profile, deviceCode string) error {
+func (c *cliReal) LoginComplete(ctx context.Context, userID int64, profile, deviceCode string) error {
 	completeCtx, cancel := context.WithTimeout(ctx, c.cfg.completeTimeout())
 	defer cancel()
-	_, err := c.run(completeCtx, "--profile", profile, "auth", "login", "--device-code", deviceCode, "--json")
+	_, err := c.run(completeCtx, userID, "", "--profile", profile, "auth", "login", "--device-code", deviceCode, "--json")
 	return err
 }
 
-func (c *cliReal) Status(profile string) (string, string, error) {
-	out, err := c.run(context.Background(), "--profile", profile, "whoami")
+func (c *cliReal) Status(userID int64, profile string) (string, string, error) {
+	out, err := c.run(context.Background(), userID, "", "--profile", profile, "whoami")
 	if err != nil {
 		return "", "", err
 	}
@@ -171,7 +180,7 @@ func (c *cliReal) Status(profile string) (string, string, error) {
 	return openID, name, nil
 }
 
-func (c *cliReal) Logout(profile string) error {
-	_, err := c.run(context.Background(), "--profile", profile, "auth", "logout")
+func (c *cliReal) Logout(userID int64, profile string) error {
+	_, err := c.run(context.Background(), userID, "", "--profile", profile, "auth", "logout")
 	return err
 }

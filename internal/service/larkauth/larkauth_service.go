@@ -64,10 +64,10 @@ func (s *Service) StartAuth(ctx context.Context, userID int64, appID, appSecret 
 		return View{}, fmt.Errorf("larkauth: 凭证加密失败: %w", err)
 	}
 	profile := profileFor(userID)
-	if err := s.cli.ProfileAdd(profile, appID, appSecret); err != nil {
+	if err := s.cli.ProfileAdd(userID, profile, appID, appSecret); err != nil {
 		return View{}, err
 	}
-	verifyURL, userCode, deviceCode, err := s.cli.LoginStart(profile, "") // 空 = CLI 默认域集合
+	verifyURL, userCode, deviceCode, err := s.cli.LoginStart(userID, profile, "") // 空 = CLI 默认域集合
 	if err != nil {
 		return View{}, err
 	}
@@ -96,8 +96,8 @@ func (s *Service) PollAuth(ctx context.Context, userID int64) (View, error) {
 	if row.Status != userdomain.LarkAuthStatusPending {
 		return s.viewOf(row), nil
 	}
-	completeErr := s.cli.LoginComplete(ctx, row.ProfileName, row.DeviceCode)
-	openID, userName, stErr := s.cli.Status(row.ProfileName)
+	completeErr := s.cli.LoginComplete(ctx, userID, row.ProfileName, row.DeviceCode)
+	openID, userName, stErr := s.cli.Status(userID, row.ProfileName)
 	switch {
 	case stErr == nil && openID != "":
 		// token 就绪即授权成功(用户已确认)
@@ -128,7 +128,7 @@ func (s *Service) Disconnect(ctx context.Context, userID int64) error {
 	if err != nil {
 		return err
 	}
-	if logoutErr := s.cli.Logout(row.ProfileName); logoutErr != nil {
+	if logoutErr := s.cli.Logout(userID, row.ProfileName); logoutErr != nil {
 		log.Printf("larkauth: user=%d logout 失败(继续删行): %v", userID, logoutErr)
 	}
 	return s.repo.Delete(userID)

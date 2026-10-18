@@ -52,6 +52,12 @@ type FeishuCLIConfig struct {
 	Timeout     time.Duration   // 单次执行超时,默认 60s
 	OutputLimit int             // 输出截断上限(字节),默认 32KB
 	Resolver    ProfileResolver // 非 nil 时按 ctx 用户动态 --profile(19 号 M2)
+	Runner      Runner          // 非 nil 时走 27 号物化执行(HOME 物化+回写);nil = 直跑本地
+}
+
+// Runner 统一执行入口(27 号 larkhome.Executor 的同形窄面,避免跨包依赖)。
+type Runner interface {
+	RunLarkCLI(ctx context.Context, userID int64, stdin string, args ...string) (string, error)
 }
 
 func (c FeishuCLIConfig) binPath() string {
@@ -111,8 +117,10 @@ func CreateFeishuTool(cfg FeishuCLIConfig) toolcore.Tool {
 				return "", err
 			}
 			profile := ""
+			var userID int64
 			if cfg.Resolver != nil {
-				if userID := toolcore.UserIDFromContext(ctx); userID > 0 {
+				userID = toolcore.UserIDFromContext(ctx)
+				if userID > 0 {
 					p, perr := cfg.Resolver.ProfileForUser(userID)
 					if perr != nil {
 						return "", fmt.Errorf("尚未完成飞书授权:请在 设置-飞书授权 中连接后重试(授权一次,后续自动使用你的身份)")
@@ -120,7 +128,7 @@ func CreateFeishuTool(cfg FeishuCLIConfig) toolcore.Tool {
 					profile = p
 				}
 			}
-			return runFeishuCLI(ctx, cfg, cliArgs, feishuStdin(args), profile)
+			return runFeishuCLI(ctx, cfg, userID, cliArgs, feishuStdin(args), profile)
 		},
 	}
 }
@@ -165,7 +173,11 @@ func validateFeishuArgs(cliArgs []string) error {
 
 // runFeishuCLI 执行 lark-cli:超时控制 + stdin 透传 + 输出截断。
 // profile 非空时 argv 前插 --profile(19 号 M2:按当前用户隔离授权)。
-func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, cliArgs []string, stdin, profile string) (string, error) {
+func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, userID int64, cliArgs []string, stdin, profile string) (string, error) {
+	// 27 号:已授权用户走物化执行(HOME 物化+回写);未授权/未注入 runner 直跑本地
+	if cfg.Runner != nil && userID > 0 {
+		return cfg.Runner.RunLarkCLI(ctx, userID, stdin, cliArgs...)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, cfg.timeout())
 	defer cancel()
 
