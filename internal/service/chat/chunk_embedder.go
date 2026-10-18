@@ -2,11 +2,11 @@ package chat
 
 import (
 	"context"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	chatrepo "omnibot/internal/repository/chat"
+	"omnibot/internal/pkg/backtask"
 	memoryservice "omnibot/internal/service/memory"
 	"omnibot/pkg/logger"
 
@@ -28,7 +28,7 @@ type ChunkEmbedder struct {
 	embedding     memoryservice.EmbeddingProvider
 	// embeddingResolver 用户级向量解析(与沉淀/消息嵌入同源);非 nil 且返回非 nil 时优先
 	embeddingResolver func(userID int64) memoryservice.EmbeddingProvider
-	inflight          sync.Map // userID → struct{} (per-user 单飞)
+	gate              *backtask.Gate // per-user 单飞(2026-10 审计 #2:NotifyTurn 模板收编)
 }
 
 func NewChunkEmbedder(
@@ -59,26 +59,17 @@ func (e *ChunkEmbedder) providerFor(userID int64) memoryservice.EmbeddingProvide
 	return e.embedding
 }
 
-// NotifyTurn 对话轮次结束钩子:异步触发,绝不阻塞对话,绝不 panic 外泄。
+// NotifyTurn 对话轮次结束钩子:per-user 单飞,绝不阻塞对话,绝不 panic 外泄。
 func (e *ChunkEmbedder) NotifyTurn(userID int64) {
-	if _, busy := e.inflight.LoadOrStore(userID, struct{}{}); busy {
-		return // per-user 单飞:上轮没跑完不叠跑(下轮消息下一轮补)
+	if e.gate == nil {
+		e.gate = backtask.NewGate("chunk: 召回块构建")
 	}
-	go func() {
-		defer e.inflight.Delete(userID)
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorWithFields("chunk: 召回块构建 panic",
-					zap.Int64("user_id", userID), zap.Any("recover", r))
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+	e.gate.Go(userID, 2*time.Minute, func(ctx context.Context) {
 		if err := e.RunOnce(ctx, userID); err != nil {
 			logger.WarnWithFields("chunk: 召回块构建本轮未完成,水位停在失败 turn 前,下轮重试",
 				zap.Int64("user_id", userID), zap.Error(err))
 		}
-	}()
+	})
 }
 
 // RunOnce 执行一轮增量构建:水位之后的新消息按 turn 分组,逐 turn 重建 chunk。
