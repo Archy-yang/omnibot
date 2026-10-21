@@ -169,6 +169,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if aware, ok := memorySvc.(memoryService.ResolverAware); ok {
 		aware.SetEmbeddingResolver(embeddingResolver)
 	}
+	// 24 号 M2:风格注入开关存取(user 表;开关默认关,显式开启才注入)
+	if si, ok := memorySvc.(interface {
+		SetStyleInjectionStore(memoryService.StyleInjectionStore)
+	}); ok {
+		si.SetStyleInjectionStore(userRepository)
+	}
 	stepRepo := chatRepo.NewAgentStepRepository(dbConn.GetGormDB())
 	// 沉淀管线(M2,§7;M5.1 修订):轮次结束异步生成纪要+提取记忆。
 	// LLM/embedding 均按用户解析:用户 Web 端配置优先,系统默认兜底,皆无则静默跳过。
@@ -208,6 +214,10 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		Memory:    memorySvc,
 		Steps:     stepRepo,
 		TurnSinks: []chatService.TurnSink{},
+	}
+	// 24 号 M2:风格注入段(开关关/无观察 → 空串不注入,零回归)
+	if sp, ok := memorySvc.(chatService.StyleSegmentProvider); ok {
+		msgSvcDeps.Style = sp
 	}
 	if digestPipeline != nil {
 		msgSvcDeps.TurnSinks = append(msgSvcDeps.TurnSinks, digestPipeline) // chat.TurnSink

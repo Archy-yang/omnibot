@@ -74,6 +74,12 @@ type MemoryInjectionProvider interface {
 	GetMemoryInjection(ctx context.Context, userID int64) (*memorydomain.MemoryInjection, error)
 }
 
+// StyleSegmentProvider 风格注入段提供者(M2,24号 §6 修订版):memoryService 实现。
+// 返回空串 = 不注入(开关关/无观察/降级);非空以 system 消息注入(与记忆常驻块同通道)。
+type StyleSegmentProvider interface {
+	StylePromptSegment(ctx context.Context, userID int64) string
+}
+
 // TurnSink 对话轮次结束的观察者(12-记忆系统技术方案 §7 沉淀管线 NotifyTurn)。
 // 实现方必须异步、不阻塞、不 panic 外泄;nil 时不启用。
 type TurnSink interface {
@@ -83,6 +89,7 @@ type TurnSink interface {
 type messageService struct {
 	msgRepo   chatrepo.MessageRepository
 	memorySvc MemoryInjectionProvider
+	styleSvc  StyleSegmentProvider // M2 风格注入段;nil=未启用(零回归)
 	stepRepo  chatrepo.AgentStepRepository
 	convRepo  chatrepo.ConversationRepository
 	// Phase 2(16-架构迭代路线图 §6/§7):Context Manager 状态
@@ -106,6 +113,8 @@ type messageService struct {
 type MessageServiceDeps struct {
 	// Memory 记忆常驻注入(注入分层 §6.5:手动全量 + 自动存在性提示)。
 	Memory MemoryInjectionProvider
+	// Style 风格注入段(M2,24号 §6 修订版);nil=未启用。
+	Style StyleSegmentProvider
 	// Steps 子 Agent 运行步骤落库。
 	Steps chatrepo.AgentStepRepository
 	// Conversation Turn/Conversation 持久化(SaveUserMessage 开 Turn)。
@@ -128,6 +137,7 @@ func NewMessageService(msgRepo chatrepo.MessageRepository, deps MessageServiceDe
 	service := &messageService{
 		msgRepo:              msgRepo,
 		memorySvc:            deps.Memory,
+		styleSvc:             deps.Style,
 		stepRepo:             deps.Steps,
 		convRepo:             deps.Conversation,
 		contextStateRepo:     deps.ContextState,
@@ -158,6 +168,17 @@ func (s *messageService) BuildContextMessages(ctx context.Context, userID int64,
 
 	result := make([]llm.ChatMessage, 0, len(memoryMessages)+len(messages)+2)
 	result = append(result, memoryMessages...)
+
+	// 风格注入段(M2,24号 §6 修订版):紧跟记忆块之后——persona 级稳定内容,
+	// 靠前放置保护前缀缓存;空串(开关关/无观察)不追加,零回归。
+	if s.styleSvc != nil {
+		if styleSeg := s.styleSvc.StylePromptSegment(ctx, userID); styleSeg != "" {
+			result = append(result, llm.ChatMessage{
+				Role:    conversation.RoleSystem,
+				Content: styleSeg,
+			})
+		}
+	}
 
 	// History Compact 作为独立 system 消息注入(§6.3):不拼接进主 system prompt 字符串,
 	// 保持稳定前缀(Prompt Cache 友好);位置在记忆之后、Recent Raw 之前,更新频率 ≪ 对话轮。

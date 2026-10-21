@@ -69,6 +69,8 @@ type memoryService struct {
 	resolver   EmbeddingResolver // 用户级覆盖;SetEmbeddingResolver 注入,可选
 	// 沉淀黑名单(22号):SetBlacklistRepo 注入,nil=禁用(向后兼容)
 	blacklistRepo memoryrepo.BlacklistRepository
+	// 风格注入开关存取(M2,24号 §6 修订版):SetStyleInjectionStore 注入,nil=未启用 M2
+	styleStore StyleInjectionStore
 }
 
 func NewMemoryService(repo memoryrepo.MemoryRepository, matterRepo memoryrepo.MatterRepository, msgEmbRepo memoryrepo.MessageEmbeddingRepository, msgSource RecentMessageSource) MemoryService {
