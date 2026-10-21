@@ -9,6 +9,7 @@ package api
 // newAgentLLMClient)也随之收拢到本文件。
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"time"
@@ -332,6 +333,18 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		userRepo.NewLarkCLIAuthRepo(dbConn.GetGormDB()),
 		larkauthCLI,
 	)
+	// 23号:个人文档同步(按用户 profile 执行 lark-cli docs)。前移到工具注册点之前:
+	// F2 对话内 sync_matter_doc 工具与 web handler 同源共用这一个 service 实例。
+	docSyncRunner := feishudocSvc.NewRealRunner(feishudocSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath})
+	if sr, ok := docSyncRunner.(interface{ SetRunner(feishudocSvc.Runner) }); ok {
+		sr.SetRunner(larkExecutor)
+	}
+	docSyncSvc := feishudocSvc.NewService(
+		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
+		memoryRepo.NewMemoryRepository(dbConn.GetGormDB()),
+		docSyncRunner,
+		larkauthService,
+	)
 	toolSvc.RegisterBuiltin(agenttools.CreateGetCurrentTimeTool)
 	toolSvc.RegisterBuiltin(agenttools.CreateCalculatorTool)
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateSearchMemoriesTool(memorySvc) })
@@ -351,6 +364,11 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			Resolver: larkauthService, // 19 号 M2:按 ctx 用户动态 --profile;nil 时行为同现状
 			Runner:   larkExecutor,    // 27 号:按用户物化执行(HOME+回写)
 		})
+	})
+	// 档案同步到飞书文档(23 号 F2):对话内承接"把XX档案同步到飞书"。窄接口适配:
+	// feishudoc.SyncResult → agenttools.MatterDocSyncResult;sentinel 错误译成模型可读文案。
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+		return agenttools.CreateMatterDocSyncTool(matterDocSyncAdapter{svc: docSyncSvc})
 	})
 	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
 	// Docker 客户端初始化失败(如 DOCKER_HOST 非法)仅告警跳过注册——工具隐藏,不影响启动
@@ -525,18 +543,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	if ba, ok := memorySvc.(memoryService.BlacklistAware); ok { // 22号:黑名单仓储注入
 		ba.SetBlacklistRepo(memoryrepo.NewBlacklistRepository(dbConn.GetGormDB()))
 	}
-	// 23号:个人文档同步(按用户 profile 执行 lark-cli docs)
-	docSyncRunner := feishudocSvc.NewRealRunner(feishudocSvc.CLIConfig{BinPath: cfg.Feishu.CLI.BinPath})
-	if sr, ok := docSyncRunner.(interface{ SetRunner(feishudocSvc.Runner) }); ok {
-		sr.SetRunner(larkExecutor)
-	}
-	docSyncSvc := feishudocSvc.NewService(
-		memoryRepo.NewMatterRepository(dbConn.GetGormDB()),
-		memoryRepo.NewMemoryRepository(dbConn.GetGormDB()),
-		docSyncRunner,
-		larkauthService,
-	)
-	webHandler.SetDocSyncService(docSyncSvc)
+	webHandler.SetDocSyncService(docSyncSvc) // 23号:service 实例在工具注册点前创建(F2 共用)
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
 	webHandler.SetSkillService(skillSvc)
@@ -626,4 +633,21 @@ func newAgentLLMClient(cfg *config.Config) *agentpkg.OpenAILLMClient {
 		agentTimeout = 30 * time.Second
 	}
 	return agentpkg.NewOpenAILLMClient(defaultProviderCfg.APIKey, defaultProviderCfg.BaseURL, defaultProviderCfg.Model, agentTimeout)
+}
+
+// matterDocSyncAdapter feishudoc.Service → agenttools.MatterDocSyncer 窄接口适配
+// (23 号 F2:agent 包不 import service 实现,sentinel 错误在此翻译成模型可读文案)。
+type matterDocSyncAdapter struct {
+	svc *feishudocSvc.Service
+}
+
+func (a matterDocSyncAdapter) SyncMatter(ctx context.Context, userID, matterID int64) (agenttools.MatterDocSyncResult, error) {
+	r, err := a.svc.SyncMatter(ctx, userID, matterID)
+	switch {
+	case errors.Is(err, feishudocSvc.ErrMatterNotFound):
+		return agenttools.MatterDocSyncResult{}, agenttools.ErrMatterDocNotFound
+	case errors.Is(err, feishudocSvc.ErrNotAuthorized):
+		return agenttools.MatterDocSyncResult{}, agenttools.ErrMatterDocUnauthorized
+	}
+	return agenttools.MatterDocSyncResult{DocURL: r.DocURL, Created: r.Created, SyncedAt: r.SyncedAt}, err
 }

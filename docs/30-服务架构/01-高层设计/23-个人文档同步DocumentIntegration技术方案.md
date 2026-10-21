@@ -142,3 +142,17 @@ CLI 失败 → 502 + 可读原因。
   未建档 → 创建;已建档 → 更新（覆盖前二次确认）+ 文档链接与上次同步时间回显
 - 测试 3 项,全量 40 包绿;vue-tsc 干净,vite build 通过
 - F2（Journal 整体同步/对话内工具/定时同步）未开工,视 F1 真实使用决定
+
+## 落地记录（F2-A 对话内同步工具，2026-10-21）
+
+- F2 三候选评审后只做 A（对话内工具）：C 定时同步场景弱（文档是导出镜像）,B Journal 全量
+  同步等真实需求;用户拍板
+- `agenttools.CreateMatterDocSyncTool`：窄接口 `MatterDocSyncer` + 自有结果结构/sentinel
+  错误（包纪律:不 import service 实现）;参数仅 matter_id（描述引导先 search_matters 查 ID）
+- wire `matterDocSyncAdapter`：feishudoc.SyncResult → tools 结果结构;ErrMatterNotFound/
+  ErrNotAuthorized 译成模型可读文案（提示先查档案/先完成飞书授权）
+- docSyncSvc 前移到工具注册点之前——对话内工具与档案详情按钮共用同一 service 实例
+- 主 Agent 可见（RegisterBuiltin 非 SubOnly）:管家动嘴不动手,同步是结构化单点操作
+- 测试 6 例（create/update/缺参/未命中/未授权/错误透传）,全量包绿
+- 待查:F1 存量 3 档案 feishu_doc_url 非空但 synced_at 全 NULL（建档早于回写行为或写入缺失,
+  与本里程碑无关,另行排查）
