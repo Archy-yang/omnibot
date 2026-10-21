@@ -5,6 +5,57 @@
 > ⚠️ **校准注记（2026-09-25）**：v1.11.0 起进入未版本化快速迭代期（对话上下文 V1、后台 Agent 框架、
 > MCP 连接器、订阅源、记忆重构等），未再逐版本记录。变更详情见 git log 与
 > [16-架构迭代路线图-V1](../30-服务架构/01-高层设计/16-架构迭代路线图-V1-对话与上下文演进.md) 的「落地进度」行。
+>
+> **校准注记（2026-10-21）**：版本记录自 v2.4.0 起恢复（v2.4.0 之前的 v2.x 迭代见 git tag 与
+> [20-个人管家演进路线图](../30-服务架构/01-高层设计/20-个人管家演进路线图.md) 各方案落地记录）。
+
+---
+
+## [v2.4.0] - 2026-10-21
+
+个人管家三阶段产品功能齐套（记录/了解/主动）+ lark-cli 多机部署基础设施升级。
+v2.3.0 起 14 个 PR（#21~#34）。
+
+### 🚀 用户可见
+
+- **主动管家 Proactive Butler（26 号）**：每日定时扫描记忆档案与任务 loop，
+  信号收集 → LLM 裁决 → 克制闸门（夜间窗/日限 1/7 天去重冷却）→ 飞书主动送达；
+  设置抽屉「主动关心」开关与时刻配置，默认关闭
+- **聊天流式 UX**：思考块三态（流式中 200px 限高跟随框 ↔ 点击全展开，结束自动收起）；
+  流式正文逐 chunk 跟随滚动（离底 <50px 才跟）；输出中上滑浮现「回到底部」按钮
+- **风格注入（24 号 M2）**：设置抽屉「风格与认知」开关——开启后主 Agent 回复时
+  参考你的沟通风格观察（只注原始观察 ≤10 条，关即完全回滚，默认关）
+- **对话内档案同步（23 号 F2-A）**：新工具 `sync_matter_doc`，说「把 XX 档案同步到飞书」
+  即创建/覆盖更新飞书文档，与档案详情按钮共用同一同步服务
+- **前端实时性**：WebSocket 健康时跳过 60s 兜底轮询（保留 5 分钟保底对账）
+
+### 🏗️ 基础设施
+
+- **lark-cli 授权状态 DB 物化（27 号）**：CLI 状态（profile 配置 + token 实体）打包加密
+  入库 `lark_cli_states`，执行前按用户物化 HOME、执行后强制回写（version CAS）——
+  根治多机部署数据分叉与多用户越权；三个调用点（feishu_tool/feishudoc/larkauth）统一走
+  `larkhome.Executor`
+- **容器飞书链路**：lark-cli 进镜像（锁版本）、授权状态双 volume 持久化、
+  ProfileAdd 幂等遮蔽修复（PR #23）
+
+### 🔧 架构改进（10-18 审计消化）
+
+- LLM 配置解析缓存下沉 `LLMConfigService`（写路径精确失效 + TTL 兜底 + 负缓存）
+- 后台执行纪律收敛 `internal/pkg/backtask` 三原语（RunDetached/RunTickerLoop/Gate）
+- 4 个业务适配器迁出 API 装配层（wire.go 793→606 行）
+- `gorm.ErrRecordNotFound` 比较改 `errors.Is`；补 mcp_service 测试盲区
+
+### 🐛 修复
+
+- 27 号上线首日两坑：Runner 路径丢 `--profile` 落错身份（#30）；
+  config 无 `feishu.cli` 段 → BinPath 空串静默失败（#31）
+- M2 注入开关路由漏注册 404（#33）——教训：handler 测试覆盖不到装配面
+
+### ⚠️ 兼容性
+
+- DB 迁移：`lark_cli_states` 新表、`users.style_injection_enabled` 新列、
+  `proactive_notes`/`matters` 文档列（均 AutoMigrate 自动落）
+- 历史卷积：lark_cli_state/lark_token_state volume 保留作回退保险，观察稳定后可清
 
 ---
 
