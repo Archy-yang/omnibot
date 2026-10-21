@@ -193,11 +193,23 @@ func (s *ScanService) buildSnapshot(userID int64, now time.Time) (string, error)
 	if len(matters) > 0 {
 		b.WriteString("## 活跃事项\n")
 		for _, m := range matters {
+			line := fmt.Sprintf("- [matter:%d] %s", m.ID, m.Title)
 			if m.StateDesc != "" {
-				fmt.Fprintf(&b, "- [matter:%d] %s:%s\n", m.ID, m.Title, textutil.TruncateRunes(m.StateDesc, MaxSignalChars))
-			} else {
-				fmt.Fprintf(&b, "- [matter:%d] %s\n", m.ID, m.Title)
+				line += ":" + textutil.TruncateRunes(m.StateDesc, MaxSignalChars)
 			}
+			// 28号 N1:最后动静(闲置时长是裁决"该收了吗"的核心证据)
+			idleDays := int(now.Sub(m.UpdatedAt).Hours() / 24)
+			line += fmt.Sprintf("(最后动静 %s,距今 %d 天)", m.UpdatedAt.Format("2006-01-02"), idleDays)
+			// 28号 N2:目标紧迫度(target_at 非空 = 目标事项);以 now 参数为准(可测)
+			if m.TargetAt != nil {
+				remain := int(m.TargetAt.Sub(now).Hours() / 24)
+				if remain >= 0 {
+					line += fmt.Sprintf("(目标 %s,剩 %d 天)", m.TargetAt.Format("2006-01-02"), remain)
+				} else {
+					line += fmt.Sprintf("(目标 %s,已过期 %d 天)", m.TargetAt.Format("2006-01-02"), -remain)
+				}
+			}
+			b.WriteString(line + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -248,9 +260,13 @@ const adjudicationSystemPrompt = `你是用户的长期个人管家的"主动关
 3. 禁止编造:只能引用输入信号中的事实与日期,不得自行推断未给出的时间或事实。
 4. 口吻:贴心的管家,2-3 句以内,自然、具体,给出可行动的建议或一个具体问题;不要客套开场白,不要"您好"。
 
+收口判断(28号目标闭环):对每个活跃事项/挂起待办,结合最后动静时间与状态描述,判断它是否实际已有结论
+(任务完成、事件结束、话题有结果)——已有结论且长期未收口的,优先给 close_suggest(收口建议)而非重复提醒;
+建议文案必须引用信号中的证据(如"体温已回落""查证结果已在 X 日报给你")。
+
 输出严格 JSON(禁止 markdown 代码块、禁止多余文字):
 沉默:{"send": false, "reason": "一句话理由"}
-开口:{"send": true, "kind": "matter_due|loop_stale|recent_followup", "dedup_key": "<信号行方括号里给出的主题键,如 matter:42 / loop:101 / recent:201>", "matter_id": <开口对象是事项时给其数字 ID,否则省略>, "content": "..."}`
+开口:{"send": true, "kind": "matter_due|loop_stale|recent_followup|close_suggest", "dedup_key": "<信号行方括号里给出的主题键;收口建议在键尾加 :close,如 matter:42:close / loop:101:close>", "matter_id": <开口对象是事项时给其数字 ID,否则省略>, "content": "..."}`
 
 // decision LLM 裁决输出的结构化形态。
 type decision struct {
@@ -261,11 +277,15 @@ type decision struct {
 	MatterID *int64 `json:"matter_id"`
 }
 
-// matterIDFromKey 从 dedup_key "matter:42" 解析事项 ID。
+// matterIDFromKey 从 dedup_key "matter:42"(或收口建议 "matter:42:close",28号 N1)
+// 解析事项 ID。
 func matterIDFromKey(key string) (int64, bool) {
 	idStr, ok := strings.CutPrefix(key, "matter:")
 	if !ok {
 		return 0, false
+	}
+	if i := strings.IndexByte(idStr, ':'); i >= 0 {
+		idStr = idStr[:i] // 剥 :close 后缀
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {

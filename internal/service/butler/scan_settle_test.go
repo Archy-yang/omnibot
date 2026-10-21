@@ -1,0 +1,68 @@
+package butler
+
+// 28号 N1 完结裁决测试:close_suggest 输出解析 + dedup_key 后缀归属解析 + 信号行最后动静/目标紧迫度。
+
+import (
+	"testing"
+
+	butlerdomain "omnibot/internal/domain/butler"
+	memorydomain "omnibot/internal/domain/memory"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// dedup_key "matter:10:close" 的 :close 后缀不影响事项 ID 归属解析。
+func TestMatterIDFromKey_CloseSuffix(t *testing.T) {
+	id, ok := matterIDFromKey("matter:10:close")
+	require.True(t, ok)
+	assert.Equal(t, int64(10), id)
+
+	// 兼容无后缀既有形态
+	id, ok = matterIDFromKey("matter:42")
+	require.True(t, ok)
+	assert.Equal(t, int64(42), id)
+
+	// 非 matter 键不误判
+	_, ok = matterIDFromKey("loop:34:close")
+	assert.False(t, ok)
+}
+
+// close_suggest 裁决输出解析:kind 保留、dedup/content 齐全即开口。
+func TestParseDecision_CloseSuggest(t *testing.T) {
+	raw := `{"send": true, "kind": "close_suggest", "dedup_key": "matter:10:close",
+		"matter_id": 10, "content": "父亲的诊治看起来已经有结果了,要我把它收掉吗?"}`
+	d := parseDecision(raw)
+	require.NotNil(t, d)
+	assert.Equal(t, butlerdomain.NoteKindCloseSuggest, d.Kind)
+	assert.Equal(t, "matter:10:close", d.DedupKey)
+	require.NotNil(t, d.MatterID)
+	assert.Equal(t, int64(10), *d.MatterID)
+}
+
+// matter 信号行带最后动静(闲置时长是裁决"该收了吗"的核心证据)。
+func TestBuildSnapshot_MatterLastActivity(t *testing.T) {
+	matters := &stubMatters{list: []*memorydomain.Matter{{
+		ID: 10, Title: "父亲的诊治", StateDesc: "体温已回落", UpdatedAt: scanTime().AddDate(0, 0, -4),
+	}}}
+	svc := newTestService(matters, &stubMemoriesReal{}, &stubLLM{}, &memNoteRepo{}, enabledUser(9))
+
+	snapshot, err := svc.buildSnapshot(1, scanTime())
+	require.NoError(t, err)
+	assert.Contains(t, snapshot, "[matter:10] 父亲的诊治")
+	assert.Contains(t, snapshot, "最后动静")
+	assert.Contains(t, snapshot, "4 天", "距今天数要可读")
+}
+
+// matter 带 target_at 时信号行带目标日与剩余天数(28号 N2 信号面)。
+func TestBuildSnapshot_MatterWithTarget(t *testing.T) {
+	matters := &stubMatters{list: []*memorydomain.Matter{{
+		ID: 10, Title: "完成体检", TargetAt: ptrTime(scanTime().AddDate(0, 0, 9)),
+	}}}
+	svc := newTestService(matters, &stubMemoriesReal{}, &stubLLM{}, &memNoteRepo{}, enabledUser(9))
+
+	snapshot, err := svc.buildSnapshot(1, scanTime())
+	require.NoError(t, err)
+	assert.Contains(t, snapshot, "目标")
+	assert.Contains(t, snapshot, "剩 9 天")
+}
