@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, nextTick } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ChatMessageProps } from '@/types';
@@ -73,14 +73,17 @@ const thoughtStepCount = computed(
   () => thoughtSegments.value.filter((s) => s.type === 'tool').length,
 );
 
-// 思考块折叠状态:流式中(streaming=true)强制展开实时看过程,结束自动收起。
-// 用户可手动 toggle(历史消息默认收起,点击展开)。
-const thoughtCollapsed = ref(true);
+// 思考块展示态(三态):
+// - collapsed:只显示「已思考 N 步」条(结束态/历史消息默认)
+// - peek:限高滚动框(流式思考中的默认态,内容增长时框内自动滚底跟随)
+// - full:全部展开,不限高(点头部条切换)
+type ThoughtMode = 'collapsed' | 'peek' | 'full';
+const thoughtMode = ref<ThoughtMode>('collapsed');
 watch(
   () => props.message.streaming,
   (streaming) => {
-    // true -> 展开;false -> 收起。仅在 streaming 变化时驱动,不覆盖用户手动操作后的状态。
-    thoughtCollapsed.value = !streaming;
+    // true -> 限高跟随框;false -> 收起为条。仅在 streaming 变化时驱动,不覆盖用户手动操作后的状态。
+    thoughtMode.value = streaming ? 'peek' : 'collapsed';
   },
   { immediate: true },
 );
@@ -92,8 +95,42 @@ const hasMainReply = computed(() =>
   segments.value.some((s) => s.type === 'text' && s.role === 'final' && s.content.length > 0),
 );
 watch(hasMainReply, (v) => {
-  if (v && props.message.streaming) thoughtCollapsed.value = true;
+  if (v && props.message.streaming) thoughtMode.value = 'collapsed';
 });
+
+// 手动 toggle:收起/限高框 -> 全部展开;全部展开 -> 回到当前阶段的默认态
+// (流式中回限高框,结束后回收起条)。
+function toggleThought() {
+  if (thoughtMode.value === 'full') {
+    thoughtMode.value = props.message.streaming ? 'peek' : 'collapsed';
+  } else {
+    thoughtMode.value = 'full';
+  }
+}
+
+// peek 态框内自动滚底:思考内容增长时跟随,用户在框内上滑(离底 >30px)则停跟。
+const thoughtScrollRef = ref<HTMLElement | null>(null);
+const thoughtFollow = ref(true);
+
+const thoughtContentLen = computed(() =>
+  thoughtSegments.value.reduce(
+    (n, seg) => n + (seg.type === 'tool' ? (seg.result?.length ?? 0) + seg.label.length : seg.content.length),
+    0,
+  ),
+);
+
+watch(thoughtContentLen, async () => {
+  if (thoughtMode.value !== 'peek' || !props.message.streaming || !thoughtFollow.value) return;
+  await nextTick();
+  const el = thoughtScrollRef.value;
+  if (el) el.scrollTop = el.scrollHeight;
+});
+
+function onThoughtScroll() {
+  const el = thoughtScrollRef.value;
+  if (!el) return;
+  thoughtFollow.value = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+}
 
 // 深度思考段逐段折叠(嵌套在已思考块内,与 tool 段同级交互):
 // 用户手动 toggle 记录在 reasoningToggles;未动过的段默认态 = 流式中最后一段
@@ -232,8 +269,8 @@ const emit = defineEmits<{
             <button
               type="button"
               class="thought-toggle"
-              :aria-expanded="thoughtCollapsed ? 'false' : 'true'"
-              @click="thoughtCollapsed = !thoughtCollapsed"
+              :aria-expanded="thoughtMode === 'collapsed' ? 'false' : 'true'"
+              @click="toggleThought"
             >
               <!-- 流式中:旋转齿轮 + 「思考中…」;结束:静态图标 + 「已思考 N 步」 -->
               <svg
@@ -257,7 +294,7 @@ const emit = defineEmits<{
               </span>
               <svg
                 class="thought-chevron"
-                :class="{ 'is-open': !thoughtCollapsed }"
+                :class="{ 'is-open': thoughtMode !== 'collapsed' }"
                 width="14" height="14" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
               >
@@ -265,8 +302,15 @@ const emit = defineEmits<{
               </svg>
             </button>
 
-            <!-- 思考过程段:展开时按序渲染(reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
-            <div v-show="!thoughtCollapsed" class="thought-content">
+            <!-- 思考过程段:peek=限高滚动框(流式跟随),full=全部展开;按序渲染
+                 (reasoning 深度思考 + text 思考文本小字灰 + tool 调用条) -->
+            <div
+              v-show="thoughtMode !== 'collapsed'"
+              ref="thoughtScrollRef"
+              class="thought-content"
+              :class="{ 'is-peek': thoughtMode === 'peek' }"
+              @scroll="onThoughtScroll"
+            >
               <template v-for="(seg, idx) in thoughtSegments" :key="idx">
                 <!-- 深度思考段:独立下拉折叠(与 tool 段同级)——标题行=徽标+单行预览,展开看全文 -->
                 <div v-if="seg.type === 'reasoning'" class="reasoning-item">
@@ -617,6 +661,13 @@ const emit = defineEmits<{
 .thought-content {
   padding: 4px 12px 10px 12px;
   border-top: 1px solid var(--border-l1);
+}
+
+/* peek 态:固定高度展示框,内容在框内滚动(流式思考中默认);
+   full 态不限高,全部展示 */
+.thought-content.is-peek {
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* 思考文本段:小字、浅灰,与主气泡正文区分 */

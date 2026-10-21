@@ -22,6 +22,16 @@ const { toasts, error } = useToast();
 const inputValue = ref('');
 const isInitializing = ref(true);
 
+// 回到底部按钮:输出中且用户已上滑离开底部时,在输入框上方显示,点击跳回底部并恢复跟随。
+// 状态由 ChatMessageList 暴露(滚动容器在其中)。
+const msgListRef = ref<InstanceType<typeof ChatMessageList> | null>(null);
+const showJumpBottom = computed(
+  () => isLoading.value && (msgListRef.value?.isFarFromBottom ?? false),
+);
+const jumpToBottom = () => {
+  void msgListRef.value?.scrollToBottom();
+};
+
 // 记忆/订阅/技能/任务弹窗本地状态(设置弹窗走 settingsStore.showSettingsPanel)
 const showMemoryDrawer = ref(false);
 const showJournalDrawer = ref(false);
@@ -128,6 +138,7 @@ const handleSend = async (content: string) => {
       <!-- 有消息:列表 + 底部输入框 -->
       <template v-else>
         <ChatMessageList
+          ref="msgListRef"
           :messages="messages as Message[]"
           :is-loading="isInitializing || isLoading"
           :has-more-history="hasMoreHistory"
@@ -141,6 +152,21 @@ const handleSend = async (content: string) => {
         </ChatMessageList>
 
         <div class="bottom-input">
+          <!-- 回到底部悬浮按钮(输出中且已上滑时出现) -->
+          <transition name="jump-fade">
+            <button
+              v-if="showJumpBottom"
+              type="button"
+              class="jump-bottom"
+              aria-label="回到底部"
+              title="回到底部"
+              @click="jumpToBottom"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+          </transition>
           <ChatInput
             v-model="inputValue"
             :placeholder="inputPlaceholder"
@@ -251,7 +277,44 @@ const handleSend = async (content: string) => {
 
 /* ===== 有消息:底部固定输入区 ===== */
 .bottom-input {
+  position: relative; /* 回到底部按钮的定位锚 */
   flex-shrink: 0;
   padding: 8px 0 16px;
+}
+
+/* 回到底部悬浮按钮:白底圆形 + 向下箭头,悬于输入框上方居中 */
+.jump-bottom {
+  position: absolute;
+  top: -46px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 0.5px solid var(--border-l2);
+  background: var(--bg-base);
+  color: var(--label-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  z-index: 10;
+  transition: color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.jump-bottom:hover {
+  color: var(--label-primary);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+}
+
+.jump-fade-enter-active,
+.jump-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.jump-fade-enter-from,
+.jump-fade-leave-to {
+  opacity: 0;
 }
 </style>
