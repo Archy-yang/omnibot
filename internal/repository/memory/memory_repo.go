@@ -38,6 +38,9 @@ type MemoryRepository interface {
 	// TransitionLoopStatus loop 生命周期迁移(M8 §14.2.2):仅当当前状态=fromStatus 时置为
 	// toStatus(只对 kind=loop 生效)。返回是否发生迁移(幂等:重复关闭/重开返回 false)。
 	TransitionLoopStatus(id int64, userID int64, fromStatus, toStatus string) (bool, error)
+	// CloseOpenLoopsByMatter 档案完结级联(28号 N1):关闭该档案下全部 open loops,
+	// 返回关闭条数(孤儿 loop——matter_id 为空——不在此列,走 CloseLoopByQuery 单独收)。
+	CloseOpenLoopsByMatter(userID, matterID int64) (int64, error)
 	// ListPinnedAutoByUserID 置顶的自动记忆(M8.3 常驻 core;pinned_at 倒序,新近置顶优先)。
 	ListPinnedAutoByUserID(userID int64) ([]*memorydomain.Memory, error)
 	// ListJournal 时间轴查询(21号 §5.1):有效时间=COALESCE(happened_at,created_at) 降序;
@@ -255,6 +258,18 @@ func (r *memoryRepository) TransitionLoopStatus(id int64, userID int64, fromStat
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil
+}
+
+// CloseOpenLoopsByMatter 档案完结级联(28号 N1):matter → done 时其下 open loops 联动 closed。
+func (r *memoryRepository) CloseOpenLoopsByMatter(userID, matterID int64) (int64, error) {
+	res := r.db.Model(&memorydomain.Memory{}).
+		Where("user_id = ? AND matter_id = ? AND kind = ? AND loop_status = ?",
+			userID, matterID, memorydomain.MemoryKindLoop, memorydomain.MemoryLoopStatusOpen).
+		Update("loop_status", memorydomain.MemoryLoopStatusClosed)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 // ListPinnedAutoByUserID 置顶的自动记忆(M8.3 常驻 core;pinned_at 倒序)。

@@ -25,8 +25,10 @@ type Matter struct {
 	FeishuDocToken string     `gorm:"size:128"`
 	FeishuDocURL   string     `gorm:"size:512"`
 	SyncedAt       *time.Time
-	CreatedAt      time.Time `gorm:"not null"`
-	UpdatedAt      time.Time `gorm:"not null"`
+	// 28号 N2:目标日(28号方案 A:目标 = target_at 非空的 matter;null = 普通事项)
+	TargetAt  *time.Time `gorm:"index"`
+	CreatedAt time.Time  `gorm:"not null"`
+	UpdatedAt time.Time  `gorm:"not null"`
 }
 
 func (Matter) TableName() string {

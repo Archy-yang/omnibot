@@ -16,6 +16,9 @@ const (
 	NoteKindMatterDue      = "matter_due"       // 事项将到期/临近信号
 	NoteKindLoopStale      = "loop_stale"       // 未决 loop 搁置太久
 	NoteKindRecentFollowup = "recent_followup"  // 近况值得跟进
+	// NoteKindCloseSuggest 收口建议(28号 N1):事项/待办时间线已有结论,建议用户确认后收口。
+	// dedup_key 加 :close 后缀,与普通提醒同一 7 天冷却池。
+	NoteKindCloseSuggest = "close_suggest"
 )
 
 // ProactiveNote 主动开口记录。

@@ -9,8 +9,8 @@ package api
 // newAgentLLMClient)也随之收拢到本文件。
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -370,6 +370,19 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateMatterDocSyncTool(matterDocSyncAdapter{svc: docSyncSvc})
 	})
+	// 档案/待办收口(28号 N1):对话内承接"这事结了/收掉吧"。红线:仅用户对话确认触发,
+	// 系统侧(管线/调度)严禁调用;memoryService 实现经窄接口断言注入。
+	if ms, ok := memorySvc.(interface {
+		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
+		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
+	}); ok {
+		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+			return agenttools.CreateManageMatterTool(matterSettleAdapter{svc: ms})
+		})
+		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+			return agenttools.CreateCloseLoopTool(matterSettleAdapter{svc: ms})
+		})
+	}
 	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
 	// Docker 客户端初始化失败(如 DOCKER_HOST 非法)仅告警跳过注册——工具隐藏,不影响启动
 	if sandboxAPI, sbErr := sandboxsvc.NewDefaultAPIClient(); sbErr != nil {
@@ -650,4 +663,25 @@ func (a matterDocSyncAdapter) SyncMatter(ctx context.Context, userID, matterID i
 		return agenttools.MatterDocSyncResult{}, agenttools.ErrMatterDocUnauthorized
 	}
 	return agenttools.MatterDocSyncResult{DocURL: r.DocURL, Created: r.Created, SyncedAt: r.SyncedAt}, err
+}
+
+// matterSettleAdapter memoryService → agenttools.MatterLifecycleManager 窄接口适配
+// (28号 N1):sentinel 错误翻译成模型可读文案;收口动作仅经工具由用户对话确认触发。
+type matterSettleAdapter struct {
+	svc interface {
+		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
+		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
+	}
+}
+
+func (a matterSettleAdapter) SettleMatter(ctx context.Context, userID, matterID int64, action string) (agenttools.MatterSettleResult, error) {
+	r, err := a.svc.SettleMatter(ctx, userID, matterID, action)
+	if errors.Is(err, memoryService.ErrMatterNotFound) {
+		return agenttools.MatterSettleResult{}, agenttools.ErrMatterLifecycleNotFound
+	}
+	return agenttools.MatterSettleResult{Title: r.Title, Status: r.Status, CascadedLoops: r.CascadedLoops}, err
+}
+
+func (a matterSettleAdapter) CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error) {
+	return a.svc.CloseLoopByQuery(ctx, userID, query)
 }
