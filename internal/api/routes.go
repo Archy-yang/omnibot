@@ -170,6 +170,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		styleProfileGroup.Use(middleware.AuthRequired(d.jwtSvc))
 		{
 			styleProfileGroup.GET("", d.webHandler.HandleGetStyleProfile)
+			styleProfileGroup.PUT("/injection", d.webHandler.HandleUpdateStyleInjection) // M2 注入开关
 			styleProfileGroup.DELETE("/observation/:id", d.webHandler.HandleDeleteStyleObservation)
 			styleProfileGroup.DELETE("/change/:id", d.webHandler.HandleDeleteCognitionChange)
 		}
