@@ -13,6 +13,9 @@ type UserRepository interface {
 	Update(u *user.User) error
 	// ListProactiveEnabled 开启主动管家的用户清单(26 号调度器枚举用)。
 	ListProactiveEnabled() ([]*user.User, error)
+	// 24 号 M2 风格注入开关(窄面读写;memoryService 经 StyleInjectionStore 消费)。
+	GetStyleInjectionEnabled(id int64) (bool, error)
+	SetStyleInjectionEnabled(id int64, enabled bool) error
 }
 
 // GormUserRepository GORM 实现
@@ -55,4 +58,17 @@ func (r *GormUserRepository) ListProactiveEnabled() ([]*user.User, error) {
 	var out []*user.User
 	err := r.db.Where("proactive_enabled = ?", true).Find(&out).Error
 	return out, err
+}
+
+func (r *GormUserRepository) GetStyleInjectionEnabled(id int64) (bool, error) {
+	var u user.User
+	if err := r.db.Select("style_injection_enabled").First(&u, id).Error; err != nil {
+		return false, err
+	}
+	return u.StyleInjectionEnabled, nil
+}
+
+func (r *GormUserRepository) SetStyleInjectionEnabled(id int64, enabled bool) error {
+	return r.db.Model(&user.User{}).Where("id = ?", id).
+		Update("style_injection_enabled", enabled).Error
 }

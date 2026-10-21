@@ -185,9 +185,12 @@ watch(activeSection, (v) => {
   if (v === 'style-profile') loadStyleProfile();
 });
 
-// ===== 风格与认知画像(24 号 M1) =====
+// ===== 风格与认知画像(24 号 M1)+ 注入开关(M2) =====
 const spView = ref<StyleProfileView | null>(null);
 const spLoading = ref(false);
+// M2 注入开关(红线:默认关,显式开启才注入;关 = 完全回通用 persona,无残留)
+const spInjectOn = ref(false);
+const spInjectSaving = ref(false);
 
 const dimensionLabel = (d: string): string =>
   ({ tone: '语气', length: '长度', formality: '礼节', humor: '幽默', format: '格式', address: '称呼' })[d] ?? '观察';
@@ -206,11 +209,29 @@ const getStyleErr = (err: unknown): string =>
 const loadStyleProfile = async (): Promise<void> => {
   spLoading.value = true;
   try {
-    spView.value = await styleProfileService.getProfile();
+    const { profile, injectionEnabled } = await styleProfileService.getProfile();
+    spView.value = profile;
+    spInjectOn.value = injectionEnabled;
   } catch (err) {
     error(getStyleErr(err));
   } finally {
     spLoading.value = false;
+  }
+};
+
+// M2 注入开关 toggle:立即 PUT 生效(无需保存按钮);失败回滚 UI 态
+const handleToggleStyleInjection = async (evt: Event): Promise<void> => {
+  const next = (evt.target as HTMLInputElement).checked;
+  spInjectSaving.value = true;
+  try {
+    await styleProfileService.setInjection(next);
+    spInjectOn.value = next;
+    success(next ? '已开启风格参考' : '已关闭风格参考');
+  } catch (err) {
+    (evt.target as HTMLInputElement).checked = !next; // 回滚 checkbox
+    error(getStyleErr(err));
+  } finally {
+    spInjectSaving.value = false;
   }
 };
 
@@ -937,7 +958,22 @@ const showEmbeddingApiKey = ref(false);
     <!-- ===== 风格与认知 section(24-风格与认知演化证据层) ===== -->
     <div v-show="activeSection === 'style-profile'" class="section-pane">
     <div class="section-title">风格与认知</div>
-    <p class="section-hint">助手从你们的长期对话中总结的沟通风格观察与偏好变化记录。这些只是原始观察,不会被自动使用;你可以随时删除不准确的记录。</p>
+    <p class="section-hint">助手从你们的长期对话中总结的沟通风格观察与偏好变化记录。这些只是原始观察;你可以随时删除不准确的记录。</p>
+
+    <!-- M2 注入开关:立即生效,无需保存;默认关 -->
+    <div class="form-field">
+      <label class="thinking-toggle">
+        <input
+          type="checkbox"
+          class="thinking-checkbox"
+          :checked="spInjectOn"
+          :disabled="spInjectSaving"
+          @change="handleToggleStyleInjection"
+        />
+        <span>回复时参考我的沟通风格</span>
+      </label>
+      <div class="form-hint">{{ spInjectOn ? '已开启:助手回复时会把下方观察作为参考(不机械执行)。关掉即恢复默认,随时可回滚。' : '默认关闭。开启后,助手才会参考这些观察;关闭无任何残留。' }}</div>
+    </div>
 
     <div v-if="spLoading" class="form-hint">加载中...</div>
     <template v-else>

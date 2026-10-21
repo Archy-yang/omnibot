@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from 'vue';
+import { ref, watch, nextTick, computed, onMounted } from 'vue';
 import type { ChatMessageListProps } from '@/types';
 import ChatMessage from './ChatMessage.vue';
 
@@ -56,6 +56,46 @@ watch(
   }
 );
 onMounted(scrollToBottom);
+
+// 流式内容增长跟随:消息条数不变但正文/思考/工具结果 chunk 持续到达,
+// 需按内容增长滚动(scrollToBottom 内部有 shouldAutoScroll 闸——用户上滑看
+// 历史后自动停跟,重新回到底部附近才恢复)。
+const streamTick = computed(() => {
+  let n = 0;
+  for (const m of props.messages) {
+    if (!m.streaming) continue;
+    n += m.content.length;
+    for (const s of m.segments ?? []) {
+      if (s.type === 'tool') {
+        n += s.label.length + (s.result?.length ?? 0);
+      } else {
+        n += s.content.length;
+      }
+    }
+  }
+  return n;
+});
+watch(streamTick, () => {
+  void scrollToBottom();
+});
+
+// ===== 回到底部按钮(供 ChatPage 在输入框上方渲染) =====
+// 是否已离开底部(跟随已停止):流式输出中且离底时显示箭头按钮
+const isFarFromBottom = computed(() => !shouldAutoScroll.value);
+// 强制回底:恢复跟随并立即滚动(不受 shouldAutoScroll 闸限制)
+const forceScrollToBottom = async () => {
+  shouldAutoScroll.value = true;
+  await nextTick();
+  if (containerRef.value) {
+    containerRef.value.scrollTop = containerRef.value.scrollHeight;
+  }
+};
+defineExpose({
+  /** 强制滚动到底部并恢复自动跟随 */
+  scrollToBottom: forceScrollToBottom,
+  /** 是否已离开底部(跟随停止) */
+  isFarFromBottom,
+});
 
 const examplePrompts = [
   { title: '解释一个概念', subtitle: '用通俗的语言解释「量子纠缠」' },
