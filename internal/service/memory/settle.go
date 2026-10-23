@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	memorydomain "omnibot/internal/domain/memory"
 
@@ -104,4 +105,24 @@ func (s *memoryService) CloseLoopByQuery(ctx context.Context, userID int64, quer
 		return nil, false, nil // CAS 未命中(并发已关):按零命中语义沉默
 	}
 	return nil, true, nil
+}
+
+// SetTargetMatter 设/清档案目标日(28号 N2,方案 §3.3):target nil = 清除(恢复普通事项)。
+// 目标必须挂既有档案(对话内建 matter 明确不做,§5)。
+func (s *memoryService) SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error) {
+	m, err := s.matterRepo.GetByID(userID, matterID)
+	if err != nil {
+		return "", err
+	}
+	if m == nil {
+		return "", ErrMatterNotFound
+	}
+	ok, err := s.matterRepo.UpdateTarget(userID, matterID, target)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrMatterNotFound
+	}
+	return m.Title, nil
 }

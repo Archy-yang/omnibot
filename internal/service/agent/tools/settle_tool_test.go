@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,14 +15,15 @@ import (
 )
 
 type fakeSettleManager struct {
-	result    MatterSettleResult
-	err       error
-	cands     []string
-	closed    bool
-	query     string
-	action    string
-	userID    int64
-	matterID  int64
+	result   MatterSettleResult
+	err      error
+	cands    []string
+	closed   bool
+	query    string
+	action   string
+	userID   int64
+	matterID int64
+	target   *time.Time
 }
 
 func (f *fakeSettleManager) SettleMatter(_ context.Context, userID, matterID int64, action string) (MatterSettleResult, error) {
@@ -32,6 +34,14 @@ func (f *fakeSettleManager) SettleMatter(_ context.Context, userID, matterID int
 func (f *fakeSettleManager) CloseLoopByQuery(_ context.Context, userID int64, query string) ([]string, bool, error) {
 	f.userID, f.query = userID, query
 	return f.cands, f.closed, f.err
+}
+
+func (f *fakeSettleManager) SetTargetMatter(_ context.Context, userID, matterID int64, target *time.Time) (string, error) {
+	f.userID, f.matterID, f.target = userID, matterID, target
+	if f.err != nil {
+		return "", f.err
+	}
+	return "完成体检", nil
 }
 
 func settleCtx(t *testing.T) context.Context {
@@ -125,5 +135,40 @@ func TestCloseLoopTool_ThreeStates(t *testing.T) {
 func TestCloseLoopTool_Unauthorized(t *testing.T) {
 	tool := CreateCloseLoopTool(&fakeSettleManager{err: ErrMatterLifecycleNotFound})
 	_, err := tool.Execute(settleCtx(t), map[string]interface{}{"loop_query": "x"})
+	require.ErrorIs(t, err, ErrMatterLifecycleNotFound)
+}
+
+// 28号 N2:set_target 设目标日。
+func TestManageMatterTool_SetTarget(t *testing.T) {
+	m := &fakeSettleManager{}
+	tool := CreateManageMatterTool(m)
+
+	out, err := tool.Execute(settleCtx(t), map[string]interface{}{
+		"matter_id": float64(10), "action": "set_target", "target_date": "2026-10-31",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), m.userID)
+	require.NotNil(t, m.target)
+	assert.Equal(t, "2026-10-31", m.target.Format("2006-01-02"))
+	assert.Contains(t, out, "完成体检")
+	assert.Contains(t, out, "2026-10-31")
+
+	// 缺 target_date / 非法格式
+	_, err = tool.Execute(settleCtx(t), map[string]interface{}{"matter_id": float64(10), "action": "set_target"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target_date")
+
+	_, err = tool.Execute(settleCtx(t), map[string]interface{}{
+		"matter_id": float64(10), "action": "set_target", "target_date": "月底",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YYYY-MM-DD")
+
+	// 未命中 sentinel 透传
+	m2 := &fakeSettleManager{err: ErrMatterLifecycleNotFound}
+	tool2 := CreateManageMatterTool(m2)
+	_, err = tool2.Execute(settleCtx(t), map[string]interface{}{
+		"matter_id": float64(999), "action": "set_target", "target_date": "2026-10-31",
+	})
 	require.ErrorIs(t, err, ErrMatterLifecycleNotFound)
 }

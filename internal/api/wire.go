@@ -370,11 +370,12 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateMatterDocSyncTool(matterDocSyncAdapter{svc: docSyncSvc})
 	})
-	// 档案/待办收口(28号 N1):对话内承接"这事结了/收掉吧"。红线:仅用户对话确认触发,
+	// 档案/待办收口(28号 N1/N2):对话内承接"这事结了/收掉吧/我要在X前完成Y"。红线:仅用户对话确认触发,
 	// 系统侧(管线/调度)严禁调用;memoryService 实现经窄接口断言注入。
 	if ms, ok := memorySvc.(interface {
 		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
 		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
+		SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error)
 	}); ok {
 		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 			return agenttools.CreateManageMatterTool(matterSettleAdapter{svc: ms})
@@ -666,11 +667,12 @@ func (a matterDocSyncAdapter) SyncMatter(ctx context.Context, userID, matterID i
 }
 
 // matterSettleAdapter memoryService → agenttools.MatterLifecycleManager 窄接口适配
-// (28号 N1):sentinel 错误翻译成模型可读文案;收口动作仅经工具由用户对话确认触发。
+// (28号 N1/N2):sentinel 错误翻译成模型可读文案;收口动作仅经工具由用户对话确认触发。
 type matterSettleAdapter struct {
 	svc interface {
 		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
 		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
+		SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error)
 	}
 }
 
@@ -684,4 +686,12 @@ func (a matterSettleAdapter) SettleMatter(ctx context.Context, userID, matterID 
 
 func (a matterSettleAdapter) CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error) {
 	return a.svc.CloseLoopByQuery(ctx, userID, query)
+}
+
+func (a matterSettleAdapter) SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error) {
+	title, err := a.svc.SetTargetMatter(ctx, userID, matterID, target)
+	if errors.Is(err, memoryService.ErrMatterNotFound) {
+		return "", agenttools.ErrMatterLifecycleNotFound
+	}
+	return title, err
 }

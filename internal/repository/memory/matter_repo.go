@@ -23,6 +23,8 @@ type MatterRepository interface {
 	ListByUserID(userID int64, status string) ([]*memorydomain.Matter, error)
 	// UpdateFields 用户纠正口(21号 §5.2):只允许 StateDesc/Status;nil=不改;返回是否命中。
 	UpdateFields(userID, id int64, stateDesc, status *string) (bool, error)
+	// UpdateTarget 目标日写路径(28号 N2):target nil=清除目标(恢复普通事项);返回是否命中。
+	UpdateTarget(userID, id int64, target *time.Time) (bool, error)
 	// UpdateDocInfo 文档同步信息回写(23号 §3)。
 	UpdateDocInfo(userID, id int64, token, url string, syncedAt time.Time) (bool, error)
 }
@@ -119,6 +121,22 @@ func (r *matterRepository) UpdateFields(userID, id int64, stateDesc, status *str
 		updates["status"] = *status
 	}
 	res := r.db.Model(&memorydomain.Matter{}).Where("user_id = ? AND id = ?", userID, id).Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// UpdateTarget 目标日写路径(28号 N2):target nil = 清除目标(恢复普通事项)。
+// 注意:gorm 对 typed-nil(*time.Time)(nil) 不按 NULL 处理,必须归一成无类型 nil。
+func (r *matterRepository) UpdateTarget(userID, id int64, target *time.Time) (bool, error) {
+	var val interface{}
+	if target != nil {
+		val = *target
+	}
+	res := r.db.Model(&memorydomain.Matter{}).
+		Where("user_id = ? AND id = ?", userID, id).
+		Update("target_at", val)
 	if res.Error != nil {
 		return false, res.Error
 	}

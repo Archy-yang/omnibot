@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"omnibot/internal/pkg/toolcore"
 )
@@ -30,15 +31,18 @@ type MatterLifecycleManager interface {
 	// CloseLoopByQuery 按关键词收口 open loop:唯一命中 closed=true;多命中返回候选;
 	// 零命中空列表。
 	CloseLoopByQuery(ctx context.Context, userID int64, query string) (candidates []string, closed bool, err error)
+	// SetTargetMatter 设/清目标日(28号 N2):target nil=清除。目标必须挂既有档案。
+	SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (title string, err error)
 }
 
 // CreateManageMatterTool 档案状态转移工具。
 func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 	return toolcore.Tool{
 		Name: "manage_matter",
-		Description: "管理个人档案(事项)的生命周期。用户表达\"这事结了/搞定了/完成了吧/别跟进X了\"时," +
+		Description: "管理个人档案(事项)的生命周期与目标。用户表达\"这事结了/搞定了/别跟进X了\"时," +
 			"先用 search_matters 找到对应档案 ID 再调用:close=完结(其下未决待办一并关闭);" +
-			"archive=搁置不再跟进;reopen=重新打开。拿不准用户是否真要收口时,先复述确认再调用。",
+			"archive=搁置不再跟进;reopen=重新打开;set_target=给档案设目标日(用户表达\"我要在X之前完成Y\")。" +
+			"拿不准用户是否真要收口时,先复述确认再调用。",
 		DisplayLabel: "更新了档案状态",
 		Capabilities: []string{toolcore.CapMemory},
 		Parameters: map[string]interface{}{
@@ -50,8 +54,12 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"close", "archive", "reopen"},
-					"description": "close=完结(级联关闭其下待办);archive=搁置;reopen=重开",
+					"enum":        []string{"close", "archive", "reopen", "set_target"},
+					"description": "close=完结(级联关闭其下待办);archive=搁置;reopen=重开;set_target=设目标日",
+				},
+				"target_date": map[string]interface{}{
+					"type":        "string",
+					"description": "action=set_target 时必填,目标日 YYYY-MM-DD",
 				},
 			},
 			"required": []string{"matter_id", "action"},
@@ -62,10 +70,13 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 				return "", fmt.Errorf("需要 matter_id(先用 search_matters 查询)")
 			}
 			action, _ := args["action"].(string)
-			if action != "close" && action != "archive" && action != "reopen" {
-				return "", fmt.Errorf("action 必须是 close/archive/reopen")
-			}
 			userID := toolcore.UserIDFromContext(ctx)
+			if action == "set_target" {
+				return manageMatterSetTarget(ctx, svc, userID, int64(id), args)
+			}
+			if action != "close" && action != "archive" && action != "reopen" {
+				return "", fmt.Errorf("action 必须是 close/archive/reopen/set_target")
+			}
 			res, err := svc.SettleMatter(ctx, userID, int64(id), action)
 			if err != nil {
 				return "", err // sentinel 已带模型可读文案;其余透传
@@ -86,6 +97,24 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 			return b.String(), nil
 		},
 	}
+}
+
+// manageMatterSetTarget set_target 分支:解析目标日(YYYY-MM-DD)并落库。
+func manageMatterSetTarget(ctx context.Context, svc MatterLifecycleManager, userID, matterID int64, args map[string]interface{}) (string, error) {
+	dateStr, _ := args["target_date"].(string)
+	target, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(dateStr), time.Local)
+	if err != nil {
+		return "", fmt.Errorf("target_date 需为 YYYY-MM-DD 格式(如 2026-10-31)")
+	}
+	title, err := svc.SetTargetMatter(ctx, userID, matterID, &target)
+	if err != nil {
+		return "", err
+	}
+	remain := int(time.Until(target).Hours() / 24)
+	if remain < 0 {
+		remain = 0
+	}
+	return fmt.Sprintf("已为「%s」设定目标日 %s(还有 %d 天);临近目标日管家会主动关注进度", title, target.Format("2006-01-02"), remain), nil
 }
 
 // CreateCloseLoopTool 待办(loop)收口工具——孤儿待办(未挂档案)的唯一对话内出口。
