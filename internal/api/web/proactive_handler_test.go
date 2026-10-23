@@ -12,6 +12,7 @@ import (
 
 	butlerdomain "omnibot/internal/domain/butler"
 	"omnibot/internal/middleware"
+	butlersvc "omnibot/internal/service/butler"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -37,6 +38,7 @@ func (m *mockProactive) UpdateSettings(_ int64, enabled bool, hour int) error {
 func (m *mockProactive) ListNotes(int64, int) ([]*butlerdomain.ProactiveNote, error) {
 	return m.notes, nil
 }
+func (m *mockProactive) SetNoteFeedback(int64, int64, string) error { return nil }
 
 func setupProactiveRouter(svc ProactiveSettingsAPIService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -124,3 +126,78 @@ func TestProactiveAPI_ServiceNotWired(t *testing.T) {
 }
 
 var _ = time.Now // 保留 time 引用(未来断言扩展)
+
+// 29号 N3:送达反馈 PUT /proactive-notes/:id/feedback——三态契约 + 400/404。
+type feedbackMock struct {
+	mockProactive
+	fbID int64
+	fb   string
+	err  error
+}
+
+func (m *feedbackMock) SetNoteFeedback(_ int64, id int64, feedback string) error {
+	m.fbID, m.fb = id, feedback
+	if m.err != nil {
+		return m.err
+	}
+	// 模拟 service 校验语义:非法值 → ErrNoteFeedbackInvalid
+	switch feedback {
+	case "positive", "negative", "clear", "":
+		return nil
+	default:
+		return butlersvc.ErrNoteFeedbackInvalid
+	}
+}
+
+func TestProactiveNotesAPI_SetFeedback(t *testing.T) {
+	svc := &feedbackMock{}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.AuthUserIDKey, int64(42))
+		c.Next()
+	})
+	h := &Handler{}
+	h.SetProactiveService(svc)
+	r.PUT("/api/v1/proactive-notes/:id/feedback", h.HandleSetNoteFeedback)
+
+	// negative
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/proactive-notes/7/feedback",
+		strings.NewReader(`{"feedback": "negative"}`))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, int64(7), svc.fbID)
+	assert.Equal(t, "negative", svc.fb)
+
+	// clear(撤销)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/proactive-notes/7/feedback",
+		strings.NewReader(`{"feedback": "clear"}`))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "clear", svc.fb)
+
+	// 非法值 → 400
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/proactive-notes/7/feedback",
+		strings.NewReader(`{"feedback": "meh"}`))
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 未命中 → 404
+	svc2 := &feedbackMock{err: butlersvc.ErrNoteNotFound}
+	r2 := gin.New()
+	r2.Use(func(c *gin.Context) {
+		c.Set(middleware.AuthUserIDKey, int64(42))
+		c.Next()
+	})
+	h2 := &Handler{}
+	h2.SetProactiveService(svc2)
+	r2.PUT("/api/v1/proactive-notes/:id/feedback", h2.HandleSetNoteFeedback)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/proactive-notes/99/feedback",
+		strings.NewReader(`{"feedback": "positive"}`))
+	r2.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}

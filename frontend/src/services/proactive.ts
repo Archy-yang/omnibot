@@ -20,6 +20,8 @@ export interface ProactiveNoteItem {
   status: string;
   dedup_key: string;
   matter_id?: number;
+  /** 29号 N3:positive/negative/空(未反馈或已撤销) */
+  feedback?: string;
   created_at: string;
 }
 
@@ -48,5 +50,10 @@ export const proactiveService = {
       { params: { limit } },
     );
     return response.data.data.notes;
+  },
+
+  /** 29号 N3:送达反馈(positive/negative;clear=撤销) */
+  async setNoteFeedback(id: number, feedback: 'positive' | 'negative' | 'clear'): Promise<void> {
+    await request.put<ApiResponse<void>>(`/proactive-notes/${id}/feedback`, { feedback });
   },
 };

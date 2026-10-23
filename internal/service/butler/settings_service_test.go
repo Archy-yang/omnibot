@@ -80,3 +80,27 @@ func TestSettingsService_ListNotes(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, "matter:42", list[0].DedupKey)
 }
+
+// 29号 N3:反馈写入口三态(positive/negative/clear)+ 非法值 + 归属未命中。
+func TestSetNoteFeedback(t *testing.T) {
+	svc, _, notes := newSettingsService()
+	note := &butlerdomain.ProactiveNote{UserID: 42, DedupKey: "matter:1", Status: butlerdomain.NoteStatusDelivered, CreatedAt: scanTime()}
+	require.NoError(t, notes.Create(note))
+
+	require.NoError(t, svc.SetNoteFeedback(42, note.ID, butlerdomain.NoteFeedbackNegative))
+	assert.Equal(t, butlerdomain.NoteFeedbackNegative, notes.notes[0].Feedback)
+
+	require.NoError(t, svc.SetNoteFeedback(42, note.ID, "clear"))
+	assert.Empty(t, notes.notes[0].Feedback, "clear 撤销反馈")
+
+	require.NoError(t, svc.SetNoteFeedback(42, note.ID, butlerdomain.NoteFeedbackPositive))
+	assert.Equal(t, butlerdomain.NoteFeedbackPositive, notes.notes[0].Feedback)
+
+	// 非法值
+	err := svc.SetNoteFeedback(42, note.ID, "meh")
+	require.ErrorIs(t, err, ErrNoteFeedbackInvalid)
+
+	// 未命中(他人/不存在)
+	require.ErrorIs(t, svc.SetNoteFeedback(42, 999, "positive"), ErrNoteNotFound)
+	require.ErrorIs(t, svc.SetNoteFeedback(43, note.ID, "positive"), ErrNoteNotFound)
+}

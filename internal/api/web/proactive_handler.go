@@ -5,11 +5,13 @@ package web
 // 归属隔离:userID 一律取自 auth,不信参数。
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	butlerdomain "omnibot/internal/domain/butler"
 	"omnibot/internal/middleware"
+	butlersvc "omnibot/internal/service/butler"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,6 +21,7 @@ type ProactiveSettingsAPIService interface {
 	GetSettings(userID int64) (enabled bool, hour int, err error)
 	UpdateSettings(userID int64, enabled bool, hour int) error
 	ListNotes(userID int64, limit int) ([]*butlerdomain.ProactiveNote, error)
+	SetNoteFeedback(userID, noteID int64, feedback string) error
 }
 
 // SetProactiveService 注入主动管家设置服务(wire.go)。
@@ -82,6 +85,7 @@ type ProactiveNoteView struct {
 	Status    string `json:"status"`
 	DedupKey  string `json:"dedup_key"`
 	MatterID  *int64 `json:"matter_id"`
+	Feedback  string `json:"feedback"` // positive/negative/空(29号 N3)
 	CreatedAt string `json:"created_at"`
 }
 
@@ -105,9 +109,44 @@ func (h *Handler) HandleListProactiveNotes(c *gin.Context) {
 	for _, n := range list {
 		views = append(views, ProactiveNoteView{
 			ID: n.ID, Kind: n.Kind, Content: n.Content, Status: n.Status,
-			DedupKey: n.DedupKey, MatterID: n.MatterID,
+			DedupKey: n.DedupKey, MatterID: n.MatterID, Feedback: n.Feedback,
 			CreatedAt: n.CreatedAt.Format("2006-01-02 15:04"),
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "notes": views})
+}
+
+// HandleSetNoteFeedback PUT /api/v1/proactive-notes/:id/feedback(29号 N3,方案 §3.4):
+// 送达反馈 positive/negative/clear(撤销);单条覆盖写,negative 驱动裁决冷却 7→30 天。
+func (h *Handler) HandleSetNoteFeedback(c *gin.Context) {
+	if h.proactiveService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "主动管家服务未装配"})
+		return
+	}
+	userID := c.GetInt64(middleware.AuthUserIDKey)
+	noteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || noteID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "记录 ID 非法"})
+		return
+	}
+	var req struct {
+		Feedback string `json:"feedback"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请求体非法"})
+		return
+	}
+	if err := h.proactiveService.SetNoteFeedback(userID, noteID, req.Feedback); err != nil {
+		if errors.Is(err, butlersvc.ErrNoteFeedbackInvalid) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "feedback 取值非法(positive/negative/clear)"})
+			return
+		}
+		if errors.Is(err, butlersvc.ErrNoteNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "记录不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "写入反馈失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "id": noteID, "feedback": req.Feedback})
 }

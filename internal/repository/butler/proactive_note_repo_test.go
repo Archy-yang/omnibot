@@ -111,3 +111,46 @@ func TestProactiveNoteRepository_HasDeliveredSince(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, hit, "他人记录不应影响")
 }
+
+// 29号 N3:反馈写入口(归属隔离)+ 冷却消费面(该键最近一条 delivered 反馈)。
+func TestSetFeedback_AndLatestFeedbackForKey(t *testing.T) {
+	db := setupNoteTestDB(t)
+	repo := NewProactiveNoteRepository(db)
+
+	n1 := newNote(1, domain.NoteKindMatterDue, "matter:42", domain.NoteStatusDelivered, time.Now().Add(-48*time.Hour))
+	require.NoError(t, repo.Create(n1))
+
+	// 归属隔离:他人改不动
+	ok, err := repo.SetFeedback(2, n1.ID, domain.NoteFeedbackNegative)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	// 写入 + 消费面命中
+	ok, err = repo.SetFeedback(1, n1.ID, domain.NoteFeedbackNegative)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	fb, err := repo.LatestFeedbackForKey(1, "matter:42")
+	require.NoError(t, err)
+	assert.Equal(t, domain.NoteFeedbackNegative, fb)
+
+	// 撤销反馈(clear → 空串)后消费面归零
+	_, err = repo.SetFeedback(1, n1.ID, "")
+	require.NoError(t, err)
+	fb, err = repo.LatestFeedbackForKey(1, "matter:42")
+	require.NoError(t, err)
+	assert.Empty(t, fb)
+
+	// skipped(从未送达)的反馈不参与冷却消费
+	n2 := newNote(1, domain.NoteKindMatterDue, "matter:42", domain.NoteStatusSkipped, time.Now())
+	require.NoError(t, repo.Create(n2))
+	_, err = repo.SetFeedback(1, n2.ID, domain.NoteFeedbackNegative)
+	require.NoError(t, err)
+	fb, err = repo.LatestFeedbackForKey(1, "matter:42")
+	require.NoError(t, err)
+	assert.Empty(t, fb, "delivered 才参与冷却消费")
+
+	// 无任何反馈
+	fb, err = repo.LatestFeedbackForKey(1, "matter:999")
+	require.NoError(t, err)
+	assert.Empty(t, fb)
+}
