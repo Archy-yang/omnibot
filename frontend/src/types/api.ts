@@ -545,6 +545,8 @@ export interface MatterSummary {
   /** 23号:已同步的飞书文档 */
   doc_url?: string;
   synced_at?: string;
+  /** 28号:目标日(非空 = 目标事项) */
+  target_at?: string | null;
 }
 
 /** 主题档案详情:元信息 + 演进时间线 */
@@ -557,6 +559,8 @@ export interface MatterDetail {
   memory_count: number;
   doc_url?: string;
   synced_at?: string;
+  /** 28号:目标日(非空 = 目标事项) */
+  target_at?: string | null;
   timeline: JournalItem[];
 }
 

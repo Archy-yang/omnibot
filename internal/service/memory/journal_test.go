@@ -176,6 +176,28 @@ func TestMatters_ListAndDetail(t *testing.T) {
 	assert.Equal(t, "置顶", detail.Timeline[0].Content, "pinned 前置")
 	assert.Equal(t, "早", detail.Timeline[1].Content, "其余有效时间升序")
 
+	// 28号 N3:target_at 随列表/详情回显;普通事项为 nil
+	assert.Nil(t, byTitle["旅行"].TargetAt, "未设目标为 nil")
+	target := time.Date(2026, 10, 31, 0, 0, 0, 0, time.Local)
+	mm.TargetAt = &target
+	ok, err := matterRepo.UpdateTarget(42, mm.ID, &target)
+	require.NoError(t, err)
+	require.True(t, ok)
+	list2, err := svc.Matters(42, "")
+	require.NoError(t, err)
+	var withTarget *MatterSummary
+	for i := range list2 {
+		if list2[i].ID == mm.ID {
+			withTarget = &list2[i]
+		}
+	}
+	require.NotNil(t, withTarget)
+	require.NotNil(t, withTarget.TargetAt, "已设目标应回显")
+	assert.True(t, withTarget.TargetAt.Equal(target))
+	detail2, err := svc.MatterDetail(42, mm.ID)
+	require.NoError(t, err)
+	require.NotNil(t, detail2.TargetAt, "详情应回显目标日")
+
 	_, err = svc.MatterDetail(99, mm.ID)
 	assert.ErrorIs(t, err, ErrMatterNotFound, "他人档案按未找到处理")
 }
