@@ -11,6 +11,12 @@ const (
 	NoteStatusSkipped   = "skipped"   // 裁决通过但被克制闸门拦下(冷却中/超日限)
 )
 
+// NoteFeedback 送达反馈取值(29号 N3:用户对主动消息的 👍/👎;空=未反馈/已撤销)。
+const (
+	NoteFeedbackPositive = "positive"
+	NoteFeedbackNegative = "negative"
+)
+
 // NoteKind 信号类型
 const (
 	NoteKindMatterDue      = "matter_due"       // 事项将到期/临近信号

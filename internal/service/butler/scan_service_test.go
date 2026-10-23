@@ -72,6 +72,28 @@ func (m *memNoteRepo) HasDeliveredSince(_ int64, dedupKey string, since time.Tim
 	}
 	return false, nil
 }
+func (m *memNoteRepo) SetFeedback(userID, id int64, feedback string) (bool, error) {
+	for _, note := range m.notes {
+		if note.ID == id && note.UserID == userID {
+			note.Feedback = feedback
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memNoteRepo) LatestFeedbackForKey(_ int64, dedupKey string) (string, error) {
+	var latest string
+	var latestAt time.Time
+	for _, note := range m.notes {
+		if note.DedupKey == dedupKey && note.Status == butlerdomain.NoteStatusDelivered &&
+			note.Feedback != "" && !note.CreatedAt.Before(latestAt) {
+			latest, latestAt = note.Feedback, note.CreatedAt
+		}
+	}
+	return latest, nil
+}
+
 func (m *memNoteRepo) ListRecent(_ int64, limit int) ([]*butlerdomain.ProactiveNote, error) {
 	if limit <= 0 || limit > len(m.notes) {
 		limit = len(m.notes)

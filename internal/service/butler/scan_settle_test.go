@@ -3,7 +3,9 @@ package butler
 // 28号 N1 完结裁决测试:close_suggest 输出解析 + dedup_key 后缀归属解析 + 信号行最后动静/目标紧迫度。
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	butlerdomain "omnibot/internal/domain/butler"
 	memorydomain "omnibot/internal/domain/memory"
@@ -93,4 +95,40 @@ func TestAdjudicationPrompt_GoalNudgeInstructions(t *testing.T) {
 	assert.Contains(t, adjudicationSystemPrompt, "goal_nudge")
 	assert.Contains(t, adjudicationSystemPrompt, ":goal", "dedup_key 后缀约定要写进 prompt")
 	assert.Contains(t, adjudicationSystemPrompt, "具体可执行", "推进建议禁空泛的红线要写进 prompt")
+}
+
+// 29号 N3:该 dedup_key 最近一条 delivered 反馈为 negative → 冷却窗 7 天 → 30 天;
+// positive 不改变窗口(负反馈优先,防正反馈通胀)。
+func TestRunOnce_NegativeFeedback_ExtendsCooldown(t *testing.T) {
+	tenDaysAgo := scanTime().Add(-10 * 24 * time.Hour)
+	notes := &memNoteRepo{notes: []*butlerdomain.ProactiveNote{{
+		UserID: 1, Kind: butlerdomain.NoteKindMatterDue, Content: "十天前提过,用户点了没用",
+		DedupKey: "matter:42", Status: butlerdomain.NoteStatusDelivered,
+		Feedback:  butlerdomain.NoteFeedbackNegative,
+		CreatedAt: tenDaysAgo, DeliveredAt: ptrTime(tenDaysAgo),
+	}}}
+	svc := newTestService(&stubMatters{list: []*memorydomain.Matter{{ID: 42, Title: "项目方案", StateDesc: "周五前交"}}},
+		&stubMemoriesReal{}, &stubLLM{out: sendTrueJSON}, notes, enabledUser(9))
+
+	note, err := svc.RunOnce(context.Background(), 1, scanTime())
+	require.NoError(t, err)
+	require.NotNil(t, note)
+	assert.Equal(t, butlerdomain.NoteStatusSkipped, note.Status, "negative 冷却 30 天:10 天前同键开口应拦下(7 天窗已放行)")
+}
+
+func TestRunOnce_PositiveFeedback_DoesNotExtendCooldown(t *testing.T) {
+	tenDaysAgo := scanTime().Add(-10 * 24 * time.Hour)
+	notes := &memNoteRepo{notes: []*butlerdomain.ProactiveNote{{
+		UserID: 1, Kind: butlerdomain.NoteKindMatterDue, Content: "十天前提过,用户说有用",
+		DedupKey: "matter:42", Status: butlerdomain.NoteStatusDelivered,
+		Feedback:  butlerdomain.NoteFeedbackPositive,
+		CreatedAt: tenDaysAgo, DeliveredAt: ptrTime(tenDaysAgo),
+	}}}
+	svc := newTestService(&stubMatters{list: []*memorydomain.Matter{{ID: 42, Title: "项目方案", StateDesc: "周五前交"}}},
+		&stubMemoriesReal{}, &stubLLM{out: sendTrueJSON}, notes, enabledUser(9))
+
+	note, err := svc.RunOnce(context.Background(), 1, scanTime())
+	require.NoError(t, err)
+	require.NotNil(t, note)
+	assert.Equal(t, butlerdomain.NoteStatusDelivered, note.Status, "positive 不延长冷却窗:10 天前 > 7 天应放行")
 }

@@ -121,6 +121,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	proNotesGroup.Use(middleware.AuthRequired(d.jwtSvc))
 	{
 		proNotesGroup.GET("", d.webHandler.HandleListProactiveNotes)
+		proNotesGroup.PUT("/:id/feedback", d.webHandler.HandleSetNoteFeedback) // 29号 N3 送达反馈
 	}
 
 	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。

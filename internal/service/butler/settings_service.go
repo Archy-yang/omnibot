@@ -5,6 +5,7 @@ package butler
 // 红线:默认关闭;关闭 = 立即静默(只是开关翻转,无残留)。
 
 import (
+	"errors"
 	"fmt"
 
 	butlerdomain "omnibot/internal/domain/butler"
@@ -54,4 +55,32 @@ func (s *SettingsService) UpdateSettings(userID int64, enabled bool, hour int) e
 // ListNotes 最近主动记录(设置页列表;limit<=0 默认 20)。
 func (s *SettingsService) ListNotes(userID int64, limit int) ([]*butlerdomain.ProactiveNote, error) {
 	return s.notes.ListRecent(userID, limit)
+}
+
+// 反馈写入口哨兵(29号 N3)。
+var (
+	ErrNoteNotFound        = errors.New("butler: 记录不存在")
+	ErrNoteFeedbackInvalid = errors.New("butler: feedback 取值非法")
+)
+
+// SetNoteFeedback 送达反馈(29号 N3,方案 §3.4):positive/negative 落值,
+// "clear"(或空)撤销;单条覆盖写可改主意。归属隔离:他人/不存在一律 ErrNoteNotFound。
+func (s *SettingsService) SetNoteFeedback(userID, noteID int64, feedback string) error {
+	switch feedback {
+	case butlerdomain.NoteFeedbackPositive, butlerdomain.NoteFeedbackNegative, "clear", "":
+	default:
+		return ErrNoteFeedbackInvalid
+	}
+	val := feedback
+	if val == "clear" {
+		val = "" // clear = 撤销,落空串
+	}
+	ok, err := s.notes.SetFeedback(userID, noteID, val)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNoteNotFound
+	}
+	return nil
 }

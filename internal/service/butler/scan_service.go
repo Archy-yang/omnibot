@@ -26,6 +26,9 @@ import (
 const (
 	MaxNotesPerDay  = 1                     // 每日上限 1 条(硬编码常量,非配置)
 	DedupCooldown   = 7 * 24 * time.Hour    // 同一 dedup_key 7 天冷却
+	// NegativeFeedbackCooldown 该键最近一条 delivered 反馈为 negative 时的冷却窗
+	// (29号 N3,方案 §3.4:v1 固定 30 天,防同一件事反复打扰)。
+	NegativeFeedbackCooldown = 30 * 24 * time.Hour
 	StaleLoopAfter  = 3 * 24 * time.Hour    // loop open 超过 3 天才算"搁置太久"
 	NightGuardStart = 8                     // 22:00-08:00 拒绝触发,与配置无关
 	NightGuardEnd   = 22
@@ -129,7 +132,15 @@ func (s *ScanService) RunOnce(ctx context.Context, userID int64, now time.Time) 
 		return nil, nil // 解析失败/send:false/缺 dedup_key:一律沉默,不猜
 	}
 
-	cooled, err := s.notes.HasDeliveredSince(userID, decision.DedupKey, now.Add(-DedupCooldown))
+	// 冷却窗:v1 固定 7 天;该键最近一条 delivered 反馈为 negative → 30 天(29号 N3)。
+	// positive 不加权(防正反馈通胀,方案 §2)。
+	window := DedupCooldown
+	if fb, err := s.notes.LatestFeedbackForKey(userID, decision.DedupKey); err != nil {
+		return nil, err
+	} else if fb == butlerdomain.NoteFeedbackNegative {
+		window = NegativeFeedbackCooldown
+	}
+	cooled, err := s.notes.HasDeliveredSince(userID, decision.DedupKey, now.Add(-window))
 	if err != nil {
 		return nil, err
 	}

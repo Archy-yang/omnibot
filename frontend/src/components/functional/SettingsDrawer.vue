@@ -117,7 +117,18 @@ const saveProactive = async (patch: Partial<ProactiveSettings>) => {
 };
 
 const proactiveKindLabel = (kind: string): string =>
-  ({ matter_due: '事项临近', loop_stale: '待办搁置', recent_followup: '近况跟进' }[kind] ?? kind);
+  ({ matter_due: '事项临近', loop_stale: '待办搁置', recent_followup: '近况跟进', close_suggest: '收口建议', goal_nudge: '推进建议' }[kind] ?? kind);
+
+// 29号 N3:送达反馈——同值再点即撤销(clear);negative 驱动裁决冷却 7→30 天
+const handleNoteFeedback = async (note: ProactiveNoteItem, value: 'positive' | 'negative') => {
+  const next = note.feedback === value ? 'clear' : value;
+  try {
+    await proactiveService.setNoteFeedback(note.id, next);
+    note.feedback = next === 'clear' ? '' : next;
+  } catch (err) {
+    console.error('Failed to set note feedback:', err);
+  }
+};
 
 const proactiveTimeLabel = (hour: number): string => `${String(hour).padStart(2, '0')}:00`;
 
@@ -851,6 +862,20 @@ const showEmbeddingApiKey = ref(false);
             <span class="sp-time">{{ n.created_at }}</span>
           </div>
           <div class="sp-content">{{ n.content }}</div>
+          <div v-if="n.status === 'delivered'" class="sp-feedback">
+            <button
+              class="sp-fb-btn"
+              :class="{ 'is-active': n.feedback === 'positive' }"
+              title="有用"
+              @click="handleNoteFeedback(n, 'positive')"
+            >👍</button>
+            <button
+              class="sp-fb-btn"
+              :class="{ 'is-negative': n.feedback === 'negative' }"
+              title="没用(同类消息 30 天内不再提)"
+              @click="handleNoteFeedback(n, 'negative')"
+            >👎</button>
+          </div>
         </div>
       </div>
     </template>
@@ -1562,6 +1587,37 @@ const showEmbeddingApiKey = ref(false);
   font-size: 12px;
   color: #dc2626;
   cursor: pointer;
+}
+.sp-feedback {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.sp-fb-btn {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.sp-fb-btn:hover {
+  opacity: 1;
+}
+.sp-fb-btn.is-active,
+.sp-fb-btn.is-negative {
+  opacity: 1;
+}
+.sp-fb-btn.is-active {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+.sp-fb-btn.is-negative {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
 }
 .sp-content {
   margin-top: 4px;
