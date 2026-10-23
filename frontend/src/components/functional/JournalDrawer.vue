@@ -120,6 +120,16 @@ const formatFull = (iso: string): string => {
 
 const kindLabel = (item: JournalItem): string => (item.kind === 'loop' ? '待办' : '经历');
 
+// 28号 N3:目标日剩余天数(按自然日差;负数 = 已过期天数)
+const targetDays = (iso: string): number => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 0;
+  const today = new Date();
+  const utcToday = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const utcTarget = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.round((utcTarget - utcToday) / 86400000);
+};
+
 // 条目展开:溯源 + 编辑/删除
 const expandedId = ref<number | null>(null);
 const toggleExpand = (id: number): void => {
@@ -412,6 +422,10 @@ onMounted(() => {
           <h3 class="matter-title">{{ detail.title }}</h3>
           <div class="matter-meta">
             <span class="status-chip" :class="detail.status">{{ statusLabel(detail.status) }}</span>
+            <!-- 28号 N3:目标日徽标(临近/过期红色提示) -->
+            <span v-if="detail.target_at" class="target-chip" :class="{ 'target-urgent': targetDays(detail.target_at) <= 3 }">
+              🎯 {{ formatFull(detail.target_at).slice(0, 10) }}{{ targetDays(detail.target_at) >= 0 ? ` · 剩 ${targetDays(detail.target_at)} 天` : ` · 已过期 ${-targetDays(detail.target_at)} 天` }}
+            </span>
             <span class="matter-count">{{ detail.memory_count }} 条记录</span>
             <button
               type="button"
@@ -857,6 +871,22 @@ onMounted(() => {
 }
 .doc-synced {
   color: var(--color-text-tertiary, #999);
+}
+/* 28号 N3:目标日徽标;剩 ≤3 天或已过期转警示色 */
+.target-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(65, 118, 230, 0.1);
+  border-radius: 9999px;
+  user-select: none;
+}
+.target-chip.target-urgent {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.12);
 }
 .timeline-label {
   margin: 14px 0 8px;

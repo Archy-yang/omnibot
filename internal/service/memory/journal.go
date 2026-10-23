@@ -61,6 +61,7 @@ type MatterSummary struct {
 	MemoryCount int64      `json:"memory_count"`
 	DocURL      string     `json:"doc_url,omitempty"` // 23号:已同步的飞书文档
 	SyncedAt    *time.Time `json:"synced_at,omitempty"`
+	TargetAt    *time.Time `json:"target_at,omitempty"` // 28号 N2:目标日(非空 = 目标事项)
 }
 
 // MatterDetail 档案详情:元信息 + 演进时间线。
@@ -73,6 +74,7 @@ type MatterDetail struct {
 	MemoryCount int64         `json:"memory_count"`
 	DocURL      string        `json:"doc_url,omitempty"` // 23号
 	SyncedAt    *time.Time    `json:"synced_at,omitempty"`
+	TargetAt    *time.Time    `json:"target_at,omitempty"` // 28号 N3:目标日回显
 	Timeline    []JournalItem `json:"timeline"`
 }
 
@@ -238,7 +240,7 @@ func (s *memoryService) Matters(userID int64, status string) ([]MatterSummary, e
 		out = append(out, MatterSummary{
 			ID: m.ID, Title: m.Title, StateDesc: m.StateDesc, Status: m.Status,
 			UpdatedAt: m.UpdatedAt, MemoryCount: counts[m.ID],
-			DocURL: m.FeishuDocURL, SyncedAt: m.SyncedAt,
+			DocURL: m.FeishuDocURL, SyncedAt: m.SyncedAt, TargetAt: m.TargetAt,
 		})
 	}
 	return out, nil
@@ -264,7 +266,7 @@ func (s *memoryService) MatterDetail(userID int64, id int64) (*MatterDetail, err
 	return &MatterDetail{
 		ID: m.ID, Title: m.Title, StateDesc: m.StateDesc, Status: m.Status,
 		UpdatedAt: m.UpdatedAt, MemoryCount: int64(len(rows)), Timeline: timeline,
-		DocURL: m.FeishuDocURL, SyncedAt: m.SyncedAt,
+		DocURL: m.FeishuDocURL, SyncedAt: m.SyncedAt, TargetAt: m.TargetAt,
 	}, nil
 }
 
