@@ -265,10 +265,13 @@ const adjudicationSystemPrompt = `你是用户的长期个人管家的"主动关
 建议文案必须引用信号中的证据(如"体温已回落""查证结果已在 X 日报给你")。
 带目标日的事项(信号行含"目标 X,剩 N 天"):临近目标日(剩 ≤3 天)或已过期时优先级显著提升;
 目标日已过且事项明显完结的,给 close_suggest 而非单纯催促。
+目标推进判断(29号):临近目标日或已过期、事项仍活跃且最后动静表明无实质推进的,优先给 goal_nudge(推进建议)
+而非重复提醒——建议必须具体可执行(如"要我派个活去查附近的体检机构吗?"),禁止空泛的"注意进度";
+派活永远先征求用户同意,不要替用户决定。
 
 输出严格 JSON(禁止 markdown 代码块、禁止多余文字):
 沉默:{"send": false, "reason": "一句话理由"}
-开口:{"send": true, "kind": "matter_due|loop_stale|recent_followup|close_suggest", "dedup_key": "<信号行方括号里给出的主题键;收口建议在键尾加 :close,如 matter:42:close / loop:101:close>", "matter_id": <开口对象是事项时给其数字 ID,否则省略>, "content": "..."}`
+开口:{"send": true, "kind": "matter_due|loop_stale|recent_followup|close_suggest|goal_nudge", "dedup_key": "<信号行方括号里给出的主题键;收口建议在键尾加 :close(如 matter:42:close / loop:101:close),推进建议在键尾加 :goal(如 matter:42:goal)>", "matter_id": <开口对象是事项时给其数字 ID,否则省略>, "content": "..."}`
 
 // decision LLM 裁决输出的结构化形态。
 type decision struct {
@@ -279,15 +282,15 @@ type decision struct {
 	MatterID *int64 `json:"matter_id"`
 }
 
-// matterIDFromKey 从 dedup_key "matter:42"(或收口建议 "matter:42:close",28号 N1)
-// 解析事项 ID。
+// matterIDFromKey 从 dedup_key "matter:42"(或带后缀形态 "matter:42:close"/"matter:42:goal",
+// 28号 N1/29号 N2)解析事项 ID。
 func matterIDFromKey(key string) (int64, bool) {
 	idStr, ok := strings.CutPrefix(key, "matter:")
 	if !ok {
 		return 0, false
 	}
 	if i := strings.IndexByte(idStr, ':'); i >= 0 {
-		idStr = idStr[:i] // 剥 :close 后缀
+		idStr = idStr[:i] // 剥语义后缀(:close/:goal)
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {

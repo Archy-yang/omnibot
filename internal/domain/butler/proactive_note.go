@@ -19,6 +19,9 @@ const (
 	// NoteKindCloseSuggest 收口建议(28号 N1):事项/待办时间线已有结论,建议用户确认后收口。
 	// dedup_key 加 :close 后缀,与普通提醒同一 7 天冷却池。
 	NoteKindCloseSuggest = "close_suggest"
+	// NoteKindGoalNudge 目标推进建议(29号 N2):目标临近/过期未推进,给具体可执行的推进建议
+	// (派活需用户对话确认)。dedup_key 加 :goal 后缀,同一 7 天冷却池。
+	NoteKindGoalNudge = "goal_nudge"
 )
 
 // ProactiveNote 主动开口记录。

@@ -66,3 +66,31 @@ func TestBuildSnapshot_MatterWithTarget(t *testing.T) {
 	assert.Contains(t, snapshot, "目标")
 	assert.Contains(t, snapshot, "剩 9 天")
 }
+
+// 29号 N2:goal_nudge 输出解析——推进建议与收口建议同构(dedup_key :goal 后缀)。
+func TestMatterIDFromKey_GoalSuffix(t *testing.T) {
+	id, ok := matterIDFromKey("matter:10:goal")
+	require.True(t, ok)
+	assert.Equal(t, int64(10), id)
+
+	_, ok = matterIDFromKey("loop:34:goal")
+	assert.False(t, ok, "非 matter 键不误判")
+}
+
+func TestParseDecision_GoalNudge(t *testing.T) {
+	raw := `{"send": true, "kind": "goal_nudge", "dedup_key": "matter:10:goal",
+		"matter_id": 10, "content": "体检还剩 2 天没动静,要我派个活去查附近的体检机构吗?"}`
+	d := parseDecision(raw)
+	require.NotNil(t, d)
+	assert.Equal(t, butlerdomain.NoteKindGoalNudge, d.Kind)
+	assert.Equal(t, "matter:10:goal", d.DedupKey)
+	require.NotNil(t, d.MatterID)
+	assert.Equal(t, int64(10), *d.MatterID)
+}
+
+// 裁决 prompt 必须覆盖 goal_nudge 的触发条件与红线(防后续改 prompt 静默丢失指令)。
+func TestAdjudicationPrompt_GoalNudgeInstructions(t *testing.T) {
+	assert.Contains(t, adjudicationSystemPrompt, "goal_nudge")
+	assert.Contains(t, adjudicationSystemPrompt, ":goal", "dedup_key 后缀约定要写进 prompt")
+	assert.Contains(t, adjudicationSystemPrompt, "具体可执行", "推进建议禁空泛的红线要写进 prompt")
+}
