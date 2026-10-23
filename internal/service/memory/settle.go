@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	memorydomain "omnibot/internal/domain/memory"
 
@@ -125,4 +126,34 @@ func (s *memoryService) SetTargetMatter(ctx context.Context, userID, matterID in
 		return "", ErrMatterNotFound
 	}
 	return m.Title, nil
+}
+
+// CreateMatterByTitle 对话内建档(29号 N1,方案 §3.2):幂等回落——同名档案已存在则
+// 不写库返回既有 ID(created=false),未命中才创建。红线同本文件收口动作:仅对话内
+// 由用户确认触发(经 agent 工具),系统侧严禁调用;沉淀管线(digest_reconcile)照旧走
+// UpsertByTitle 覆写语义,两条路径刻意不共用。
+// 注意:勿改用 UpsertByTitle 实现本方法——那是沉淀管线的覆写语义,会覆盖原档案状态。
+func (s *memoryService) CreateMatterByTitle(_ context.Context, userID int64, title, stateDesc string, target *time.Time) (int64, bool, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return 0, false, ErrMatterTitleEmpty
+	}
+	stateDesc = strings.TrimSpace(stateDesc)
+	if utf8.RuneCountInString(stateDesc) > matterStateDescMaxRunes {
+		return 0, false, ErrMatterDescTooLong
+	}
+	// 幂等回落:GetByTitle 判存先行,存在即不动原档案
+	if existing, err := s.matterRepo.GetByTitle(userID, title); err != nil {
+		return 0, false, err
+	} else if existing != nil {
+		return existing.ID, false, nil
+	}
+	m := &memorydomain.Matter{
+		UserID: userID, Title: title, StateDesc: stateDesc,
+		Status: memorydomain.MatterStatusActive, TargetAt: target,
+	}
+	if err := s.matterRepo.CreateMatter(m); err != nil {
+		return 0, false, err
+	}
+	return m.ID, true, nil
 }

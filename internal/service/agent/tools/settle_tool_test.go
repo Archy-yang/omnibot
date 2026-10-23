@@ -153,11 +153,7 @@ func TestManageMatterTool_SetTarget(t *testing.T) {
 	assert.Contains(t, out, "完成体检")
 	assert.Contains(t, out, "2026-10-31")
 
-	// 缺 target_date / 非法格式
-	_, err = tool.Execute(settleCtx(t), map[string]interface{}{"matter_id": float64(10), "action": "set_target"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "target_date")
-
+	// 非法格式仍报错(留空/清除走 TestManageMatterTool_ClearTarget)
 	_, err = tool.Execute(settleCtx(t), map[string]interface{}{
 		"matter_id": float64(10), "action": "set_target", "target_date": "月底",
 	})
@@ -171,4 +167,92 @@ func TestManageMatterTool_SetTarget(t *testing.T) {
 		"matter_id": float64(999), "action": "set_target", "target_date": "2026-10-31",
 	})
 	require.ErrorIs(t, err, ErrMatterLifecycleNotFound)
+}
+
+// 29号 N1(D):set_target 留空或 clear = 清除目标日(恢复普通事项)。
+func TestManageMatterTool_ClearTarget(t *testing.T) {
+	m := &fakeSettleManager{}
+	tool := CreateManageMatterTool(m)
+
+	// target_date 留空 → 清除
+	out, err := tool.Execute(settleCtx(t), map[string]interface{}{"matter_id": float64(10), "action": "set_target"})
+	require.NoError(t, err)
+	assert.Nil(t, m.target, "留空 = 清除(target 必须为 nil)")
+	assert.Contains(t, out, "已清除")
+	assert.Contains(t, out, "完成体检")
+
+	// target_date="clear" → 同清除
+	m.target = nil
+	out, err = tool.Execute(settleCtx(t), map[string]interface{}{
+		"matter_id": float64(10), "action": "set_target", "target_date": "clear",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, m.target)
+	assert.Contains(t, out, "已清除")
+}
+
+// 29号 N1(B):create_matter 对话内建档。
+type fakeMatterCreator struct {
+	userID    int64
+	title     string
+	stateDesc string
+	target    *time.Time
+
+	id      int64
+	created bool
+	err     error
+}
+
+func (f *fakeMatterCreator) CreateMatterByTitle(_ context.Context, userID int64, title, stateDesc string, target *time.Time) (int64, bool, error) {
+	f.userID, f.title, f.stateDesc, f.target = userID, title, stateDesc, target
+	return f.id, f.created, f.err
+}
+
+func TestCreateMatterTool_New(t *testing.T) {
+	f := &fakeMatterCreator{id: 7, created: true}
+	tool := CreateCreateMatterTool(f)
+
+	out, err := tool.Execute(settleCtx(t), map[string]interface{}{
+		"title": "十月体检", "state_desc": "准备约机构", "target_date": "2026-10-31",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), f.userID)
+	assert.Equal(t, "十月体检", f.title)
+	assert.Equal(t, "准备约机构", f.stateDesc)
+	require.NotNil(t, f.target)
+	assert.Equal(t, "2026-10-31", f.target.Format("2006-01-02"))
+	assert.Contains(t, out, "已建档")
+	assert.Contains(t, out, "十月体检")
+	assert.Contains(t, out, "7", "matter_id 要回显,模型后续 manage_matter 要用")
+}
+
+func TestCreateMatterTool_IdempotentFallback(t *testing.T) {
+	f := &fakeMatterCreator{id: 7, created: false}
+	tool := CreateCreateMatterTool(f)
+
+	out, err := tool.Execute(settleCtx(t), map[string]interface{}{"title": "十月体检"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "已有档案")
+	assert.Contains(t, out, "matter_id=7", "回落文案也要带 matter_id 供后续工具用")
+}
+
+func TestCreateMatterTool_Validation(t *testing.T) {
+	tool := CreateCreateMatterTool(&fakeMatterCreator{})
+
+	// 缺 title
+	_, err := tool.Execute(settleCtx(t), map[string]interface{}{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "title")
+
+	// target_date 非法
+	_, err = tool.Execute(settleCtx(t), map[string]interface{}{"title": "X", "target_date": "月底"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YYYY-MM-DD")
+
+	// target_date 缺省 → nil(不带目标)
+	f := &fakeMatterCreator{id: 1, created: true}
+	tool2 := CreateCreateMatterTool(f)
+	_, err = tool2.Execute(settleCtx(t), map[string]interface{}{"title": "X"})
+	require.NoError(t, err)
+	assert.Nil(t, f.target)
 }

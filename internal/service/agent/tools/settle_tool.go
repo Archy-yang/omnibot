@@ -41,7 +41,8 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 		Name: "manage_matter",
 		Description: "管理个人档案(事项)的生命周期与目标。用户表达\"这事结了/搞定了/别跟进X了\"时," +
 			"先用 search_matters 找到对应档案 ID 再调用:close=完结(其下未决待办一并关闭);" +
-			"archive=搁置不再跟进;reopen=重新打开;set_target=给档案设目标日(用户表达\"我要在X之前完成Y\")。" +
+			"archive=搁置不再跟进;reopen=重新打开;set_target=给档案设目标日(用户表达\"我要在X之前完成Y\"," +
+			"target_date 留空或传 clear 即清除目标日)。要跟进的新事情还没有档案时,用 create_matter 建档。" +
 			"拿不准用户是否真要收口时,先复述确认再调用。",
 		DisplayLabel: "更新了档案状态",
 		Capabilities: []string{toolcore.CapMemory},
@@ -59,7 +60,7 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 				},
 				"target_date": map[string]interface{}{
 					"type":        "string",
-					"description": "action=set_target 时必填,目标日 YYYY-MM-DD",
+					"description": "action=set_target 时:目标日 YYYY-MM-DD;留空或 clear=清除目标日",
 				},
 			},
 			"required": []string{"matter_id", "action"},
@@ -100,11 +101,20 @@ func CreateManageMatterTool(svc MatterLifecycleManager) toolcore.Tool {
 }
 
 // manageMatterSetTarget set_target 分支:解析目标日(YYYY-MM-DD)并落库。
+// 29号 N1(D):target_date 留空或 "clear" = 清除目标日(恢复普通事项)。
 func manageMatterSetTarget(ctx context.Context, svc MatterLifecycleManager, userID, matterID int64, args map[string]interface{}) (string, error) {
 	dateStr, _ := args["target_date"].(string)
-	target, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(dateStr), time.Local)
+	dateStr = strings.TrimSpace(dateStr)
+	if dateStr == "" || strings.EqualFold(dateStr, "clear") {
+		title, err := svc.SetTargetMatter(ctx, userID, matterID, nil)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("已清除「%s」的目标日,恢复为普通事项", title), nil
+	}
+	target, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
 	if err != nil {
-		return "", fmt.Errorf("target_date 需为 YYYY-MM-DD 格式(如 2026-10-31)")
+		return "", fmt.Errorf("target_date 需为 YYYY-MM-DD 格式(如 2026-10-31);清除目标传 clear 或留空")
 	}
 	title, err := svc.SetTargetMatter(ctx, userID, matterID, &target)
 	if err != nil {
@@ -154,6 +164,79 @@ func CreateCloseLoopTool(svc MatterLifecycleManager) toolcore.Tool {
 			default:
 				return "没有找到匹配的挂起待办(只匹配未关闭状态);可换关键词重试,或确认它是否已被关闭。", nil
 			}
+		},
+	}
+}
+
+// MatterCreator 对话内建档窄接口(29号 N1,方案 §3.2;memoryService 实现)。
+type MatterCreator interface {
+	// CreateMatterByTitle 幂等建档:同名档案已存在 → created=false 回落既有 ID,不写库。
+	CreateMatterByTitle(ctx context.Context, userID int64, title, stateDesc string, target *time.Time) (matterID int64, created bool, err error)
+}
+
+// CreateCreateMatterTool 对话内建档工具——目标旅程第一公里(29号 N1,方案 §3.2):
+// 用户立目标/要跟进新事情且无既有档案时,建档(+顺手挂目标)替代"先聊聊让管家建档"的干提示。
+// 红线同 manage_matter:仅用户对话确认触发,系统侧严禁调用。
+func CreateCreateMatterTool(svc MatterCreator) toolcore.Tool {
+	return toolcore.Tool{
+		Name: "create_matter",
+		Description: "为用户要跟进的新事情建立个人档案。用户立目标(\"我要在月底前完成体检\")、" +
+			"开启新事项,且 search_matters 没查到既有档案时使用;同名档案已存在会幂等回落," +
+			"放心调用。可顺手挂目标日。建档后用 matter_id 配合 manage_matter 管理目标与生命周期。",
+		DisplayLabel: "创建了档案",
+		Capabilities: []string{toolcore.CapMemory},
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"title": map[string]interface{}{
+					"type":        "string",
+					"description": "档案标题(简短名词短语,如\"十月体检\")",
+				},
+				"state_desc": map[string]interface{}{
+					"type":        "string",
+					"description": "当前状态一句话(选填,如\"准备约机构\")",
+				},
+				"target_date": map[string]interface{}{
+					"type":        "string",
+					"description": "目标日 YYYY-MM-DD(选填,用户表达了期限时填)",
+				},
+			},
+			"required": []string{"title"},
+		},
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			title, _ := args["title"].(string)
+			if strings.TrimSpace(title) == "" {
+				return "", fmt.Errorf("需要 title(简短的档案标题)")
+			}
+			stateDesc, _ := args["state_desc"].(string)
+			var target *time.Time
+			if raw, ok := args["target_date"]; ok {
+				if dateStr := strings.TrimSpace(raw.(string)); dateStr != "" {
+					t, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
+					if err != nil {
+						return "", fmt.Errorf("target_date 需为 YYYY-MM-DD 格式(如 2026-10-31)")
+					}
+					target = &t
+				}
+			}
+			userID := toolcore.UserIDFromContext(ctx)
+			id, created, err := svc.CreateMatterByTitle(ctx, userID, title, stateDesc, target)
+			if err != nil {
+				return "", err
+			}
+			if !created {
+				// 幂等回落:matter_id 必须回显,模型后续 manage_matter 要用
+				return fmt.Sprintf("已有档案「%s」(matter_id=%d),直接在它上面继续,未做改动", title, id), nil
+			}
+			out := fmt.Sprintf("已建档「%s」(matter_id=%d)", title, id)
+			if target != nil {
+				remain := int(time.Until(*target).Hours() / 24)
+				if remain < 0 {
+					remain = 0
+				}
+				out += fmt.Sprintf(",目标日 %s(还有 %d 天),临近目标日管家会主动关注", target.Format("2006-01-02"), remain)
+			}
+			return out, nil
 		},
 	}
 }
