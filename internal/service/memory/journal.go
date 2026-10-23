@@ -20,6 +20,7 @@ var (
 	ErrJournalInvalidCursor = errors.New("journal: 游标非法")
 	ErrJournalInvalidStatus = errors.New("journal: status 取值非法")
 	ErrMatterNotFound       = errors.New("journal: 档案不存在")
+	ErrMatterTitleEmpty     = errors.New("journal: 档案标题不能为空") // 29号 N1 对话内建档
 	ErrMatterNoFields       = errors.New("journal: 未指定任何修改字段")
 	ErrMatterDescTooLong    = errors.New("journal: 状态描述超长")
 )

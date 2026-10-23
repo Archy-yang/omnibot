@@ -370,18 +370,23 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 		return agenttools.CreateMatterDocSyncTool(matterDocSyncAdapter{svc: docSyncSvc})
 	})
-	// 档案/待办收口(28号 N1/N2):对话内承接"这事结了/收掉吧/我要在X前完成Y"。红线:仅用户对话确认触发,
-	// 系统侧(管线/调度)严禁调用;memoryService 实现经窄接口断言注入。
+	// 档案/待办收口与建档(28号 N1/N2 + 29号 N1):对话内承接"这事结了/收掉吧/我要在X前完成Y/
+	// 帮我建个档案"。红线:仅用户对话确认触发,系统侧(管线/调度)严禁调用;memoryService 实现
+	// 经窄接口断言注入。
 	if ms, ok := memorySvc.(interface {
 		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
 		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
 		SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error)
+		CreateMatterByTitle(ctx context.Context, userID int64, title, stateDesc string, target *time.Time) (int64, bool, error)
 	}); ok {
 		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 			return agenttools.CreateManageMatterTool(matterSettleAdapter{svc: ms})
 		})
 		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
 			return agenttools.CreateCloseLoopTool(matterSettleAdapter{svc: ms})
+		})
+		toolSvc.RegisterBuiltin(func() agentpkg.Tool {
+			return agenttools.CreateCreateMatterTool(matterSettleAdapter{svc: ms})
 		})
 	}
 	// 脚本沙箱(17-脚本沙箱技术方案):一次性容器执行 Python/Shell,子 Agent 专属。
@@ -666,13 +671,14 @@ func (a matterDocSyncAdapter) SyncMatter(ctx context.Context, userID, matterID i
 	return agenttools.MatterDocSyncResult{DocURL: r.DocURL, Created: r.Created, SyncedAt: r.SyncedAt}, err
 }
 
-// matterSettleAdapter memoryService → agenttools.MatterLifecycleManager 窄接口适配
-// (28号 N1/N2):sentinel 错误翻译成模型可读文案;收口动作仅经工具由用户对话确认触发。
+// matterSettleAdapter memoryService → agenttools.MatterLifecycleManager/MatterCreator 窄接口适配
+// (28号 N1/N2 + 29号 N1):sentinel 错误翻译成模型可读文案;收口/建档动作仅经工具由用户对话确认触发。
 type matterSettleAdapter struct {
 	svc interface {
 		SettleMatter(ctx context.Context, userID, matterID int64, action string) (memoryService.MatterSettleResult, error)
 		CloseLoopByQuery(ctx context.Context, userID int64, query string) ([]string, bool, error)
 		SetTargetMatter(ctx context.Context, userID, matterID int64, target *time.Time) (string, error)
+		CreateMatterByTitle(ctx context.Context, userID int64, title, stateDesc string, target *time.Time) (int64, bool, error)
 	}
 }
 
@@ -694,4 +700,9 @@ func (a matterSettleAdapter) SetTargetMatter(ctx context.Context, userID, matter
 		return "", agenttools.ErrMatterLifecycleNotFound
 	}
 	return title, err
+}
+
+// CreateMatterByTitle 29号 N1:建档幂等由 service 层保证,adapter 纯透传。
+func (a matterSettleAdapter) CreateMatterByTitle(ctx context.Context, userID int64, title, stateDesc string, target *time.Time) (int64, bool, error) {
+	return a.svc.CreateMatterByTitle(ctx, userID, title, stateDesc, target)
 }

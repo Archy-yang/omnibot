@@ -13,6 +13,9 @@ type MatterRepository interface {
 	// UpsertByTitle 同 (user_id,title) 覆写 StateDesc/Status/LastMsgID;不存在则创建。
 	// 语义:事项状态是"覆写式"认知更新,不是追加。
 	UpsertByTitle(m *memorydomain.Matter) error
+	// CreateMatter 纯创建(29号 N1 对话内建档):不判存不覆写,幂等由 service 层
+	// GetByTitle 判存保证——与 UpsertByTitle 的覆写语义刻意分开,勿混用。
+	CreateMatter(m *memorydomain.Matter) error
 	// GetByTitle 按标题精确取(对账时 fact 挂靠用);不存在返回 nil。
 	GetByTitle(userID int64, title string) (*memorydomain.Matter, error)
 	// ListActiveByUserID 活跃事项(updated_at 倒序;世界观快照用)。
@@ -53,6 +56,11 @@ func (r *matterRepository) UpsertByTitle(m *memorydomain.Matter) error {
 		return r.db.Create(m).Error
 	}
 	return err
+}
+
+// CreateMatter 纯创建(29号 N1):Create 语义,同 (user_id,title) 唯一索引冲突报错。
+func (r *matterRepository) CreateMatter(m *memorydomain.Matter) error {
+	return r.db.Create(m).Error
 }
 
 func (r *matterRepository) GetByTitle(userID int64, title string) (*memorydomain.Matter, error) {

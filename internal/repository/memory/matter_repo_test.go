@@ -65,3 +65,22 @@ func TestListActiveByUserID(t *testing.T) {
 	require.Len(t, active, 1)
 	require.Equal(t, "旅行", active[0].Title)
 }
+
+// 29号 N1:纯 Create(对话内建档)——不做判存不覆写,幂等由 service 层 GetByTitle 判存保证;
+// 同 (user,title) 撞唯一索引必须报错(与 UpsertByTitle 的覆写语义刻意分开)。
+func TestCreateMatter(t *testing.T) {
+	db, repo := matterRepoSetup(t)
+
+	m := &memorydomain.Matter{UserID: 42, Title: "十月体检", StateDesc: "准备约机构", Status: memorydomain.MatterStatusActive}
+	require.NoError(t, repo.CreateMatter(m))
+	require.Positive(t, m.ID, "Create 后回填主键")
+
+	var got memorydomain.Matter
+	require.NoError(t, db.First(&got, m.ID).Error)
+	require.Equal(t, "十月体检", got.Title)
+	require.Equal(t, "准备约机构", got.StateDesc)
+	require.Equal(t, memorydomain.MatterStatusActive, got.Status)
+
+	err := repo.CreateMatter(&memorydomain.Matter{UserID: 42, Title: "十月体检", Status: memorydomain.MatterStatusActive})
+	require.Error(t, err, "同唯一键重复 Create 必须报错,不得静默覆写")
+}
