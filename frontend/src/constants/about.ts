@@ -16,7 +16,7 @@ export interface ChannelInfo {
   status: '已接入' | '规划中';
 }
 
-export const APP_VERSION = 'v1.10.0';
+export const APP_VERSION = 'v2.5.0';
 export const APP_NAME = 'OmniBot';
 export const APP_TAGLINE = '全平台智能助手';
 
