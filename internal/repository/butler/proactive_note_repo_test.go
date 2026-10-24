@@ -154,3 +154,26 @@ func TestSetFeedback_AndLatestFeedbackForKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, fb)
 }
+
+// 29号 N4:文本反馈的落点——最近一条 delivered 记录;skipped 不算,无记录 nil。
+func TestLatestDelivered(t *testing.T) {
+	db := setupNoteTestDB(t)
+	repo := NewProactiveNoteRepository(db)
+
+	older := newNote(1, domain.NoteKindMatterDue, "matter:1", domain.NoteStatusDelivered, time.Now().Add(-72*time.Hour))
+	require.NoError(t, repo.Create(older))
+	skipped := newNote(1, domain.NoteKindMatterDue, "matter:2", domain.NoteStatusSkipped, time.Now().Add(-24*time.Hour))
+	require.NoError(t, repo.Create(skipped))
+	latest := newNote(1, domain.NoteKindGoalNudge, "matter:3", domain.NoteStatusDelivered, time.Now())
+	require.NoError(t, repo.Create(latest))
+
+	got, err := repo.LatestDelivered(1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, latest.ID, got.ID, "取最近一条 delivered")
+
+	// 他人无记录
+	got, err = repo.LatestDelivered(2)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}

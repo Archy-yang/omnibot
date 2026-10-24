@@ -142,7 +142,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.userChannelRepo)
+	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.butlerSettings, d.userChannelRepo)
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -323,6 +323,7 @@ func startFeishuChannel(
 	llmConfigSvc userService.LLMConfigService,
 	subAgentSvc *agentpkg.SubAgentService,
 	butlerScan *butlerpkg.ScanService,
+	butlerSettings *butlerpkg.SettingsService,
 	userChannelRepo userRepo.UserChannelRepository,
 ) {
 	feishuCfg := channelfeishu.Config{
@@ -344,6 +345,10 @@ func startFeishuChannel(
 
 	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
 	handler.SetSubAgentReporter(subAgentSvc)
+	// 29号 N4:送达反馈文本通道(「有用/不用再提」);nil 安全(handler 不拦)
+	if butlerSettings != nil {
+		handler.SetNoteFeedbackService(butlerSettings)
+	}
 	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
 	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
 	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, agentSvc, msgSvc, llmConfigSvc))

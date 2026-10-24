@@ -2,6 +2,7 @@ package butler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,4 +104,29 @@ func TestSetNoteFeedback(t *testing.T) {
 	// 未命中(他人/不存在)
 	require.ErrorIs(t, svc.SetNoteFeedback(42, 999, "positive"), ErrNoteNotFound)
 	require.ErrorIs(t, svc.SetNoteFeedback(43, note.ID, "positive"), ErrNoteNotFound)
+}
+
+// 29号 N4:文本反馈通道——落到最近一条 delivered 主动消息;无记录 ErrNoteNotFound。
+func TestFeedbackLatestDeliveredNote(t *testing.T) {
+	svc, _, notes := newSettingsService()
+	n1 := &butlerdomain.ProactiveNote{UserID: 42, DedupKey: "matter:1", Status: butlerdomain.NoteStatusDelivered, CreatedAt: scanTime().Add(-24 * time.Hour)}
+	require.NoError(t, notes.Create(n1))
+	n2 := &butlerdomain.ProactiveNote{UserID: 42, DedupKey: "matter:2", Status: butlerdomain.NoteStatusDelivered, CreatedAt: scanTime()}
+	require.NoError(t, notes.Create(n2))
+
+	// negative 落最近一条,确认文案带冷却说明
+	reply, err := svc.FeedbackLatestDeliveredNote(42, butlerdomain.NoteFeedbackNegative)
+	require.NoError(t, err)
+	assert.Equal(t, butlerdomain.NoteFeedbackNegative, notes.notes[1].Feedback)
+	assert.Contains(t, reply, "30 天")
+
+	// positive
+	reply, err = svc.FeedbackLatestDeliveredNote(42, butlerdomain.NoteFeedbackPositive)
+	require.NoError(t, err)
+	assert.Equal(t, butlerdomain.NoteFeedbackPositive, notes.notes[1].Feedback)
+	assert.NotEmpty(t, reply)
+
+	// 无 delivered 记录
+	_, err = svc.FeedbackLatestDeliveredNote(43, butlerdomain.NoteFeedbackNegative)
+	require.ErrorIs(t, err, ErrNoteNotFound)
 }
