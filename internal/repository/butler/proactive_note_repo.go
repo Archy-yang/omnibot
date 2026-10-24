@@ -24,6 +24,8 @@ type ProactiveNoteRepository interface {
 	// LatestFeedbackForKey 冷却消费面(29号 N3):该 dedup_key 最近一条 delivered 记录的
 	// 反馈值(空=无反馈/已撤销);skipped(从未送达)不参与。
 	LatestFeedbackForKey(userID int64, dedupKey string) (string, error)
+	// LatestDelivered 最近一条 delivered 记录(29号 N4 文本反馈的落点);无 → nil。
+	LatestDelivered(userID int64) (*butlerdomain.ProactiveNote, error)
 }
 
 type proactiveNoteRepository struct {
@@ -88,4 +90,18 @@ func (r *proactiveNoteRepository) LatestFeedbackForKey(userID int64, dedupKey st
 		return "", err
 	}
 	return note.Feedback, nil
+}
+
+// LatestDelivered 最近一条 delivered 记录(29号 N4):文本反馈「有用/不用再提」的落点。
+func (r *proactiveNoteRepository) LatestDelivered(userID int64) (*butlerdomain.ProactiveNote, error) {
+	var note butlerdomain.ProactiveNote
+	err := r.db.Where("user_id = ? AND status = ?", userID, butlerdomain.NoteStatusDelivered).
+		Order("created_at DESC").First(&note).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &note, nil
 }

@@ -19,7 +19,7 @@ import (
 const (
 	butlerCardTitle    = "🌿 管家问候"
 	butlerCardTemplate = "green"
-	butlerFeedbackTail = "\n\n---\n不需要再提的话,回复「不用再提」,我从此不再说这件事。"
+	butlerFeedbackTail = "\n\n---\n有用的话回复「有用」;不需要再提回复「不用再提」,我从此不再说这件事。"
 )
 
 // FeishuButlerNotifier 主动管家的飞书送达器,实现 butler.Notifier。

@@ -94,6 +94,18 @@ func (m *memNoteRepo) LatestFeedbackForKey(_ int64, dedupKey string) (string, er
 	return latest, nil
 }
 
+func (m *memNoteRepo) LatestDelivered(userID int64) (*butlerdomain.ProactiveNote, error) {
+	var latest *butlerdomain.ProactiveNote
+	var latestAt time.Time
+	for _, note := range m.notes {
+		if note.UserID == userID && note.Status == butlerdomain.NoteStatusDelivered &&
+			(latest == nil || note.CreatedAt.After(latestAt)) {
+			latest, latestAt = note, note.CreatedAt
+		}
+	}
+	return latest, nil
+}
+
 func (m *memNoteRepo) ListRecent(_ int64, limit int) ([]*butlerdomain.ProactiveNote, error) {
 	if limit <= 0 || limit > len(m.notes) {
 		limit = len(m.notes)

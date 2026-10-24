@@ -84,6 +84,8 @@ type appDeps struct {
 	// 26 号:主动管家(扫描服务供飞书送达器注入;调度器进程级后台循环,routes.go 启动)
 	butlerScan      *butlerpkg.ScanService
 	butlerScheduler *butlerpkg.ScanScheduler
+	// 29号 N4:反馈文本通道(飞书 handler 与 Web 设置面共用同一服务实例)
+	butlerSettings *butlerpkg.SettingsService
 
 	// 沉淀管线(可空:extraction.enabled=false 未启用)。
 	// 暴露给手动触发工具(digest_manual_test.go,env 门控)复用同一装配。
@@ -572,10 +574,11 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 25 号:持久任务 API(列表+控制;创建走对话内工具)
 	webHandler.SetPersistentTaskService(persistentTaskSvc)
 	// 26 号:主动管家设置 API(开关/时刻读写 + 最近记录列表)
-	webHandler.SetProactiveService(butlerpkg.NewSettingsService(
+	butlerSettingsSvc := butlerpkg.NewSettingsService(
 		userRepo.NewUserRepository(dbConn.GetGormDB()),
 		butlerRepo.NewProactiveNoteRepository(dbConn.GetGormDB()),
-	))
+	)
+	webHandler.SetProactiveService(butlerSettingsSvc)
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
@@ -613,6 +616,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		persistentScheduler: persistentScheduler,
 		butlerScan:          butlerScanSvc,
 		butlerScheduler:     butlerScheduler,
+		butlerSettings:      butlerSettingsSvc,
 		digestPipeline:      digestPipeline,
 		chunkEmbedder:       chunkEmbedder,
 	}

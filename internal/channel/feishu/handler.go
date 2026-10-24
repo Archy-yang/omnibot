@@ -41,6 +41,8 @@ type MessageHandler struct {
 	subAgentReporter SubAgentReportProvider
 	// 记忆管理命令(高级记忆系统PRD AC4.3)。nil 时不启用。
 	memoryService MemoryCommandService
+	// 主动消息反馈文本通道(29号 N4)。nil 时不启用(不拦,走正常对话)。
+	noteFeedbackSvc NoteFeedbackService
 }
 
 // NewMessageHandler 创建飞书消息处理器。
@@ -69,6 +71,11 @@ func (h *MessageHandler) SetSubAgentReporter(reporter SubAgentReportProvider) {
 // SetMemoryService 注入记忆管理命令依赖(PRD AC4.3)。未调用时无记忆命令。
 func (h *MessageHandler) SetMemoryService(svc MemoryCommandService) {
 	h.memoryService = svc
+}
+
+// SetNoteFeedbackService 注入主动消息反馈依赖(29号 N4)。未调用时反馈指令不拦。
+func (h *MessageHandler) SetNoteFeedbackService(svc NoteFeedbackService) {
+	h.noteFeedbackSvc = svc
 }
 
 // fallbackReply 是 agent 执行失败时给用户的兜底文案——和 web 端「服务暂时不可用」对齐,
@@ -180,6 +187,16 @@ func (h *MessageHandler) HandleInbound(ctx context.Context, in InboundMessage) e
 	if !bound {
 		// 未绑定:不建号、不进对话,回绑定引导(PRD 5.4)
 		_ = h.sender.SendText(ctx, in.OpenID, unboundGuide)
+		return nil
+	}
+
+	// 主动消息反馈(29号 N4):「有用/不用再提」落到最近一条 delivered 主动消息,先于对话处理;
+	// 精确匹配防误伤,svc 未注入(管家未装配)不拦
+	if reply, handled := h.handleNoteFeedback(userID, text); handled {
+		if err := h.sender.SendText(ctx, in.OpenID, reply); err != nil {
+			logger.ErrorWithFields("feishu: send note feedback reply failed",
+				zap.String("open_id", in.OpenID), zap.Error(err))
+		}
 		return nil
 	}
 

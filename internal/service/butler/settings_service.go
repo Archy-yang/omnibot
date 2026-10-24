@@ -84,3 +84,24 @@ func (s *SettingsService) SetNoteFeedback(userID, noteID int64, feedback string)
 	}
 	return nil
 }
+
+// FeedbackLatestDeliveredNote 送达反馈文本通道(29号 N4,方案 §3.4 修订):
+// 卡片按钮回调被飞书 Go SDK ws 长连接阻断(全版本丢弃 MessageTypeCard 帧),
+// 文本指令是兑现 26号 卡片尾注「回复不用再提」承诺的落地形态。
+// feedback 落到该用户最近一条 delivered 主动消息,返回确认文案;无记录 → ErrNoteNotFound。
+func (s *SettingsService) FeedbackLatestDeliveredNote(userID int64, feedback string) (string, error) {
+	note, err := s.notes.LatestDelivered(userID)
+	if err != nil {
+		return "", err
+	}
+	if note == nil {
+		return "", ErrNoteNotFound
+	}
+	if err := s.SetNoteFeedback(userID, note.ID, feedback); err != nil {
+		return "", err
+	}
+	if feedback == butlerdomain.NoteFeedbackNegative {
+		return "好的,这类消息 30 天内不再主动提;想恢复随时说一声。", nil
+	}
+	return "收到,谢谢反馈!", nil
+}
