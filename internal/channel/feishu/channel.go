@@ -134,6 +134,10 @@ func newLarkWSStarter(cfg Config, h *MessageHandler) *larkWSStarter {
 	// 原路径报 not found,提示开发者扩 chatterEventTypes 白名单。
 	registerUnhandledEventDumper(disp, chatterEventTypes)
 
+	// 30号 N4:高频且无业务语义的事件(已读回执/撤回)只静默吞掉,不 dump——
+	// 否则 INFO 日志同样会被刷屏;新事件仍走 not found 提示。
+	registerSilentEvents(disp, silentEventTypes)
+
 	c := larkws.NewClient(cfg.AppID, cfg.AppSecret, larkws.WithEventHandler(disp))
 	return &larkWSStarter{client: c}
 }
@@ -171,6 +175,32 @@ func registerUnhandledEventDumper(disp *dispatcher.EventDispatcher, eventTypes [
 				zap.String("event_type", evType),
 				zap.String("payload", string(req.Body)),
 			)
+			return nil
+		})
+	}
+}
+
+// silentEventTypes — 30号 N4:高频、无业务语义、payload 无排查价值的事件。
+// 注册成 no-op handler 静默吞掉,既不报 ERROR 也不 dump INFO。
+//
+// 与 chatterEventTypes 的分工:
+//   - chatterEventTypes:低频、未来可能要照着 payload 实现 → dump 保留可见性
+//   - silentEventTypes:高频、纯噪声(已读回执/撤回)→ 只吞,避免刷屏
+//
+// 准入标准:确认永不产生业务响应的平台噪声。想做但还没做的功能一律不进这里。
+var silentEventTypes = []string{
+	// 已读回执:每次对方读消息都会推,纯噪声。
+	"im.message.message_read_v1",
+	// 消息撤回:撤回的业务语义(是否删除记忆/回滚)未立项,先静默;
+	// 若将来要做,移出本清单并写业务 handler。
+	"im.message.recalled_v1",
+}
+
+// registerSilentEvents 把噪声事件注册成 no-op handler(只回 200,不落日志)。
+func registerSilentEvents(disp *dispatcher.EventDispatcher, eventTypes []string) {
+	for _, evType := range eventTypes {
+		evType := evType // capture for closure
+		disp.OnCustomizedEvent(evType, func(ctx context.Context, req *larkevent.EventReq) error {
 			return nil
 		})
 	}
