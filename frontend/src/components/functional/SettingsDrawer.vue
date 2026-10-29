@@ -37,6 +37,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: [];
   'update-config': [config: { llm: LLMConfig }];
+  /** 30号 N3:主动记录 → 档案详情直达 */
+  'open-matter': [matterId: number];
 }>();
 
 const settingsStore = useSettingsStore();
@@ -876,6 +878,13 @@ const showEmbeddingApiKey = ref(false);
               @click="handleNoteFeedback(n, 'negative')"
             >👎</button>
           </div>
+          <!-- 30号 N3:有归属档案时直达详情,收口/看进展不用再翻抽屉 -->
+          <button
+            v-if="n.matter_id"
+            type="button"
+            class="sp-matter-link"
+            @click="emit('open-matter', n.matter_id)"
+          >查看档案 →</button>
         </div>
       </div>
     </template>
@@ -1618,6 +1627,19 @@ const showEmbeddingApiKey = ref(false);
 .sp-fb-btn.is-negative {
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.4);
+}
+/* 30号 N3:记录 → 档案跳转 */
+.sp-matter-link {
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.sp-matter-link:hover {
+  text-decoration: underline;
 }
 .sp-content {
   margin-top: 4px;

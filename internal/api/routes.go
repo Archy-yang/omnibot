@@ -183,6 +183,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			mattersAPIGroup.GET("", d.webHandler.HandleListMatters)
 			mattersAPIGroup.GET("/:id", d.webHandler.HandleGetMatter)
 			mattersAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMatter)
+			mattersAPIGroup.PUT("/:id/target", d.webHandler.HandleSetMatterTarget) // 30号 N2:设/清目标日
 			mattersAPIGroup.POST("/:id/sync-doc", d.webHandler.HandleSyncMatterDoc) // 23号:同步档案到飞书
 		}
 	}

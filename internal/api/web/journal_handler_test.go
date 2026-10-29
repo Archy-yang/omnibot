@@ -30,6 +30,12 @@ type mockJournal struct {
 	updErr     error
 	updState   *string
 	updStatus  *string
+	// 30号 N2:目标日写路径
+	targetTitle  string
+	targetErr    error
+	targetUserID int64
+	targetMatter int64
+	target       *time.Time
 }
 
 func (m *mockJournal) Journal(_ context.Context, _ int64, _ string, _, _ *time.Time, _ string, _ int) ([]memorysvc.JournalItem, string, error) {
@@ -45,6 +51,10 @@ func (m *mockJournal) UpdateMatter(_ int64, _ int64, stateDesc, status *string) 
 	m.updState, m.updStatus = stateDesc, status
 	return m.updOK, m.updErr
 }
+func (m *mockJournal) SetTargetMatter(_ context.Context, userID, matterID int64, target *time.Time) (string, error) {
+	m.targetUserID, m.targetMatter, m.target = userID, matterID, target
+	return m.targetTitle, m.targetErr
+}
 
 func setupJournalRouter(svc JournalService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -59,6 +69,7 @@ func setupJournalRouter(svc JournalService) *gin.Engine {
 	r.GET("/api/v1/matters", h.HandleListMatters)
 	r.GET("/api/v1/matters/:id", h.HandleGetMatter)
 	r.PUT("/api/v1/matters/:id", h.HandleUpdateMatter)
+	r.PUT("/api/v1/matters/:id/target", h.HandleSetMatterTarget)
 	return r
 }
 
@@ -132,4 +143,66 @@ func TestMattersHandler(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	r5.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestMatterTargetHandler 30号 N2:PUT /matters/:id/target 设/清目标日契约。
+func TestMatterTargetHandler(t *testing.T) {
+	put := func(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// 设置:解析 YYYY-MM-DD,归属取 auth userID,回显 target_at
+	mock := &mockJournal{targetTitle: "十月体检"}
+	r := setupJournalRouter(mock)
+	w := put(r, "/api/v1/matters/3/target", `{"target_date":"2026-11-30"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"target_at":"2026-11-30T00:00:00`)
+	require.NotNil(t, mock.target)
+	assert.Equal(t, "2026-11-30", mock.target.Format("2006-01-02"))
+	assert.Equal(t, int64(42), mock.targetUserID, "归属必须取 auth userID")
+	assert.Equal(t, int64(3), mock.targetMatter)
+
+	// 清除:空串
+	mock2 := &mockJournal{}
+	r2 := setupJournalRouter(mock2)
+	w = put(r2, "/api/v1/matters/3/target", `{"target_date":""}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Nil(t, mock2.target)
+	assert.Contains(t, w.Body.String(), `"target_at":null`)
+
+	// 清除:clear(大小写不敏感)
+	mock3 := &mockJournal{}
+	r3 := setupJournalRouter(mock3)
+	w = put(r3, "/api/v1/matters/3/target", `{"target_date":"CLEAR"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Nil(t, mock3.target)
+
+	// 非法日期 → 400
+	w = put(r, "/api/v1/matters/3/target", `{"target_date":"月底"}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 缺字段 → 400(清除必须显式传空串/clear,避免误清)
+	w = put(r, "/api/v1/matters/3/target", `{}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 非法 ID → 400
+	w = put(r, "/api/v1/matters/0/target", `{"target_date":"2026-11-30"}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 未命中/他人 → 404
+	r4 := setupJournalRouter(&mockJournal{targetErr: memorysvc.ErrMatterNotFound})
+	w = put(r4, "/api/v1/matters/999/target", `{"target_date":"2026-11-30"}`)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// 服务未装配 → 503
+	gin.SetMode(gin.TestMode)
+	r5 := gin.New()
+	h := &Handler{}
+	r5.PUT("/api/v1/matters/:id/target", h.HandleSetMatterTarget)
+	w = put(r5, "/api/v1/matters/3/target", `{"target_date":"2026-11-30"}`)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }

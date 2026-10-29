@@ -45,6 +45,14 @@ const openTaskDetail = (taskId: number) => {
   showTaskDialog.value = true;
 };
 
+// 30号 N3:主动记录 → 档案直达(关设置抽屉,开经历抽屉并定位档案)
+const pendingMatterId = ref<number | null>(null);
+const openMatterFromNote = (matterId: number) => {
+  if (showSettingsPanel.value) toggleSettingsPanel();
+  pendingMatterId.value = matterId;
+  showJournalDrawer.value = true;
+};
+
 const isEmpty = computed(() => messages.value.length === 0);
 const inputPlaceholder = computed(() =>
   isEmpty.value ? '有什么可以帮你的？' : '继续对话...'
@@ -180,6 +188,7 @@ const handleSend = async (content: string) => {
       :visible="showSettingsPanel"
       @close="toggleSettingsPanel"
       @update-config="() => {}"
+      @open-matter="openMatterFromNote"
     />
 
     <MemoryDrawer
@@ -189,7 +198,9 @@ const handleSend = async (content: string) => {
 
     <JournalDrawer
       :visible="showJournalDrawer"
+      :initial-matter-id="pendingMatterId"
       @close="showJournalDrawer = false"
+      @clear-initial="pendingMatterId = null"
     />
 
     <SubscriptionDialog
