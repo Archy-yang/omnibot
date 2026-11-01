@@ -19,6 +19,7 @@ import (
 	channelfeishu "omnibot/internal/channel/wechatclaw"
 	domainagent "omnibot/internal/domain/agent"
 	domain "omnibot/internal/domain/wechatclaw"
+	"omnibot/internal/pkg/backtask"
 	"omnibot/internal/pkg/crypto"
 	"omnibot/pkg/logger"
 )
@@ -372,6 +373,8 @@ func (s *Service) startRuntime(ctx context.Context, account *domain.Account) err
 		BindSuccessReply:         "绑定成功!现在可以在微信跟我聊了",
 		AlreadyBoundReply:        "该微信号已绑定其他账号",
 		AccountAlreadyBoundReply: "你的账号已绑定微信,如需更换请稍后(暂不支持)",
+		// ClawBot 是扫码即绑定,正常永远走不到这句;留作他人加到此机器人时的兜底
+		UnboundGuide: "这个微信号还没有绑定 OmniBot 账号。请让主人在 Web 设置里重新扫码连接。",
 	})
 	if s.subAgentReporter != nil {
 		handler.SetSubAgentReporter(s.subAgentReporter)
@@ -388,6 +391,15 @@ func (s *Service) startRuntime(ctx context.Context, account *domain.Account) err
 	// 在登录成功的同一毫秒内退出(线上事故:notifystart context canceled、sync_buf 永远为空)。
 	// WithoutCancel 切断取消与截止时间,后续只由 Disconnect / 进程退出取消。
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	rt := &channelRuntime{client: client, sender: sender, cancel: cancel}
+	clearRuntime := func() {
+		s.mu.Lock()
+		// 只在「当前运行态就是自己」时清空,避免旧实例退出时误清新实例
+		if s.runtime == rt {
+			s.runtime = nil
+		}
+		s.mu.Unlock()
+	}
 	mon := newMonitor(monitorConfig{
 		client:    client,
 		handler:   handler,
@@ -396,20 +408,27 @@ func (s *Service) startRuntime(ctx context.Context, account *domain.Account) err
 		repo:      s.repo,
 		accountID: account.ID,
 		buf:       account.SyncBuf,
-		onExpired: func() {
-			s.mu.Lock()
-			s.runtime = nil
-			s.mu.Unlock()
-		},
+		onExit:    clearRuntime,
 	})
 
 	s.mu.Lock()
-	if s.runtime != nil {
-		s.runtime.cancel()
-	}
-	s.runtime = &channelRuntime{client: client, sender: sender, cancel: cancel}
+	old := s.runtime
+	s.runtime = rt
 	s.mu.Unlock()
 
-	go mon.run(runCtx)
+	if old != nil {
+		// 重扫/换号:先停旧长轮询,并通知服务端旧会话结束,避免两条连接同时收消息
+		old.cancel()
+		backtask.RunDetached("wechatclaw notify stop old session", func() {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stopCancel()
+			if err := old.client.NotifyStop(stopCtx); err != nil {
+				logger.WarnWithFields("wechatclaw: notifystop old session failed", zap.Error(err))
+			}
+		})
+	}
+
+	// 与飞书长连接同款纪律:goroutine 必须 recover——agent 链路一次 panic 不能打崩整个服务
+	backtask.RunDetached("wechatclaw monitor", func() { mon.run(runCtx) })
 	return nil
 }

@@ -18,13 +18,13 @@ import (
 // ========== 长期记忆接口 ==========
 
 type MemoryDTO struct {
-	ID        int64  `json:"id"`
-	Content   string `json:"content"`
-	Source    string `json:"source"`               // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
-	Pinned    bool   `json:"pinned"`               // M8.3:置顶(常驻 core,进常驻注入)
-	Kind      string `json:"kind"`                 // 分层:fact/loop(episode 已归一,M8.4)
+	ID         int64  `json:"id"`
+	Content    string `json:"content"`
+	Source     string `json:"source"`                // manual=用户交代 / auto=沉淀管线提取(注入分层,前端双 tab)
+	Pinned     bool   `json:"pinned"`                // M8.3:置顶(常驻 core,进常驻注入)
+	Kind       string `json:"kind"`                  // 分层:fact/loop(episode 已归一,M8.4)
 	LoopStatus string `json:"loop_status,omitempty"` // 仅 kind=loop:open/closed(E3 管理面关闭/重开)
-	CreatedAt string `json:"created_at"`
+	CreatedAt  string `json:"created_at"`
 }
 
 type GetMemoriesResponse struct {

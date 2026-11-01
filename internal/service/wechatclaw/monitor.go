@@ -42,7 +42,9 @@ type monitorConfig struct {
 	repo      AccountRepository
 	accountID int64
 	buf       string
-	onExpired func()
+	// onExit 循环退出时调用(正常停止/会话失效/panic 被 recover 都算),
+	// 用于清运行态,避免 Status 继续显示「已连接」。
+	onExit func()
 
 	retryDelay   time.Duration
 	backoffDelay time.Duration
@@ -52,7 +54,11 @@ type monitorConfig struct {
 type monitor struct {
 	cfg      monitorConfig
 	failures int
+	polls    int
 }
+
+// pollHeartbeatInterval 每 N 轮成功拉取打一次存活日志(poll 间隔约 35s)。
+const pollHeartbeatInterval = 20
 
 func newMonitor(cfg monitorConfig) *monitor {
 	if cfg.retryDelay <= 0 {
@@ -60,6 +66,9 @@ func newMonitor(cfg monitorConfig) *monitor {
 	}
 	if cfg.backoffDelay <= 0 {
 		cfg.backoffDelay = defaultBackoffDelay
+	}
+	if cfg.onExit == nil {
+		cfg.onExit = func() {}
 	}
 	return &monitor{cfg: cfg}
 }
@@ -69,6 +78,7 @@ func (m *monitor) run(ctx context.Context) {
 	logger.InfoWithFields("wechatclaw: monitor started", zap.Int64("account_id", m.cfg.accountID))
 	// 退出必须留痕:上一版因 ctx 提前取消静默退出,线上排查时完全看不出循环已死
 	defer func() {
+		m.cfg.onExit()
 		logger.InfoWithFields("wechatclaw: monitor stopped",
 			zap.Int64("account_id", m.cfg.accountID),
 			zap.Bool("ctx_canceled", ctx.Err() != nil),
@@ -90,12 +100,14 @@ func (m *monitor) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		m.pollOnce(ctx)
+		if stop := m.pollOnce(ctx); stop {
+			return
+		}
 	}
 }
 
-// pollOnce 执行一轮拉取 + 分发。
-func (m *monitor) pollOnce(ctx context.Context) {
+// pollOnce 执行一轮拉取 + 分发。返回 stop=true 表示循环应终止(会话失效)。
+func (m *monitor) pollOnce(ctx context.Context) (stop bool) {
 	updates, err := m.cfg.client.GetUpdates(ctx, m.cfg.buf)
 	if err != nil {
 		if errors.Is(err, channelfeishu.ErrSessionExpired) {
@@ -103,10 +115,7 @@ func (m *monitor) pollOnce(ctx context.Context) {
 			logger.WarnWithFields("wechatclaw: session expired, monitor stopped",
 				zap.Int64("account_id", m.cfg.accountID))
 			_ = m.cfg.repo.UpdateStatus(m.cfg.accountID, domain.StatusExpired)
-			if m.cfg.onExpired != nil {
-				m.cfg.onExpired()
-			}
-			return
+			return true
 		}
 		m.failures++
 		wait := m.cfg.retryDelay
@@ -120,10 +129,16 @@ func (m *monitor) pollOnce(ctx context.Context) {
 				zap.Duration("delay", wait), zap.Error(err))
 		}
 		sleepCtx(ctx, wait)
-		return
+		return false
 	}
 
 	m.failures = 0
+	m.polls++
+	if m.polls%pollHeartbeatInterval == 0 {
+		logger.InfoWithFields("wechatclaw: poll alive",
+			zap.Int64("account_id", m.cfg.accountID),
+			zap.Int("polls", m.polls))
+	}
 	// 游标推进并落库(重启续传)
 	if updates.GetUpdatesBuf != "" && updates.GetUpdatesBuf != m.cfg.buf {
 		m.cfg.buf = updates.GetUpdatesBuf
@@ -135,6 +150,7 @@ func (m *monitor) pollOnce(ctx context.Context) {
 	for _, msg := range updates.Msgs {
 		m.dispatch(ctx, msg)
 	}
+	return false
 }
 
 // dispatch 单条消息分发。只处理单聊里的文本,其余回固定提示。

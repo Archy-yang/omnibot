@@ -260,3 +260,18 @@ Web 扫码确认 ──► AccountService.Save(token 加密) ──► Monitor.S
 2. 单条消息**串行**处理（与官方插件一致），长任务会阻塞下一轮拉取——二期可改带并发信号量。
 3. `typing_ticket`（sendtyping）与媒体 CDN 未接入，按方案 §6 留二期。
 4. 主动管家推送走 `channelfactory` 已注册的 `wechat_claw` 通道（但 `user_channels` 需先完成绑定码绑定）。
+
+### 7.1 复审发现与加固（2026-11-01）
+
+| 级别 | 问题 | 处理 |
+|---|---|---|
+| P0 | 长轮询 goroutine 无 panic 恢复：agent 链路一次 panic 会带崩整个进程 | 改用 `backtask.RunDetached`（与飞书长连接同款纪律） |
+| P0 | 会话失效（-14）只退出单轮，`run` 循环继续 → 全速空转（请求 + 更新库） | `pollOnce` 返回终止信号，`run` 随之退出 |
+| P1 | 运行态异常退出后 `s.runtime` 不清，`Status` 仍报已连接 | 增加 `onExit` 钩子（identity-safe 清理） |
+| P1 | 重扫换号时旧连接不 `notifystop`，两条长轮询并存 | 替换运行态前 cancel + 后台 `NotifyStop` |
+| P1 | `BindDirect` 先删后建：删成功、建失败会丢绑定 | 改为先建后删（`DeleteByChannelTypeExcept`） |
+| P1 | ClawBot 被算进「绑定码渠道」：会生成无用码 + 污染「全部已绑」判定 | 移出 `supportedChannels`，状态单查 |
+| P2 | 无心跳：连接「看着在、实际没拉」难发现 | 每 20 轮打 `poll alive` |
+| P2 | 旧版未绑引导仍讲绑定码 | ClawBot 专属文案 |
+
+**单测覆盖**（`go test -cover`）：协议层 93.4% / 服务层 90.4% / 仓储 94.1% / 领域 100% / 共享 IM pipeline 75.2%（其余分支由飞书包测试覆盖）。

@@ -32,6 +32,11 @@
 - **登录成功但收不到消息**：长轮询生命周期误绑了扫码 HTTP 请求的 ctx——响应返回那一刻
   monitor 自己就退出了（`notifystart context canceled`、游标永远为空）。改为
   `context.WithoutCancel` 派生，只由「断开连接/进程退出」停止；补退出日志与回归测试
+- **复审加固**：长轮询 goroutine 加 panic recover（agent 链路 panic 不再打崩进程）；
+  会话失效（-14）时此前只退出单轮、循环继续空转（每轮打库 + 请求）——改为返回终止信号；
+  运行态异常退出后清空（Status 不再误报已连接）；重扫时先 `notifystop` 旧会话再换新连接；
+  绑定改为「先建后删旧身份」，避免删旧建新失败导致绑定丢失；ClawBot 从绑定码渠道集合移出
+  （扫码自动绑定，不再生成无用绑定码）
 - **扫码即绑定**：ClawBot 扫码的人就是机器人主人（`from_user_id == ilink_user_id`），
   不再要求用户在微信里发绑定码；新增 `BindingService.BindDirect`，登录确认时直绑，
   启动时按 `login_user_id` 自愈补绑，绑定失败不阻断连接

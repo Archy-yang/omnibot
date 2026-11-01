@@ -512,3 +512,113 @@ func TestStartHealsMissingBinding(t *testing.T) {
 }
 
 var _ im.Sender = (*proto.Sender)(nil)
+
+func TestStatusNoAccountAndExpired(t *testing.T) {
+	svc := newTestService(t, &fakeRepo{}, &fakeClient{})
+	st, err := svc.Status()
+	require.NoError(t, err)
+	assert.False(t, st.Connected)
+	assert.Empty(t, st.BotID)
+
+	// 过期账号:未连接 + 需要重新扫码
+	repo := &fakeRepo{account: &domain.Account{ID: 1, BotID: "bot-1", Status: domain.StatusExpired}}
+	svc2 := newTestService(t, repo, &fakeClient{})
+	st2, err := svc2.Status()
+	require.NoError(t, err)
+	assert.False(t, st2.Connected)
+	assert.True(t, st2.NeedRelogin)
+	assert.Equal(t, domain.StatusExpired, st2.Status)
+}
+
+func TestStartWithBrokenCipherDoesNotStartMonitor(t *testing.T) {
+	repo := &fakeRepo{account: &domain.Account{
+		ID: 1, BotID: "bot-1", ILinkUserID: "owner-1",
+		TokenCipher: "not-valid-ciphertext", Status: domain.StatusActive,
+	}}
+	client := &fakeClient{}
+	svc := NewService(repo, func(baseURL, token string) ClientAPI { return client }, HandlerDeps{})
+
+	svc.Start(context.Background())
+	time.Sleep(20 * time.Millisecond)
+	assert.False(t, client.isStarted(), "解密失败不应拉起长轮询")
+}
+
+func TestDisconnectWithoutRuntime(t *testing.T) {
+	svc := newTestService(t, &fakeRepo{}, &fakeClient{})
+	require.NoError(t, svc.Disconnect(context.Background()))
+	assert.Nil(t, svc.CurrentSender())
+}
+
+func TestMonitorExpiredClearsRuntime(t *testing.T) {
+	client := &fakeClient{
+		qr: &proto.QRCode{QRCode: "qc-1"},
+		qrStatus: &proto.QRStatus{
+			Status: proto.QRStatusConfirmed, BotToken: "bt", BotID: "bot-1", UserID: "owner-1",
+		},
+	}
+	repo := &fakeRepo{}
+	svc := newTestService(t, repo, client)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := svc.StartLogin(ctx)
+	require.NoError(t, err)
+	_, _, err = svc.PollLogin(ctx, "qc-1", "", 0)
+	require.NoError(t, err)
+	waitFor(t, func() bool { return svc.CurrentSender() != nil })
+
+	// 模拟 token 失效:下一轮 getupdates 返回 -14
+	client.mu.Lock()
+	client.updErr = proto.ErrSessionExpired
+	client.mu.Unlock()
+
+	// 长轮询退出后运行态应被清理,不再显示「已连接」在跑
+	waitFor(t, func() bool { return svc.CurrentSender() == nil })
+	account, err := repo.Get()
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusExpired, account.Status)
+}
+
+// TestRestartReplacesOldRuntime 重扫/换号:旧长轮询必须停掉并通知服务端,不能两条连接并存。
+func TestRestartReplacesOldRuntime(t *testing.T) {
+	initCrypto(t)
+	var mu sync.Mutex
+	var clients []*fakeClient
+	factory := func(baseURL, token string) ClientAPI {
+		c := &fakeClient{
+			qr: &proto.QRCode{QRCode: "qc-1"},
+			qrStatus: &proto.QRStatus{
+				Status: proto.QRStatusConfirmed, BotToken: "bt", BotID: "bot-1", UserID: "owner-1",
+			},
+		}
+		mu.Lock()
+		clients = append(clients, c)
+		mu.Unlock()
+		return c
+	}
+	svc := NewService(&fakeRepo{}, factory, HandlerDeps{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 第一次登录
+	_, err := svc.StartLogin(ctx)
+	require.NoError(t, err)
+	_, _, err = svc.PollLogin(ctx, "qc-1", "", 0)
+	require.NoError(t, err)
+
+	mu.Lock()
+	first := clients[len(clients)-1]
+	mu.Unlock()
+	waitFor(t, first.isStarted)
+
+	// 第二次登录(重扫):应替换旧运行态
+	_, err = svc.StartLogin(ctx)
+	require.NoError(t, err)
+	_, _, err = svc.PollLogin(ctx, "qc-1", "", 0)
+	require.NoError(t, err)
+
+	// 旧实例收到停止(NotifyStop)且不再被引用
+	waitFor(t, first.isStopped)
+	require.NoError(t, svc.Disconnect(context.Background()))
+}

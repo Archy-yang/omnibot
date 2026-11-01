@@ -278,8 +278,9 @@ func NewGormUserChannelRepositoryShim(db *gorm.DB) UserChannelRepository {
 type gormUserChannelShim struct{ db *gorm.DB }
 
 func (s *gormUserChannelShim) Create(uc *domain.UserChannel) error { return s.db.Create(uc).Error }
-func (s *gormUserChannelShim) DeleteByChannelType(channelType string) (int64, error) {
-	res := s.db.Where("channel_type = ?", channelType).Delete(&domain.UserChannel{})
+func (s *gormUserChannelShim) DeleteByChannelTypeExcept(channelType, keepChannelUserID string) (int64, error) {
+	res := s.db.Where("channel_type = ? AND channel_user_id <> ?", channelType, keepChannelUserID).
+		Delete(&domain.UserChannel{})
 	return res.RowsAffected, res.Error
 }
 func (s *gormUserChannelShim) GetByChannel(channelType, channelUserID string) (*domain.UserChannel, error) {

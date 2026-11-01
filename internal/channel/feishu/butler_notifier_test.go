@@ -21,7 +21,7 @@ func (s *stubChannelRepo) Create(*userdomain.UserChannel) error { return nil }
 func (s *stubChannelRepo) GetByID(int64) (*userdomain.UserChannel, error) {
 	return nil, errors.New("not implemented")
 }
-func (s *stubChannelRepo) DeleteByChannelType(string) (int64, error) { return 0, nil }
+func (s *stubChannelRepo) DeleteByChannelTypeExcept(string, string) (int64, error) { return 0, nil }
 
 func (s *stubChannelRepo) GetByChannel(string, string) (*userdomain.UserChannel, error) {
 	return nil, errors.New("not implemented")

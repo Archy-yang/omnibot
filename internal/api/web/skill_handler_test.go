@@ -16,15 +16,15 @@ import (
 )
 
 type mockSkillService struct {
-	skills        []*skilldomain.Skill
-	files         map[int64][]skilldomain.SkillFile
-	listErr       error
-	created       *skillsvc.CreateInput
-	createErr     error
-	updatedID     int64
-	updateInput   *skillsvc.UpdateInput
-	updateErr     error
-	deletedID     int64
+	skills      []*skilldomain.Skill
+	files       map[int64][]skilldomain.SkillFile
+	listErr     error
+	created     *skillsvc.CreateInput
+	createErr   error
+	updatedID   int64
+	updateInput *skillsvc.UpdateInput
+	updateErr   error
+	deletedID   int64
 }
 
 func (m *mockSkillService) List() ([]*skilldomain.Skill, error) {

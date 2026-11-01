@@ -163,18 +163,19 @@ func (s *BindingService) BindDirect(channelType string, userID int64, channelUse
 		return ErrChannelAlreadyBound
 	}
 
-	// 清理同渠道旧绑定:ClawBot 是单机器人单主人,换号/换人重扫后旧身份必须失效,
-	// 否则旧 ilink id 仍会把消息算到原账号头上(多用户场景会"乱")。
-	if _, err := s.channelRepo.DeleteByChannelType(channelType); err != nil {
-		return err
-	}
-
+	// 先建后删:避免「删了旧的、建新的失败」导致绑定直接丢失。
 	err = s.channelRepo.Create(user.NewUserChannel(userID, channelType, channelUserID))
 	if err != nil {
 		// 并发:另一请求已先绑该 (channelType, channelUserID)
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return ErrChannelAlreadyBound
 		}
+		return err
+	}
+
+	// 清理同渠道其它旧身份:ClawBot 单机器人单主人,换号/换人重扫后旧身份必须失效,
+	// 否则旧 ilink id 仍会把消息算到原账号头上。
+	if _, err := s.channelRepo.DeleteByChannelTypeExcept(channelType, channelUserID); err != nil {
 		return err
 	}
 	return nil

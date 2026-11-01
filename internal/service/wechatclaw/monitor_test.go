@@ -73,7 +73,7 @@ func userMessage(id, from, text, ctxToken string) proto.Message {
 	}
 }
 
-func newTestMonitor(client ClientAPI, handler InboundHandler, sender im.Sender, repo AccountRepository, tokens TokenSink, onExpired func()) *monitor {
+func newTestMonitor(client ClientAPI, handler InboundHandler, sender im.Sender, repo AccountRepository, tokens TokenSink, onExit func()) *monitor {
 	return newMonitor(monitorConfig{
 		client:       client,
 		handler:      handler,
@@ -81,7 +81,7 @@ func newTestMonitor(client ClientAPI, handler InboundHandler, sender im.Sender, 
 		tokens:       tokens,
 		repo:         repo,
 		accountID:    1,
-		onExpired:    onExpired,
+		onExit:       onExit,
 		retryDelay:   time.Millisecond,
 		backoffDelay: time.Millisecond,
 	})
@@ -158,11 +158,11 @@ func TestMonitorSessionExpiredMarksAccount(t *testing.T) {
 	repo := &fakeRepo{account: &domain.Account{ID: 1, Status: domain.StatusActive}}
 	svc := newTestService(t, repo, client)
 
-	expired := false
-	mon := newTestMonitor(client, handler, &fakeSender{}, repo, svc, func() { expired = true })
-	mon.pollOnce(context.Background())
+	exited := false
+	mon := newTestMonitor(client, handler, &fakeSender{}, repo, svc, func() { exited = true })
+	mon.run(context.Background()) // 会话失效后应退出并触发 onExit
 
-	assert.True(t, expired)
+	assert.True(t, exited)
 	account, err := repo.Get()
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusExpired, account.Status)

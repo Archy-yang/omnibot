@@ -27,17 +27,17 @@ type PersistentTaskAPIService interface {
 // PersistentTaskView 列表视图(不含 TaskSpecJSON 等内部字段)。
 // 内嵌 domain 实体可序列化,但显式 DTO 防止未来实体加内部字段时泄露(黑名单 json tag 教训)。
 type PersistentTaskView struct {
-	ID          int64      `json:"id"`
-	Name        string     `json:"name"`
-	Goal        string     `json:"goal"`
-	Cron        string     `json:"cron"`
-	Enabled     bool       `json:"enabled"`
-	NextRunAt   string     `json:"next_run_at"`
-	LastRunAt   *string    `json:"last_run_at"`
-	LastTaskID  *int64     `json:"last_task_id"`
-	FailStreak  int        `json:"fail_streak"`
-	AutoPaused  bool       `json:"auto_paused"` // 连续失败达到阈值被自动停用(前端展示专用标记)
-	CreatedAt   string     `json:"created_at"`
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	Goal       string  `json:"goal"`
+	Cron       string  `json:"cron"`
+	Enabled    bool    `json:"enabled"`
+	NextRunAt  string  `json:"next_run_at"`
+	LastRunAt  *string `json:"last_run_at"`
+	LastTaskID *int64  `json:"last_task_id"`
+	FailStreak int     `json:"fail_streak"`
+	AutoPaused bool    `json:"auto_paused"` // 连续失败达到阈值被自动停用(前端展示专用标记)
+	CreatedAt  string  `json:"created_at"`
 }
 
 // SetPersistentTaskService 注入持久任务服务(wire.go)。

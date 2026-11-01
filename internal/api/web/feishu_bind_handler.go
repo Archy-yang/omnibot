@@ -17,8 +17,9 @@ type BindingService interface {
 	ResolveUserID(channelType, openID string) (userID int64, bound bool, err error)
 }
 
-// 支持绑定的渠道(v2.3:飞书 + 微信;31 号:微信 ClawBot)
-var supportedChannels = []string{"feishu", "wechat", "wechat_claw"}
+// 支持「绑定码」的渠道(v2.3:飞书 + 公众号微信)。
+// 31 号:微信 ClawBot 扫码即绑定,不走绑定码,状态单独查询(见 HandleGetBindingStatus)。
+var supportedChannels = []string{"feishu", "wechat"}
 
 // ChannelBindHandler web 端渠道绑定接口(状态查询 + 出码)
 type ChannelBindHandler struct {
@@ -60,10 +61,15 @@ func (h *ChannelBindHandler) HandleGetBindingStatus(c *gin.Context) {
 			resp.FeishuBound = bound
 		case "wechat":
 			resp.WeChatBound = bound
-		case "wechat_claw":
-			resp.WeChatClawBound = bound
 		}
 	}
+	// 31 号:ClawBot 状态只读展示(绑定由扫码自动建立,不接受绑定码)
+	clawBound, err := h.svc.IsChannelBound(userID, "wechat_claw")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "查询绑定状态失败"})
+		return
+	}
+	resp.WeChatClawBound = clawBound
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }
 

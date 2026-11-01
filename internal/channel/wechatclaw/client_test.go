@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -206,4 +207,68 @@ func TestHTTPErrorPropagates(t *testing.T) {
 	_, err := client.GetUpdates(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "502")
+}
+
+func TestGetUpdatesClientTimeoutReturnsEmpty(t *testing.T) {
+	// 服务端挂住超过长轮询超时:客户端应视为正常控制流,返回空结果 + 原游标
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(80 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"ret":0,"msgs":[],"get_updates_buf":"late"}`))
+	})
+	client.longPollout = 20 * time.Millisecond
+
+	resp, err := client.GetUpdates(context.Background(), "buf-1")
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msgs)
+	assert.Equal(t, "buf-1", resp.GetUpdatesBuf, "超时应保留原游标")
+}
+
+func TestGetBotQRCodeServerRetError(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":-2,"errmsg":"quota"}`))
+	})
+	_, err := client.GetBotQRCode(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "quota")
+}
+
+func TestClientAccessorsAndDefaults(t *testing.T) {
+	c := NewClient(ClientOptions{BaseURL: "https://x.test/", Token: "t"})
+	assert.Equal(t, "https://x.test", c.BaseURL())
+	assert.Equal(t, "t", c.Token())
+
+	// 默认值兜底
+	def := NewClient(ClientOptions{})
+	assert.Equal(t, DefaultBaseURL, def.BaseURL())
+	assert.Equal(t, DefaultClientVersion, def.clientVersion)
+	assert.NotEmpty(t, randomUIN())
+}
+
+func TestFlexStringUnmarshalVariants(t *testing.T) {
+	cases := []struct {
+		in   string
+		want FlexString
+	}{
+		{`"123"`, FlexString("123")},
+		{`123`, FlexString("123")},
+		{`7371234567890123456`, FlexString("7371234567890123456")},
+		{`null`, FlexString("")},
+		{`""`, FlexString("")},
+	}
+	for _, tc := range cases {
+		var f FlexString
+		require.NoError(t, json.Unmarshal([]byte(tc.in), &f), tc.in)
+		assert.Equal(t, tc.want, f, tc.in)
+	}
+}
+
+func TestMessageTextExtraction(t *testing.T) {
+	m := Message{ItemList: []MessageItem{
+		{Type: ItemTypeImage},
+		{Type: ItemTypeText, TextItem: &TextItem{Text: "hello"}},
+	}}
+	assert.Equal(t, "hello", m.Text())
+
+	empty := Message{ItemList: []MessageItem{{Type: ItemTypeImage}}}
+	assert.Empty(t, empty.Text())
 }

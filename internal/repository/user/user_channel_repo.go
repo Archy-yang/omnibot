@@ -11,8 +11,8 @@ type UserChannelRepository interface {
 	GetByID(id int64) (*user.UserChannel, error)
 	GetByChannel(channelType, channelUserID string) (*user.UserChannel, error)
 	GetByUserID(userID int64) ([]*user.UserChannel, error)
-	// DeleteByChannelType 删除某渠道的全部绑定(ClawBot 换号/换人清理)
-	DeleteByChannelType(channelType string) (int64, error)
+	// DeleteByChannelTypeExcept 删除某渠道下除指定身份外的绑定(ClawBot 换号/换人清理)
+	DeleteByChannelTypeExcept(channelType, keepChannelUserID string) (int64, error)
 	Update(uc *user.UserChannel) error
 	Delete(id int64) error
 }
@@ -49,9 +49,10 @@ func (r *GormUserChannelRepository) GetByUserID(userID int64) ([]*user.UserChann
 	return ucs, nil
 }
 
-// DeleteByChannelType 删除某渠道的全部绑定。
-func (r *GormUserChannelRepository) DeleteByChannelType(channelType string) (int64, error) {
-	res := r.db.Where("channel_type = ?", channelType).Delete(&user.UserChannel{})
+// DeleteByChannelTypeExcept 删除某渠道下除指定身份外的绑定。
+func (r *GormUserChannelRepository) DeleteByChannelTypeExcept(channelType, keepChannelUserID string) (int64, error) {
+	res := r.db.Where("channel_type = ? AND channel_user_id <> ?", channelType, keepChannelUserID).
+		Delete(&user.UserChannel{})
 	return res.RowsAffected, res.Error
 }
 
