@@ -1114,7 +1114,8 @@ const showEmbeddingApiKey = ref(false);
         </div>
 
         <!-- 全部已绑:不展示出码区 -->
-        <template v-if="!(feishuBound && wechatBound && wechatClawBound)">
+        <!-- ClawBot 扫码自动绑定、不用绑定码,故不参与「是否还能出码」的判定 -->
+        <template v-if="!(feishuBound && wechatBound)">
           <!-- 未生成码:获取按钮 -->
           <button
             v-if="!feishuCode"
