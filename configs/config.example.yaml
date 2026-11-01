@@ -18,7 +18,7 @@ app:
 # 开发可用 sqlite 内存库快速起步;生产推荐 Postgres。
 database:
   driver: "postgres"  # sqlite / postgres
-  dsn: "host=localhost port=5433 user=test password=test123 dbname=omnibot_test sslmode=disable"
+  dsn: "host=localhost port=15432 user=postgres password=postgres dbname=omnibot sslmode=disable"
   max_conns: 25
   # 备选:sqlite 内存库
   # driver: "sqlite"
