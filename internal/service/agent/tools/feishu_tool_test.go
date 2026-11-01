@@ -160,5 +160,22 @@ func TestRunFeishuCLI_RunnerPathKeepsProfileFlag(t *testing.T) {
 	require.GreaterOrEqual(t, len(runner.gotArgs), 2)
 	assert.Equal(t, "--profile", runner.gotArgs[0], "Runner 路径必须前插 --profile(缺省会落错身份)")
 	assert.Equal(t, "user-42", runner.gotArgs[1])
-	assert.Equal(t, []string{"docs", "+fetch"}, runner.gotArgs[2:], "业务参数原样跟随")
+	// 19 号补强后,用户域命令会追加 --as user(业务参数本身仍逐字跟随)
+	assert.Equal(t, []string{"docs", "+fetch", "--as", "user"}, runner.gotArgs[2:], "业务参数 + 身份参数")
+}
+
+// 19 号补强:用户域命令自动补 --as user,避免走机器人身份导致 scope 误报。
+func TestWithUserIdentity(t *testing.T) {
+	got := withUserIdentity([]string{"docs", "+search", "--query", "x"})
+	assert.Equal(t, []string{"docs", "+search", "--query", "x", "--as", "user"}, got)
+
+	// 已显式指定则不动
+	explicit := []string{"base", "+list", "--as", "user"}
+	assert.Equal(t, explicit, withUserIdentity(explicit))
+
+	// raw API / 工具辅助域不补
+	raw := []string{"api", "/open-apis/x"}
+	assert.Equal(t, raw, withUserIdentity(raw))
+	assert.Equal(t, []string{"schema"}, withUserIdentity([]string{"schema"}))
+	assert.Empty(t, withUserIdentity(nil))
 }

@@ -76,6 +76,12 @@ type MemoryCommandService interface {
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 }
 
+// LarkAuthCommander IM 内重新发起飞书授权(device flow)的窄面。
+// 授权必须用户本人在浏览器确认,IM 侧只负责把验证链接送出去。
+type LarkAuthCommander interface {
+	Relogin(ctx context.Context, userID int64) (verifyURL, userCode string, err error)
+}
+
 // NoteFeedbackService 主动消息反馈窄面(service/butler SettingsService 实现)。
 type NoteFeedbackService interface {
 	// FeedbackLatestDeliveredNote 反馈落到该用户最近一条 delivered 主动消息,返回确认文案。

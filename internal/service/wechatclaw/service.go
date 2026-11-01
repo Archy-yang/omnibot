@@ -107,6 +107,7 @@ type Service struct {
 	subAgentReporter im.SubAgentReportProvider
 	memoryService    im.MemoryCommandService
 	noteFeedbackSvc  im.NoteFeedbackService
+	larkAuthSvc      im.LarkAuthCommander
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -143,6 +144,9 @@ func (s *Service) SetSubAgentReporter(p im.SubAgentReportProvider) { s.subAgentR
 
 // SetMemoryService 注入记忆管理命令。
 func (s *Service) SetMemoryService(svc im.MemoryCommandService) { s.memoryService = svc }
+
+// SetLarkAuthCommander 注入飞书授权重发能力(IM 里 #飞书授权)。
+func (s *Service) SetLarkAuthCommander(svc im.LarkAuthCommander) { s.larkAuthSvc = svc }
 
 // SetNoteFeedbackService 注入主动消息反馈文本通道(29 号 N4)。
 func (s *Service) SetNoteFeedbackService(svc im.NoteFeedbackService) { s.noteFeedbackSvc = svc }
@@ -384,6 +388,9 @@ func (s *Service) startRuntime(ctx context.Context, account *domain.Account) err
 	}
 	if s.noteFeedbackSvc != nil {
 		handler.SetNoteFeedbackService(s.noteFeedbackSvc)
+	}
+	if s.larkAuthSvc != nil {
+		handler.SetLarkAuthCommander(s.larkAuthSvc)
 	}
 
 	// 关键:长轮询生命周期不能跟随调用方的 ctx。

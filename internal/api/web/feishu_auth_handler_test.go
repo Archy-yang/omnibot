@@ -18,14 +18,20 @@ import (
 )
 
 type mockLarkAuth struct {
-	started    *startCapture
-	startView  larkauth.View
-	startErr   error
-	pollView   larkauth.View
-	pollErr    error
-	view       larkauth.View
-	viewErr    error
-	deletedUID int64
+	started   *startCapture
+	startView larkauth.View
+	startErr  error
+	pollView  larkauth.View
+	pollErr   error
+	view      larkauth.View
+	viewErr   error
+	// 19 号补强:健康检查 / 一键重授权
+	healthView   larkauth.View
+	healthErr    error
+	reloginView  larkauth.View
+	reloginErr   error
+	reloginCalls int
+	deletedUID   int64
 }
 
 type startCapture struct {
@@ -42,6 +48,16 @@ func (m *mockLarkAuth) PollAuth(ctx context.Context, userID int64) (larkauth.Vie
 	return m.pollView, m.pollErr
 }
 func (m *mockLarkAuth) View(userID int64) (larkauth.View, error) { return m.view, m.viewErr }
+func (m *mockLarkAuth) Health(ctx context.Context, userID int64) (larkauth.View, error) {
+	if m.healthView.Status != "" {
+		return m.healthView, m.healthErr
+	}
+	return m.view, m.healthErr
+}
+func (m *mockLarkAuth) Relogin(ctx context.Context, userID int64) (larkauth.View, error) {
+	m.reloginCalls++
+	return m.reloginView, m.reloginErr
+}
 func (m *mockLarkAuth) Disconnect(ctx context.Context, userID int64) error {
 	m.deletedUID = userID
 	return nil
@@ -60,6 +76,7 @@ func setupFeishuAuthRouter(svc LarkAuthManager, userID int64) *gin.Engine {
 	r.POST("/api/v1/feishu-auth", h.HandleStartFeishuAuth)
 	r.GET("/api/v1/feishu-auth/poll", h.HandlePollFeishuAuth)
 	r.DELETE("/api/v1/feishu-auth", h.HandleDisconnectFeishuAuth)
+	r.POST("/api/v1/feishu-auth/relogin", h.HandleReloginFeishuAuth)
 	return r
 }
 
@@ -163,4 +180,43 @@ func TestHandleFeishuAuth_WithRealJWTMiddleware(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code, "有效 JWT 不应被 handler 拒绝: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), `"status":"none"`)
+}
+
+// T5 GET 状态走健康检查:CLI 真实态为 need_relogin 时,web 必须显示需要重新授权。
+func TestHandleGetFeishuAuth_UsesHealthCheck(t *testing.T) {
+	mock := &mockLarkAuth{healthView: larkauth.View{Status: "need_relogin", AppID: "cli_x", UserName: "杨琦"}}
+	r := setupFeishuAuthRouter(mock, 7)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, authReq(http.MethodGet, "/api/v1/feishu-auth", ""))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"need_relogin"`)
+}
+
+// T6 一键重授权:成功返回 pending + 验证链接。
+func TestHandleReloginFeishuAuth(t *testing.T) {
+	mock := &mockLarkAuth{reloginView: larkauth.View{
+		Status: "pending", VerifyURL: "https://accounts.feishu.cn/verify?x=1", UserCode: "CODE-9",
+	}}
+	r := setupFeishuAuthRouter(mock, 7)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, authReq(http.MethodPost, "/api/v1/feishu-auth/relogin", ""))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, mock.reloginCalls)
+	assert.Contains(t, w.Body.String(), `"status":"pending"`)
+	assert.Contains(t, w.Body.String(), "https://accounts.feishu.cn/verify?x=1")
+}
+
+// T7 一键重授权:无历史记录 → 404(提示先连接一次)。
+func TestHandleReloginFeishuAuth_NoRecord(t *testing.T) {
+	mock := &mockLarkAuth{reloginErr: larkauth.ErrNotAuthorized}
+	r := setupFeishuAuthRouter(mock, 7)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, authReq(http.MethodPost, "/api/v1/feishu-auth/relogin", ""))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

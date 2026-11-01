@@ -59,3 +59,18 @@ func TestCliReal_Run_NonTimeoutErrorIsTyped(t *testing.T) {
 	assert.False(t, errors.Is(err, context.DeadlineExceeded))
 	assert.Contains(t, err.Error(), "boom")
 }
+
+// 实测 1.0.94 输出没有 user_code 字段,用户码只在 verification_url 里——必须能兜底提取。
+func TestParseLoginStartOutput_UserCodeFromURL(t *testing.T) {
+	out := `{"device_code":"dc-1","verification_url":"https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=a&user_code=F33B-N6JL"}`
+	url, code, dc, err := parseLoginStartOutput(out)
+	require.NoError(t, err)
+	assert.Equal(t, "https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=a&user_code=F33B-N6JL", url)
+	assert.Equal(t, "F33B-N6JL", code)
+	assert.Equal(t, "dc-1", dc)
+}
+
+func TestParseLoginStartOutput_MissingKeyFields(t *testing.T) {
+	_, _, _, err := parseLoginStartOutput(`{"device_code":"dc-1"}`)
+	require.Error(t, err, "缺 verification_url 必须报错,不能把空链接发给用户")
+}

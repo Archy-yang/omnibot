@@ -171,9 +171,36 @@ func validateFeishuArgs(cliArgs []string) error {
 	return nil
 }
 
+// userIdentityDomains 应以「用户本人身份」执行的业务域。
+// 不带 --as user 时 lark-cli 会走机器人身份,导致用户 OAuth 的 scope 不生效——
+// 线上表现为 identity:"bot" + scopes 报错,用户误以为"授权掉了"。
+var userIdentityDomains = map[string]bool{
+	"docs": true, "base": true, "drive": true, "wiki": true, "sheets": true,
+	"calendar": true, "task": true, "mail": true, "contact": true, "mindnotes": true,
+	"note": true, "minutes": true, "vc": true, "okr": true, "approval": true,
+	"attendance": true, "whiteboard": true, "markdown": true,
+}
+
+// withUserIdentity 给用户域命令补上 --as user(调用方已显式指定则不动)。
+// raw API 逃生口(api/schema/skills)不补:它们可能刻意用机器人身份。
+func withUserIdentity(cliArgs []string) []string {
+	if len(cliArgs) == 0 || !userIdentityDomains[cliArgs[0]] {
+		return cliArgs
+	}
+	for _, a := range cliArgs {
+		if a == "--as" {
+			return cliArgs
+		}
+	}
+	out := make([]string, 0, len(cliArgs)+2)
+	out = append(out, cliArgs...)
+	return append(out, "--as", "user")
+}
+
 // runFeishuCLI 执行 lark-cli:超时控制 + stdin 透传 + 输出截断。
 // profile 非空时 argv 前插 --profile(19 号 M2:按当前用户隔离授权)。
 func runFeishuCLI(ctx context.Context, cfg FeishuCLIConfig, userID int64, cliArgs []string, stdin, profile string) (string, error) {
+	cliArgs = withUserIdentity(cliArgs)
 	// 27 号:已授权用户走物化执行(HOME 物化+回写);未授权/未注入 runner 直跑本地。
 	// --profile 必须与直跑路径一致地带上:物化 HOME 可能含多个 profile(迁移 blob 整目录),
 	// 缺省选择会落错身份(实测:默认 profile 无 user token → 执行错)

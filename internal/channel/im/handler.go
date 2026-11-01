@@ -93,6 +93,8 @@ type Handler struct {
 	memoryService MemoryCommandService
 	// 主动消息反馈文本通道(29号 N4)。nil 时不启用(不拦,走正常对话)。
 	noteFeedbackSvc NoteFeedbackService
+	// 飞书授权重发(19 号补强):#飞书授权 → 返回 device flow 验证链接。nil 时不启用。
+	larkAuthSvc LarkAuthCommander
 }
 
 // NewHandler 创建入站处理器。
@@ -109,6 +111,11 @@ func (h *Handler) SetSubAgentReporter(reporter SubAgentReportProvider) {
 // SetMemoryService 注入记忆管理命令依赖(PRD AC4.3)。未调用时无记忆命令。
 func (h *Handler) SetMemoryService(svc MemoryCommandService) {
 	h.memoryService = svc
+}
+
+// SetLarkAuthCommander 注入飞书授权重发能力(19 号补强)。未调用时 #飞书授权 不拦截。
+func (h *Handler) SetLarkAuthCommander(svc LarkAuthCommander) {
+	h.larkAuthSvc = svc
 }
 
 // SetNoteFeedbackService 注入主动消息反馈依赖(29号 N4)。未调用时反馈指令不拦。
@@ -175,6 +182,32 @@ func (h *Handler) HandleInbound(ctx context.Context, in InboundMessage) error {
 			}
 			return nil
 		}
+	}
+
+	// 飞书授权重发(19 号补强):IM 里发「#飞书授权」拿验证链接——
+	// 之前授权失效只能去 web 重连,且 IM 的 auth 子命令被工具白名单挡死,用户无路可走。
+	if h.larkAuthSvc != nil && text == "#飞书授权" {
+		url, code, err := h.larkAuthSvc.Relogin(ctx, userID)
+		reply := ""
+		switch {
+		case err != nil:
+			logger.ErrorWithFields("im: lark relogin failed",
+				zap.String("channel", h.opts.ChannelType),
+				zap.Int64("user_id", userID), zap.Error(err))
+			reply = "发起飞书授权失败，请稍后在 Web 设置里重试。"
+		case url == "":
+			reply = "已发起授权，但没拿到验证链接，请稍后在 Web 设置里重试。"
+		case code != "":
+			reply = fmt.Sprintf("飞书授权需要你本人确认：\n%s\n\n用户码：%s\n确认后回来告诉我一声即可。", url, code)
+		default:
+			reply = fmt.Sprintf("飞书授权需要你本人确认：\n%s\n\n确认后回来告诉我一声即可。", url)
+		}
+		if sendErr := h.opts.Sender.SendText(ctx, in.OpenID, reply); sendErr != nil {
+			logger.WarnWithFields("im: send lark auth reply failed",
+				zap.String("channel", h.opts.ChannelType),
+				zap.String("open_id", in.OpenID), zap.Error(sendErr))
+		}
+		return nil
 	}
 
 	// 保存用户消息(渠道 message_id 做幂等),返回逻辑 TurnID(Phase 1,§5.4)

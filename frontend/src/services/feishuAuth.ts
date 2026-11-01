@@ -19,6 +19,15 @@ export const feishuAuthService = {
     return response.data.data;
   },
 
+  /**
+   * 用后端已存的 AppID/AppSecret 重新发起 device flow(19 号补强)。
+   * token 事后失效时无需用户再翻后台找 secret。
+   */
+  async relogin(): Promise<FeishuAuthView> {
+    const response = await request.post<ApiResponse<FeishuAuthView>>('/feishu-auth/relogin');
+    return response.data.data;
+  },
+
   async poll(): Promise<FeishuAuthView> {
     const response = await request.get<ApiResponse<FeishuAuthView>>('/feishu-auth/poll');
     return response.data.data;

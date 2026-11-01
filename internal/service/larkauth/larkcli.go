@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -25,6 +26,9 @@ type LarkCLI interface {
 	LoginComplete(ctx context.Context, userID int64, profile, deviceCode string) error
 	// Status 授权身份回显(whoami)。
 	Status(userID int64, profile string) (openID, userName string, err error)
+	// AuthStatus 真实授权态(auth status --json):CLI 里是否真的有可用 user token。
+	// 这是"数据库状态可能过期"的唯一权威判据——DB 只记录我们上次收尾的结果。
+	AuthStatus(ctx context.Context, userID int64, profile string) (AuthStatusResult, error)
 	Logout(userID int64, profile string) error
 }
 
@@ -35,8 +39,8 @@ type Runner interface {
 
 // CLIConfig 真实实现配置。
 type CLIConfig struct {
-	BinPath        string        // 默认 lark-cli
-	Domains        string        // LoginStart 的 --domain,默认 all
+	BinPath         string        // 默认 lark-cli
+	Domains         string        // LoginStart 的 --domain,默认 all
 	CompleteTimeout time.Duration // LoginComplete 单次收尾超时,默认 5s(惰性收尾节奏)
 }
 
@@ -120,6 +124,18 @@ func (c *cliReal) ProfileAdd(userID int64, profile, appID, appSecret string) err
 	return add()
 }
 
+// AuthStatusResult lark-cli auth status --json 的关键字段。
+type AuthStatusResult struct {
+	// UserAvailable 用户身份是否可用(有 token 且未过期)。
+	UserAvailable bool
+	// UserStatus CLI 原始状态(ok / missing / pending / expired ...)。
+	UserStatus string
+	OpenID     string
+	UserName   string
+	// DeviceCode CLI 侧挂着的未完成 device flow(有则可尝试收尾)。
+	DeviceCode string
+}
+
 // cliJSON lark-cli --json 输出的宽容解析:多候选字段名取首个非空(输出 schema 以实跑为准,容错缺字段)。
 func pickString(m map[string]interface{}, keys ...string) string {
 	for _, k := range keys {
@@ -135,6 +151,14 @@ func (c *cliReal) LoginStart(userID int64, profile, domains string) (string, str
 	if err != nil {
 		return "", "", "", err
 	}
+	return parseLoginStartOutput(out)
+}
+
+// parseLoginStartOutput 解析 auth login --no-wait --json 的输出。
+//
+// 实测 CLI 1.0.94:输出没有独立 user_code 字段,用户码只在 verification_url 的 query 里
+// (`?flow_id=...&user_code=XXXX-YYYY`)。所以字段缺失时从 URL 兜底提取。
+func parseLoginStartOutput(out string) (verifyURL, userCode, deviceCode string, err error) {
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &m); err != nil {
 		return "", "", "", fmt.Errorf("lark-cli auth login 输出解析失败(期望 JSON): %w", err)
@@ -147,9 +171,14 @@ func (c *cliReal) LoginStart(userID int64, profile, domains string) (string, str
 			}
 		}
 	}
-	verifyURL := pickString(m, "verification_url", "verificationUrl", "url", "verify_url")
-	deviceCode := pickString(m, "device_code", "deviceCode", "device_introspection_code")
-	userCode := pickString(m, "user_code", "userCode")
+	verifyURL = pickString(m, "verification_url", "verificationUrl", "url", "verify_url")
+	deviceCode = pickString(m, "device_code", "deviceCode", "device_introspection_code")
+	userCode = pickString(m, "user_code", "userCode")
+	if userCode == "" && verifyURL != "" {
+		if u, perr := url.Parse(verifyURL); perr == nil {
+			userCode = u.Query().Get("user_code")
+		}
+	}
 	if verifyURL == "" || deviceCode == "" {
 		return "", "", "", fmt.Errorf("lark-cli auth login 输出缺少关键字段(verification_url/device_code)")
 	}
@@ -178,6 +207,37 @@ func (c *cliReal) Status(userID int64, profile string) (string, string, error) {
 		name = pickString(o, "userName", "user_name")
 	}
 	return openID, name, nil
+}
+
+// AuthStatus 查询 CLI 真实授权态。只读,不触发收尾。
+func (c *cliReal) AuthStatus(ctx context.Context, userID int64, profile string) (AuthStatusResult, error) {
+	statusCtx, cancel := context.WithTimeout(ctx, c.cfg.completeTimeout())
+	defer cancel()
+	out, err := c.run(statusCtx, userID, "", "--profile", profile, "auth", "status", "--json")
+	if err != nil {
+		return AuthStatusResult{}, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		return AuthStatusResult{}, fmt.Errorf("lark-cli auth status 输出解析失败: %w", err)
+	}
+	res := AuthStatusResult{UserStatus: "unknown"}
+	identities, _ := m["identities"].(map[string]interface{})
+	user, _ := identities["user"].(map[string]interface{})
+	if user != nil {
+		res.UserStatus = pickString(user, "status")
+		res.OpenID = pickString(user, "openId", "open_id")
+		res.UserName = pickString(user, "userName", "user_name")
+		res.DeviceCode = pickString(user, "deviceCode", "device_code")
+		if v, ok := user["available"].(bool); ok {
+			res.UserAvailable = v
+		}
+		// 兼容:status=ok 视为可用(某些版本省略 available 字段)
+		if !res.UserAvailable && res.UserStatus == "ok" {
+			res.UserAvailable = true
+		}
+	}
+	return res, nil
 }
 
 func (c *cliReal) Logout(userID int64, profile string) error {
