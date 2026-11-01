@@ -15,9 +15,10 @@ import (
 // mockBindingService 用于 web handler 测试(v2.3 泛化版)
 type mockBindingService struct {
 	// IsChannelBound 行为:按 channelType 返回
-	feishuBound bool
-	wechatBound bool
-	boundErr    error
+	feishuBound     bool
+	wechatBound     bool
+	wechatClawBound bool
+	boundErr        error
 	// GenerateCode 行为
 	code    string
 	expires time.Time
@@ -38,6 +39,8 @@ func (m *mockBindingService) IsChannelBound(userID int64, channelType string) (b
 		return m.feishuBound, nil
 	case "wechat":
 		return m.wechatBound, nil
+	case "wechat_claw":
+		return m.wechatClawBound, nil
 	}
 	return false, nil
 }
@@ -141,8 +144,9 @@ func TestChannelBindHandler_GenerateCode_FeishuBoundOnly_StillAllowed(t *testing
 // 全渠道都已绑 -> 409
 func TestChannelBindHandler_GenerateCode_AllBound_Conflict(t *testing.T) {
 	svc := &mockBindingService{
-		feishuBound: true,
-		wechatBound: true,
+		feishuBound:     true,
+		wechatBound:     true,
+		wechatClawBound: true,
 	}
 	r := newChannelBindRouter(svc)
 

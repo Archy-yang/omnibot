@@ -16,6 +16,7 @@ import (
 	"omnibot/internal/domain/subscription"
 	"omnibot/internal/domain/tool"
 	"omnibot/internal/domain/user"
+	"omnibot/internal/domain/wechatclaw"
 	"omnibot/pkg/config"
 	zaplogger "omnibot/pkg/logger"
 
@@ -161,7 +162,7 @@ func autoMigrate(db *gorm.DB) error {
 		&user.User{},
 		&user.UserChannel{},
 		&user.LLMConfig{},
-		&user.LarkCLIAuth{}, // 19-多用户LarkCLI授权:用户级 lark-cli 授权状态(路由/密文/收尾态)
+		&user.LarkCLIAuth{},  // 19-多用户LarkCLI授权:用户级 lark-cli 授权状态(路由/密文/收尾态)
 		&user.LarkCLIState{}, // 27-lark-cli 状态 DB 物化:授权状态黑盒 blob(DB 为唯一事实源)
 		&user.UserCredential{},
 		&user.BindCode{},
@@ -192,6 +193,7 @@ func autoMigrate(db *gorm.DB) error {
 		&subscription.Subscription{}, // 14-订阅源管理:RSS 信息源登记簿(查询时按需取)
 		&skill.Skill{},               // 18-Skill 技能系统:程序性知识包(DB 为事实源,目录按需注入)
 		&skill.SkillFile{},           // 18:技能附属文件(脚本/资源,sandbox_run 执行)
+		&wechatclaw.Account{},        // 31 号:微信 ClawBot 登录凭证(单账号,token 加密)
 	)
 }
 

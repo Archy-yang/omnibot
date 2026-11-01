@@ -8,6 +8,8 @@ import type { ApiResponse } from '../types/api';
 export interface ChannelBindingStatus {
   feishu_bound: boolean;
   wechat_bound: boolean;
+  /** 31 号:微信 ClawBot(iLink 个人号)绑定状态 */
+  wechat_claw_bound: boolean;
 }
 
 export interface BindCode {

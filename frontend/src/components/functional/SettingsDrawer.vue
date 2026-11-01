@@ -17,6 +17,8 @@ import { ref, watch, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import { feishuAuthService } from '@/services/feishuAuth';
+import { wechatClawService, type WeChatClawStatusView } from '@/services/wechatClaw';
+import QRCode from 'qrcode';
 import { styleProfileService } from '@/services/styleProfile';
 import { proactiveService } from '@/services/proactive';
 import type { ProactiveSettings, ProactiveNoteItem } from '@/services/proactive';
@@ -52,6 +54,7 @@ const navItems = [
   { key: 'chat-model', label: '对话模型' },
   { key: 'embedding-model', label: '向量模型' },
   { key: 'feishu-auth', label: '飞书授权' },
+  { key: 'wechat-claw', label: '微信接入' },
   { key: 'style-profile', label: '风格与认知' },
   { key: 'proactive', label: '主动关心' },
   { key: 'about', label: '关于' },
@@ -194,6 +197,7 @@ const handleFaDisconnect = async () => {
 
 watch(activeSection, (v) => {
   if (v === 'feishu-auth') loadFaStatus();
+  if (v === 'wechat-claw') loadWcStatus();
   else stopFaPoll();
   if (v === 'style-profile') loadStyleProfile();
 });
@@ -287,6 +291,7 @@ const showApiKey = ref(false);
 // ===== v2.2 飞书绑定 =====
 const feishuBound = ref<boolean>(false);
 const wechatBound = ref<boolean>(false);
+const wechatClawBound = ref<boolean>(false);
 const feishuCode = ref<string>('');
 const feishuCodeExpiresIn = ref<number>(0);
 const feishuCodeLoading = ref<boolean>(false);
@@ -316,6 +321,7 @@ const loadChannelBinding = async () => {
     const status = await channelBindingService.getBindingStatus();
     feishuBound.value = status.feishu_bound;
     wechatBound.value = status.wechat_bound;
+    wechatClawBound.value = status.wechat_claw_bound;
   } catch (err) {
     // 静默失败,不阻断抽屉
     console.error('Failed to load channel binding:', err);
@@ -344,9 +350,130 @@ const feishuCountdownText = computed(() => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 });
 
+
+// ===== 微信 ClawBot 接入(31 号技术方案) =====
+const wcStatus = ref<WeChatClawStatusView | null>(null);
+const wcLoading = ref(false);
+const wcBusy = ref(false);
+const wcQR = ref('');
+const wcQrcode = ref('');
+const wcNeedVerify = ref(false);
+const wcVerifyCode = ref('');
+const wcCountdown = ref(0);
+let wcPollTimer: number | null = null;
+let wcCountdownTimer: number | null = null;
+
+const stopWcTimers = () => {
+  if (wcPollTimer !== null) { window.clearInterval(wcPollTimer); wcPollTimer = null; }
+  if (wcCountdownTimer !== null) { window.clearInterval(wcCountdownTimer); wcCountdownTimer = null; }
+};
+
+const loadWcStatus = async () => {
+  wcLoading.value = true;
+  try {
+    wcStatus.value = await wechatClawService.getStatus();
+  } catch (err) {
+    // 服务未启用/网络异常:静默,不阻断抽屉
+    console.error('Failed to load wechat claw status:', err);
+  } finally {
+    wcLoading.value = false;
+  }
+};
+
+const startWcCountdown = (seconds: number) => {
+  if (wcCountdownTimer !== null) { window.clearInterval(wcCountdownTimer); }
+  wcCountdown.value = seconds;
+  wcCountdownTimer = window.setInterval(() => {
+    wcCountdown.value -= 1;
+    if (wcCountdown.value <= 0) {
+      stopWcTimers();
+    }
+  }, 1000);
+};
+
+const pollWcStatus = async () => {
+  if (!wcQrcode.value) return;
+  try {
+    const { view, connected } = await wechatClawService.pollLogin(
+      wcQrcode.value,
+      wcNeedVerify.value ? wcVerifyCode.value : '',
+    );
+    if (connected) {
+      stopWcTimers();
+      wcQR.value = '';
+      wcQrcode.value = '';
+      wcNeedVerify.value = false;
+      wcVerifyCode.value = '';
+      success('微信已连接');
+      await loadWcStatus();
+      return;
+    }
+    if (view.need_verify_code) {
+      wcNeedVerify.value = true;
+    }
+    if (view.status === 'expired') {
+      stopWcTimers();
+      wcQR.value = '';
+      error('二维码已过期,请重新获取');
+    }
+  } catch (err) {
+    // 会话过期或网络错误:停止轮询,提示重来
+    stopWcTimers();
+    wcQR.value = '';
+    wcQrcode.value = '';
+    console.error('wechat claw poll failed:', err);
+    error(err instanceof Error ? err.message : '扫码状态查询失败');
+  }
+};
+
+const handleWcStart = async () => {
+  wcBusy.value = true;
+  try {
+    const view = await wechatClawService.startLogin();
+    wcQrcode.value = view.qrcode;
+    wcQR.value = await QRCode.toDataURL(view.qr_url, { margin: 1, width: 220 });
+    wcNeedVerify.value = false;
+    wcVerifyCode.value = '';
+    stopWcTimers();
+    startWcCountdown(view.expires_in || 300);
+    wcPollTimer = window.setInterval(pollWcStatus, 1500);
+  } catch (err) {
+    error(err instanceof Error ? err.message : '获取二维码失败');
+  } finally {
+    wcBusy.value = false;
+  }
+};
+
+const handleWcVerify = async () => {
+  if (!wcVerifyCode.value.trim()) return;
+  await pollWcStatus();
+};
+
+const handleWcCancel = () => {
+  stopWcTimers();
+  wcQR.value = '';
+  wcQrcode.value = '';
+  wcNeedVerify.value = false;
+  wcVerifyCode.value = '';
+};
+
+const handleWcDisconnect = async () => {
+  wcBusy.value = true;
+  try {
+    await wechatClawService.disconnect();
+    success('已断开微信连接');
+    await loadWcStatus();
+  } catch (err) {
+    error(err instanceof Error ? err.message : '断开失败');
+  } finally {
+    wcBusy.value = false;
+  }
+};
+
 onUnmounted(() => {
   clearFeishuTimer();
   stopFaPoll(); // 19 号:飞书授权轮询随组件卸载停止
+  stopWcTimers(); // 31 号:微信 ClawBot 轮询随组件卸载停止
 });
 
 // Sync local from store
@@ -831,6 +958,47 @@ const showEmbeddingApiKey = ref(false);
     </template>
     </div><!-- /飞书授权 section -->
 
+    <!-- ===== 微信 ClawBot 接入 section(31 号技术方案) ===== -->
+    <div v-show="activeSection === 'wechat-claw'" class="section-pane">
+    <div class="section-title">微信接入(ClawBot)</div>
+    <p class="section-hint">用微信扫码把「微信Claw」连接到这里:你在微信里发的消息会走同一个助手,回复也发回微信。本期只支持文字消息;登录凭证加密存储在本机。</p>
+
+    <div v-if="wcLoading" class="form-hint">加载中...</div>
+    <template v-else>
+      <!-- 已连接:身份回显 + 断开 -->
+      <div v-if="wcStatus?.connected" class="fa-status-row">
+        <div class="fa-identity">
+          <span class="fa-name">已连接</span>
+          <span class="fa-openid">{{ wcStatus.bot_id }}</span>
+        </div>
+        <button type="button" class="fa-btn" :disabled="wcBusy" @click="handleWcDisconnect">断开连接</button>
+      </div>
+
+      <!-- 扫码中:二维码 + 倒计时 / 数字校验 -->
+      <div v-else-if="wcQR" class="wc-qr-wrap">
+        <img :src="wcQR" alt="微信登录二维码" class="wc-qr" />
+        <p class="form-hint">
+          {{ wcCountdown > 0 ? `用微信扫码并在手机上确认,${wcCountdown}s 后失效` : '二维码已失效,请重新获取' }}
+        </p>
+        <div v-if="wcNeedVerify" class="wc-verify">
+          <label class="form-label" for="wc-verify-code">输入手机微信上显示的数字</label>
+          <input id="wc-verify-code" v-model="wcVerifyCode" class="form-input" type="text" inputmode="numeric" />
+          <button type="button" class="fa-btn is-primary" :disabled="!wcVerifyCode.trim()" @click="handleWcVerify">提交</button>
+        </div>
+        <button type="button" class="fa-btn" @click="handleWcCancel">取消</button>
+      </div>
+
+      <!-- 未连接:发起扫码 -->
+      <div v-else class="fa-form">
+        <p v-if="wcStatus?.need_relogin" class="form-hint">登录已失效,请重新扫码。</p>
+        <button type="button" class="fa-btn is-primary" :disabled="wcBusy" @click="handleWcStart">
+          {{ wcBusy ? '获取二维码...' : '扫码连接微信' }}
+        </button>
+      </div>
+    </template>
+    </div><!-- /微信 ClawBot section -->
+
+
     <!-- ===== 主动关心 section(26-主动管家ProactiveButler) ===== -->
     <div v-show="activeSection === 'proactive'" class="section-pane">
     <div class="section-title">主动关心</div>
@@ -931,10 +1099,15 @@ const showEmbeddingApiKey = ref(false);
             <span class="channel-name">微信</span>
             <span class="channel-state">{{ wechatBound ? '已绑定' : '未绑定' }}</span>
           </div>
+          <div class="channel-status-item" :class="{ bound: wechatClawBound }">
+            <span class="channel-dot"></span>
+            <span class="channel-name">微信 ClawBot</span>
+            <span class="channel-state">{{ wechatClawBound ? '已绑定' : '未绑定' }}</span>
+          </div>
         </div>
 
         <!-- 全部已绑:不展示出码区 -->
-        <template v-if="!(feishuBound && wechatBound)">
+        <template v-if="!(feishuBound && wechatBound && wechatClawBound)">
           <!-- 未生成码:获取按钮 -->
           <button
             v-if="!feishuCode"
@@ -1661,4 +1834,27 @@ const showEmbeddingApiKey = ref(false);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 31 号:微信 ClawBot 扫码区块 */
+.wc-qr-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+.wc-qr {
+  width: 220px;
+  height: 220px;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
+.wc-verify {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 280px;
+}
+
 </style>
