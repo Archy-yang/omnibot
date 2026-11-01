@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -137,6 +138,46 @@ func (s *BindingService) BindChannel(channelType, code, openID string) error {
 
 	// 5. 删码(幂等)
 	_ = s.bindCodeRepo.DeleteByUserID(stored.UserID)
+	return nil
+}
+
+// BindDirect 渠道侧已自行确认身份时的直接绑定(扫码/授权类渠道,如微信 ClawBot)。
+//
+// 与 BindChannel 的区别:不需要绑定码——扫码的人就是本人,userID 由调用方
+// 在渠道登录发起时从登录态取得(31 号技术方案 §3.4)。
+//
+// 幂等:同一 (channelType, channelUserID) 已绑到同一 user 时直接返回 nil;
+// 该渠道号已被其他账号占用时返回 ErrChannelAlreadyBound,不静默抢占。
+func (s *BindingService) BindDirect(channelType string, userID int64, channelUserID string) error {
+	if userID <= 0 || strings.TrimSpace(channelUserID) == "" {
+		return ErrCodeInvalid
+	}
+	existing, err := s.channelRepo.GetByChannel(channelType, channelUserID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if existing != nil {
+		if existing.UserID == userID {
+			return nil
+		}
+		return ErrChannelAlreadyBound
+	}
+
+	// 先建后删:避免「删了旧的、建新的失败」导致绑定直接丢失。
+	err = s.channelRepo.Create(user.NewUserChannel(userID, channelType, channelUserID))
+	if err != nil {
+		// 并发:另一请求已先绑该 (channelType, channelUserID)
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return ErrChannelAlreadyBound
+		}
+		return err
+	}
+
+	// 清理同渠道其它旧身份:ClawBot 单机器人单主人,换号/换人重扫后旧身份必须失效,
+	// 否则旧 ilink id 仍会把消息算到原账号头上。
+	if _, err := s.channelRepo.DeleteByChannelTypeExcept(channelType, channelUserID); err != nil {
+		return err
+	}
 	return nil
 }
 

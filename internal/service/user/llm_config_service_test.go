@@ -2,8 +2,8 @@ package user
 
 import (
 	"encoding/base64"
-	"sync/atomic"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/glebarez/sqlite"

@@ -18,7 +18,9 @@ import (
 	"omnibot/internal/api/admin"
 	"omnibot/internal/api/web"
 	"omnibot/internal/api/wechat"
+	"omnibot/internal/channel/im"
 	channelwechat "omnibot/internal/channel/wechat"
+	wechatclawchannel "omnibot/internal/channel/wechatclaw"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
 	"omnibot/internal/pkg/auth"
@@ -34,6 +36,7 @@ import (
 	subscriptionRepo "omnibot/internal/repository/subscription"
 	toolRepo "omnibot/internal/repository/tool"
 	userRepo "omnibot/internal/repository/user"
+	wechatclawRepo "omnibot/internal/repository/wechatclaw"
 	agentpkg "omnibot/internal/service/agent"
 	agenttools "omnibot/internal/service/agent/tools"
 	butlerpkg "omnibot/internal/service/butler"
@@ -48,6 +51,7 @@ import (
 	subscriptionService "omnibot/internal/service/subscription"
 	toolService "omnibot/internal/service/tool"
 	userService "omnibot/internal/service/user"
+	wechatclawsvc "omnibot/internal/service/wechatclaw"
 	"omnibot/pkg/config"
 	"omnibot/pkg/logger"
 
@@ -77,6 +81,9 @@ type appDeps struct {
 	llmConfigSvc    userService.LLMConfigService
 	subAgentSvc     *agentpkg.SubAgentService
 	userChannelRepo userRepo.UserChannelRepository // 26 号:butler 送达器查 open_id
+
+	// 31 号:微信 ClawBot 接入(扫码登录 + 长轮询;单账号进程级)
+	wechatClawSvc *wechatclawsvc.Service
 
 	// 25 号:持久任务调度器(进程级后台循环,routes.go 启动)
 	persistentScheduler *agentpkg.PersistentTaskScheduler
@@ -597,6 +604,30 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 订阅源管理接口(14-订阅源管理:页面管理入口)
 	subscriptionHandler := web.NewSubscriptionHandler(subscriptionSvc)
 
+	// 31 号:微信 ClawBot 接入。单账号进程级,扫码/状态/断开走 web 接口;
+	// 长轮询由 Service 自管(登录成功或启动时自动拉起)。
+	wechatClawSvc := wechatclawsvc.NewService(
+		wechatclawRepo.NewAccountRepository(dbConn.GetGormDB()),
+		func(baseURL, token string) wechatclawsvc.ClientAPI {
+			return wechatclawchannel.NewClient(wechatclawchannel.ClientOptions{BaseURL: baseURL, Token: token})
+		},
+		wechatclawsvc.HandlerDeps{
+			Binding:   bindingSvc,
+			Messages:  msgSvc,
+			Agent:     agentSvc,
+			LLMConfig: llmConfigSvc,
+		},
+	)
+	wechatClawSvc.SetSubAgentReporter(subAgentSvc)
+	// 31 号:扫码即绑定(扫码的人就是机器人主人,不再要求发绑定码)
+	wechatClawSvc.SetDirectBinder(bindingSvc)
+	// 29 号 N4:主动消息反馈文本通道(「有用/不用再提」),与飞书共用同一服务实例
+	wechatClawSvc.SetNoteFeedbackService(butlerSettingsSvc)
+	// 记忆管理命令(#记住 / #我的记忆 ...):memorySvc 实现即注入
+	if m, ok := memorySvc.(im.MemoryCommandService); ok {
+		wechatClawSvc.SetMemoryService(m)
+	}
+
 	return &appDeps{
 		cfg:                 cfg,
 		wechatHandler:       wechatHandler,
@@ -613,6 +644,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
 		userChannelRepo:     userChannelRepository,
+		wechatClawSvc:       wechatClawSvc,
 		persistentScheduler: persistentScheduler,
 		butlerScan:          butlerScanSvc,
 		butlerScheduler:     butlerScheduler,

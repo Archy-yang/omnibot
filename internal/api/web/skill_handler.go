@@ -160,11 +160,11 @@ func (h *Handler) HandleCreateSkill(c *gin.Context) {
 
 // updateSkillRequest PUT /api/v1/skills/:id 请求体(指针字段区分"改"与"不改")。
 type updateSkillRequest struct {
-	Name        *string            `json:"name"`
-	DisplayName *string            `json:"display_name"`
-	Description *string            `json:"description"`
-	Instruction *string            `json:"instruction"`
-	Enabled     *bool              `json:"enabled"`
+	Name        *string             `json:"name"`
+	DisplayName *string             `json:"display_name"`
+	Description *string             `json:"description"`
+	Instruction *string             `json:"instruction"`
+	Enabled     *bool               `json:"enabled"`
 	Files       *[]skillFileRequest `json:"files"` // nil = 不动;非 nil = 全量替换(空数组 = 清空)
 }
 

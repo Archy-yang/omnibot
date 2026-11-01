@@ -15,6 +15,7 @@ import (
 	channelfeishu "omnibot/internal/channel/feishu"
 	channelweb "omnibot/internal/channel/web"
 	channelwechat "omnibot/internal/channel/wechat"
+	wechatclawchannel "omnibot/internal/channel/wechatclaw"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/backtask"
 	userRepo "omnibot/internal/repository/user"
@@ -47,6 +48,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 
 	// 全量依赖装配(wire.go)
 	d := buildAppDeps(cfg)
+
+	// 31 号:微信 ClawBot 通道注册(异步发送/主动推送可用)。
+	// 用 provider 动态取当前 sender:重新扫码只换底层 client,通道实例不变。
+	channelfactory.Register(wechatclawchannel.NewChannel(d.wechatClawSvc.CurrentSender))
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
 	wechatGroup := r.Group("/wechat")
@@ -124,6 +129,17 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		proNotesGroup.PUT("/:id/feedback", d.webHandler.HandleSetNoteFeedback) // 29号 N3 送达反馈
 	}
 
+	// 31 号:微信 ClawBot 扫码登录 / 连接状态 / 断开(单账号,进程级)
+	wechatClawAPIGroup := r.Group("/api/v1/wechat-claw")
+	wechatClawAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))
+	{
+		wechatClawHandler := web.NewWeChatClawHandler(d.wechatClawSvc)
+		wechatClawAPIGroup.POST("/login", wechatClawHandler.HandleStartLogin)
+		wechatClawAPIGroup.GET("/login/:qrcode", wechatClawHandler.HandlePollLogin)
+		wechatClawAPIGroup.GET("/status", wechatClawHandler.HandleGetStatus)
+		wechatClawAPIGroup.DELETE("", wechatClawHandler.HandleDisconnect)
+	}
+
 	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。
 	// 放在路由装配尾部,与飞书长连接同款 goroutine 纪律(独立 background ctx)。
 	backtask.RunDetached("persistent task scheduler", func() {
@@ -143,6 +159,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
 	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.butlerSettings, d.userChannelRepo)
+
+	// 31 号:微信 ClawBot 长轮询。已有 active 账号则自动恢复,否则空转退出(等扫码)。
+	backtask.RunDetached("wechat claw channel", func() {
+		d.wechatClawSvc.Start(context.Background())
+	})
 
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
@@ -183,7 +204,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			mattersAPIGroup.GET("", d.webHandler.HandleListMatters)
 			mattersAPIGroup.GET("/:id", d.webHandler.HandleGetMatter)
 			mattersAPIGroup.PUT("/:id", d.webHandler.HandleUpdateMatter)
-			mattersAPIGroup.PUT("/:id/target", d.webHandler.HandleSetMatterTarget) // 30号 N2:设/清目标日
+			mattersAPIGroup.PUT("/:id/target", d.webHandler.HandleSetMatterTarget)  // 30号 N2:设/清目标日
 			mattersAPIGroup.POST("/:id/sync-doc", d.webHandler.HandleSyncMatterDoc) // 23号:同步档案到飞书
 		}
 	}

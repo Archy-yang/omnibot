@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"omnibot/internal/middleware"
 	memorydomain "omnibot/internal/domain/memory"
+	"omnibot/internal/middleware"
 	memoryrepo "omnibot/internal/repository/memory"
 	memorysvc "omnibot/internal/service/memory"
 

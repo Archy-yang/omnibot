@@ -19,6 +19,8 @@ type UserChannelRepository interface {
 	Create(uc *user.UserChannel) error
 	GetByChannel(channelType, channelUserID string) (*user.UserChannel, error)
 	GetByUserID(userID int64) ([]*user.UserChannel, error)
+	// DeleteByChannelTypeExcept 删除某渠道下除指定身份外的绑定(换号/换人清理)
+	DeleteByChannelTypeExcept(channelType, keepChannelUserID string) (int64, error)
 }
 
 // UserService 用户服务

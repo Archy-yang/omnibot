@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"omnibot/internal/middleware"
 	memorydomain "omnibot/internal/domain/memory"
+	"omnibot/internal/middleware"
 	memorysvc "omnibot/internal/service/memory"
 
 	"github.com/gin-gonic/gin"
@@ -31,7 +31,7 @@ func (m *mockStyleProfile) StyleProfile(int64, int) (*memorysvc.StyleProfileView
 }
 func (m *mockStyleProfile) DeleteStyleObservation(int64, int64) (bool, error) { return m.delOK, nil }
 func (m *mockStyleProfile) DeleteCognitionChange(int64, int64) (bool, error)  { return m.delOK, nil }
-func (m *mockStyleProfile) GetStyleInjection(_ int64) (bool, error) { return m.injectOn, nil }
+func (m *mockStyleProfile) GetStyleInjection(_ int64) (bool, error)           { return m.injectOn, nil }
 func (m *mockStyleProfile) SetStyleInjection(_ int64, enabled bool) error {
 	m.injectOn = enabled
 	return m.setErr

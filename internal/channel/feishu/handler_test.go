@@ -94,8 +94,8 @@ func (m *mockMessageService) SaveAssistantMessageWithToolCalls(
 	return nil
 }
 func (m *mockMessageService) SaveReportMessage(
-		ctx context.Context,
-		userID, taskID, turnID int64, content string,
+	ctx context.Context,
+	userID, taskID, turnID int64, content string,
 	segments []conversation.MessageSegment, steps []*conversation.AgentStep,
 ) error {
 	m.reportCalled = true

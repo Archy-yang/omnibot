@@ -33,6 +33,78 @@ func newBindingService(t *testing.T, ttl time.Duration) (*BindingService, *gorm.
 	return svc, db, bindCodeRepo
 }
 
+// ---------- BindDirect(扫码即绑定) ----------
+
+func TestBindingService_BindDirect_Success(t *testing.T) {
+	svc, _, _ := newBindingService(t, 5*time.Minute)
+
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-1"))
+
+	uid, bound, err := svc.ResolveUserID("wechat_claw", "owner-1")
+	require.NoError(t, err)
+	assert.True(t, bound)
+	assert.Equal(t, int64(42), uid)
+}
+
+func TestBindingService_BindDirect_Idempotent(t *testing.T) {
+	svc, _, _ := newBindingService(t, 5*time.Minute)
+
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-1"))
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-1"))
+
+	uid, bound, err := svc.ResolveUserID("wechat_claw", "owner-1")
+	require.NoError(t, err)
+	assert.True(t, bound)
+	assert.Equal(t, int64(42), uid)
+}
+
+func TestBindingService_BindDirect_ChannelBoundToOtherUser(t *testing.T) {
+	svc, _, _ := newBindingService(t, 5*time.Minute)
+
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-1"))
+	err := svc.BindDirect("wechat_claw", 99, "owner-1")
+	assert.ErrorIs(t, err, ErrChannelAlreadyBound)
+}
+
+func TestBindingService_BindDirect_InvalidArgs(t *testing.T) {
+	svc, _, _ := newBindingService(t, 5*time.Minute)
+
+	assert.ErrorIs(t, svc.BindDirect("wechat_claw", 0, "owner-1"), ErrCodeInvalid)
+	assert.ErrorIs(t, svc.BindDirect("wechat_claw", 42, "  "), ErrCodeInvalid)
+}
+
+func TestBindingService_BindDirect_RebindReplacesOldIdentity(t *testing.T) {
+	svc, db, _ := newBindingService(t, 5*time.Minute)
+
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-old"))
+	// 换微信重扫:新 ilink id 绑定后,旧身份必须失效(单机器人单主人)
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-new"))
+
+	_, boundOld, err := svc.ResolveUserID("wechat_claw", "owner-old")
+	require.NoError(t, err)
+	assert.False(t, boundOld, "旧身份不应再解析到账号")
+
+	uid, boundNew, err := svc.ResolveUserID("wechat_claw", "owner-new")
+	require.NoError(t, err)
+	assert.True(t, boundNew)
+	assert.Equal(t, int64(42), uid)
+
+	var count int64
+	require.NoError(t, db.Model(&domain.UserChannel{}).Where("channel_type = ?", "wechat_claw").Count(&count).Error)
+	assert.Equal(t, int64(1), count, "同渠道只应保留一条绑定")
+}
+
+func TestBindingService_BindDirect_OtherChannelUnaffected(t *testing.T) {
+	svc, db, _ := newBindingService(t, 5*time.Minute)
+
+	require.NoError(t, db.Create(domain.NewUserChannel(42, "feishu", "ou_1")).Error)
+	require.NoError(t, svc.BindDirect("wechat_claw", 42, "owner-1"))
+
+	_, bound, err := svc.ResolveUserID("feishu", "ou_1")
+	require.NoError(t, err)
+	assert.True(t, bound, "清理 wechat_claw 不应影响飞书绑定")
+}
+
 // ---------- IsFeishuBound ----------
 
 func TestBindingService_IsFeishuBound_NotBound(t *testing.T) {
@@ -206,6 +278,11 @@ func NewGormUserChannelRepositoryShim(db *gorm.DB) UserChannelRepository {
 type gormUserChannelShim struct{ db *gorm.DB }
 
 func (s *gormUserChannelShim) Create(uc *domain.UserChannel) error { return s.db.Create(uc).Error }
+func (s *gormUserChannelShim) DeleteByChannelTypeExcept(channelType, keepChannelUserID string) (int64, error) {
+	res := s.db.Where("channel_type = ? AND channel_user_id <> ?", channelType, keepChannelUserID).
+		Delete(&domain.UserChannel{})
+	return res.RowsAffected, res.Error
+}
 func (s *gormUserChannelShim) GetByChannel(channelType, channelUserID string) (*domain.UserChannel, error) {
 	var uc domain.UserChannel
 	err := s.db.Where("channel_type = ? AND channel_user_id = ?", channelType, channelUserID).First(&uc).Error

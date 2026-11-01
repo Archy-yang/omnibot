@@ -14,34 +14,34 @@ import "time"
 //
 // 任务按 UserID 隔离,用户只能查/汇报自己的任务(安全红线)。
 type AgentTask struct {
-	ID           int64     `gorm:"primaryKey;autoIncrement"`
-	UserID       int64     `gorm:"index;not null"`         // 归属用户(任务按用户隔离)
-	SubAgentType string    `gorm:"size:50;not null"`       // 溯源标签(可空,来自 taskSpec.Type;去角色后非角色,不 gate 机制)
-	Name         string    `gorm:"size:64"`                // 任务短名(可空,来自 taskSpec.Name;人读展示用,空则展示层回落 goal 摘要)
-	Goal         string    `gorm:"type:text;not null"`     // 委托目标(冗余存,task_spec.Goal 的快捷访问;兼容老代码)
-	Status       string    `gorm:"size:20;not null;index"` // pending / running / completed / failed / cancelled
-	Artifact     *string   `gorm:"type:text"`              // 子 Agent 最终产出,completed 时填
-	ErrorMsg     *string   `gorm:"type:text"`              // failed 时填
-	Reported     bool      `gorm:"not null;default:false"` // 是否已汇报给主 Agent(C 模式核心字段)
-	Notes        []string  `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
-	TaskSpec     TaskSpec  `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
-	ParentTaskID *int64    `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
+	ID           int64    `gorm:"primaryKey;autoIncrement"`
+	UserID       int64    `gorm:"index;not null"`         // 归属用户(任务按用户隔离)
+	SubAgentType string   `gorm:"size:50;not null"`       // 溯源标签(可空,来自 taskSpec.Type;去角色后非角色,不 gate 机制)
+	Name         string   `gorm:"size:64"`                // 任务短名(可空,来自 taskSpec.Name;人读展示用,空则展示层回落 goal 摘要)
+	Goal         string   `gorm:"type:text;not null"`     // 委托目标(冗余存,task_spec.Goal 的快捷访问;兼容老代码)
+	Status       string   `gorm:"size:20;not null;index"` // pending / running / completed / failed / cancelled
+	Artifact     *string  `gorm:"type:text"`              // 子 Agent 最终产出,completed 时填
+	ErrorMsg     *string  `gorm:"type:text"`              // failed 时填
+	Reported     bool     `gorm:"not null;default:false"` // 是否已汇报给主 Agent(C 模式核心字段)
+	Notes        []string `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
+	TaskSpec     TaskSpec `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
+	ParentTaskID *int64   `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
 	// ScheduleID 派生本实例的持久任务 ID(25 号,source=schedule 时必填)。
 	// 与 ParentTaskID 分列:两者 ID 空间不同,不得混用。
-	ScheduleID   *int64    `gorm:"index"`
-	Source       string    `gorm:"size:20;index"`          // 来源渠道:"web"/"feishu"/"schedule"。空=web(老数据兼容)。决定完成时往哪推送
-	NotifyTarget string    `gorm:"size:128"`               // 主动推送目标:feishu=open_id;web=空(靠轮询)。source=feishu 时必填
+	ScheduleID   *int64 `gorm:"index"`
+	Source       string `gorm:"size:20;index"` // 来源渠道:"web"/"feishu"/"schedule"。空=web(老数据兼容)。决定完成时往哪推送
+	NotifyTarget string `gorm:"size:128"`      // 主动推送目标:feishu=open_id;web=空(靠轮询)。source=feishu 时必填
 	// OriginTurnID Phase 1(16-架构迭代路线图 §5.3):触发本任务的用户意图 Turn。
 	// delegate 从 ctx(WithTurnID)取;NULL=存量任务/无 Turn 上下文。Report 据此回挂原始对话。
-	OriginTurnID *int64    `gorm:"index"`
+	OriginTurnID *int64 `gorm:"index"`
 	// Version 乐观版本号 = 状态变更次数(Phase 7a,16-路线图 §14)。
 	// CreateWithEvent 落 submitted 时置 1,此后每次迁移 +1;
 	// 任务事件 TaskEvent.Sequence 由迁移后的 version 派生,序号不依赖进程内状态(重启/多实例安全)。
-	Version    int64 `gorm:"not null;default:0"`
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	CompletedAt  *time.Time
-	CancelledAt  *time.Time `gorm:"index"` // cancelled 时填
+	Version     int64 `gorm:"not null;default:0"`
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+	CancelledAt *time.Time `gorm:"index"` // cancelled 时填
 }
 
 // TableName 指定表名
@@ -103,8 +103,9 @@ func CanTransition(from, to string) bool {
 
 // 任务来源渠道常量(决定完成时往哪推送汇报)。
 const (
-	SourceWeb    = "web"    // Web 端:完成靠前端轮询 GET /agent/tasks + 前置汇报
-	SourceFeishu = "feishu" // 飞书:完成时主动推送到 open_id(NotifyTarget)
+	SourceWeb        = "web"         // Web 端:完成靠前端轮询 GET /agent/tasks + 前置汇报
+	SourceFeishu     = "feishu"      // 飞书:完成时主动推送到 open_id(NotifyTarget)
+	SourceWeChatClaw = "wechat_claw" // 微信 ClawBot:完成时主动推送到 ilink user id(NotifyTarget)
 )
 
 // NewAgentTask 创建一个 pending 状态的新任务。
