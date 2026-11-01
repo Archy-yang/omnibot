@@ -14,7 +14,7 @@ import (
 // WeChatClawService 微信 ClawBot 扫码登录/状态服务(web 层窄接口,service 层实现)。
 type WeChatClawService interface {
 	StartLogin(ctx context.Context) (*wechatclawsvc.LoginView, error)
-	PollLogin(ctx context.Context, qrcode, verifyCode string) (*wechatclawsvc.PollView, bool, error)
+	PollLogin(ctx context.Context, qrcode, verifyCode string, loginUserID int64) (*wechatclawsvc.PollView, bool, error)
 	Status() (*wechatclawsvc.StatusView, error)
 	Disconnect(ctx context.Context) error
 }
@@ -66,7 +66,7 @@ func (h *WeChatClawHandler) HandlePollLogin(c *gin.Context) {
 	}
 	qrcode := c.Param("qrcode")
 	verifyCode := c.Query("verify_code")
-	view, connected, err := h.svc.PollLogin(c.Request.Context(), qrcode, verifyCode)
+	view, connected, err := h.svc.PollLogin(c.Request.Context(), qrcode, verifyCode, c.GetInt64(middleware.AuthUserIDKey))
 	if err != nil {
 		if errors.Is(err, wechatclawsvc.ErrQRExpired) {
 			c.JSON(http.StatusGone, gin.H{"success": false, "error": "二维码已过期,请重新获取", "code": "qrcode_expired"})

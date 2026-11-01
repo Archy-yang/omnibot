@@ -27,6 +27,15 @@
 - **断线可控**：「断开连接」停长轮询 + 通知服务端 + 清空凭证；token 失效（-14）自动标记需重新扫码
 - **重启自愈**：进程重启后按库里的凭证自动恢复长轮询，游标续传不重放历史消息
 
+### 🐛 修复
+
+- **登录成功但收不到消息**：长轮询生命周期误绑了扫码 HTTP 请求的 ctx——响应返回那一刻
+  monitor 自己就退出了（`notifystart context canceled`、游标永远为空）。改为
+  `context.WithoutCancel` 派生，只由「断开连接/进程退出」停止；补退出日志与回归测试
+- **扫码即绑定**：ClawBot 扫码的人就是机器人主人（`from_user_id == ilink_user_id`），
+  不再要求用户在微信里发绑定码；新增 `BindingService.BindDirect`，登录确认时直绑，
+  启动时按 `login_user_id` 自愈补绑，绑定失败不阻断连接
+
 ### 🧱 架构
 
 - **共享 IM pipeline（N1）**：飞书 `HandleInbound` 上移为 `internal/channel/im`（渠道无关），

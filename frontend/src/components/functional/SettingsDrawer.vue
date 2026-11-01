@@ -417,10 +417,17 @@ const pollWcStatus = async () => {
       error('二维码已过期,请重新获取');
     }
   } catch (err) {
-    // 会话过期或网络错误:停止轮询,提示重来
+    // 会话过期或网络错误:停止轮询。扫码成功后二维码会话会被后端清理,
+    // 这里先回查一次连接状态——已连上就不要误报「二维码过期」(线上踩过)。
     stopWcTimers();
     wcQR.value = '';
     wcQrcode.value = '';
+    const st = await wechatClawService.getStatus().catch(() => null);
+    if (st?.connected) {
+      wcStatus.value = st;
+      success('微信已连接');
+      return;
+    }
     console.error('wechat claw poll failed:', err);
     error(err instanceof Error ? err.message : '扫码状态查询失败');
   }

@@ -8,8 +8,8 @@ import (
 
 	"go.uber.org/zap"
 
-	channelfeishu "omnibot/internal/channel/wechatclaw"
 	"omnibot/internal/channel/im"
+	channelfeishu "omnibot/internal/channel/wechatclaw"
 	domain "omnibot/internal/domain/wechatclaw"
 	"omnibot/pkg/logger"
 )
@@ -67,6 +67,13 @@ func newMonitor(cfg monitorConfig) *monitor {
 // run 阻塞运行直到 ctx 取消或会话失效。
 func (m *monitor) run(ctx context.Context) {
 	logger.InfoWithFields("wechatclaw: monitor started", zap.Int64("account_id", m.cfg.accountID))
+	// 退出必须留痕:上一版因 ctx 提前取消静默退出,线上排查时完全看不出循环已死
+	defer func() {
+		logger.InfoWithFields("wechatclaw: monitor stopped",
+			zap.Int64("account_id", m.cfg.accountID),
+			zap.Bool("ctx_canceled", ctx.Err() != nil),
+			zap.Int("failures", m.failures))
+	}()
 	if err := m.cfg.client.NotifyStart(ctx); err != nil {
 		logger.WarnWithFields("wechatclaw: notifystart failed", zap.Error(err))
 	}
@@ -146,6 +153,14 @@ func (m *monitor) dispatch(ctx context.Context, msg channelfeishu.Message) {
 	}
 	// context_token 是回消息的会话锚点,必须在分发前记录
 	m.cfg.tokens.putToken(peer, msg.ContextToken)
+
+	// 排障锚点:入站是否真的到了、有没有会话锚点(不记录消息内容,守隐私红线)
+	logger.InfoWithFields("wechatclaw: inbound message",
+		zap.String("peer", peer),
+		zap.String("message_id", msg.MessageID.String()),
+		zap.Int("text_len", len([]rune(msg.Text()))),
+		zap.Bool("has_context_token", msg.ContextToken != ""),
+	)
 
 	text := strings.TrimSpace(msg.Text())
 	if text == "" {

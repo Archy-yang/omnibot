@@ -176,12 +176,18 @@ type Account struct {
 - **token 属敏感凭证**：加密入库、日志脱敏（只打前 6 位 + 长度），符合安全红线。
 - 游标单列存储，避免重启重放历史消息。
 
-### 3.4 身份与绑定
+### 3.4 身份与绑定（扫码即绑定）
 
 - 通道类型：`wechat_claw`（与公众号 `wechat` 完全隔离）。
-- 复用 v2.3 通用绑定码：用户在 web 设置里拿码 → 在微信 ClawBot 里发「绑定 123456」→
-  `BindingService.BindChannel("wechat_claw", code, from_user_id)`。
-- 未绑定：回引导文案，不建号、不进对话。
+- **扫码即绑定**：ClawBot 的 Semantic 与公众号不同——扫码的人就是这台机器人的主人
+  （消息的 `from_user_id` 与登录返回的 `ilink_user_id` 完全一致）。因此 confirmed 时直接用
+  `BindingService.BindDirect("wechat_claw", 发起扫码的 web 用户, ilink_user_id)` 建立绑定，
+  **不再要求用户在微信里发绑定码**。
+- `wechat_claw_accounts.login_user_id` 记录扫码发起人；服务启动时若凭证在但绑定关系缺失，
+  自动补绑（自愈）。
+- 绑定失败不阻断连接（扫码本身已成功），下次启动重试。
+- 非主人微信（理论上不会有）仍走「未绑定」引导，不建号、不进对话。
+- v2.3 通用绑定码机制保留给其它渠道（飞书 / 公众号），ClawBot 不再使用。
 
 ### 3.5 生命周期
 

@@ -29,12 +29,14 @@ type fakeClient struct {
 	sent     []sentMessage
 	started  bool
 	stopped  bool
+	// updatesCalls 记录 getupdates 实际调用次数(验证长轮询是否在跑)
+	updatesCalls int
 }
 
 type sentMessage struct {
-	to      string
-	text    string
-	ctxTkn  string
+	to       string
+	text     string
+	ctxTkn   string
 	clientID string
 }
 
@@ -58,7 +60,14 @@ func (f *fakeClient) GetUpdates(ctx context.Context, buf string) (*proto.Updates
 	if f.updErr != nil {
 		return nil, f.updErr
 	}
+	f.updatesCalls++
 	if len(f.updates) == 0 {
+		// 模拟真实长轮询的空转间隔,避免测试里忙轮询;同时响应 ctx 取消
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Millisecond):
+		}
 		return &proto.Updates{GetUpdatesBuf: buf}, nil
 	}
 	next := f.updates[0]
@@ -87,6 +96,12 @@ func (f *fakeClient) NotifyStop(ctx context.Context) error {
 	return nil
 }
 
+func (f *fakeClient) updateCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.updatesCalls
+}
+
 func (f *fakeClient) isStarted() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -97,6 +112,32 @@ func (f *fakeClient) isStopped() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stopped
+}
+
+// fakeBinder 记录扫码直绑调用。
+type fakeBinder struct {
+	mu    sync.Mutex
+	calls []bindCall
+	err   error
+}
+
+type bindCall struct {
+	channelType string
+	userID      int64
+	channelUser string
+}
+
+func (f *fakeBinder) BindDirect(channelType string, userID int64, channelUserID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, bindCall{channelType: channelType, userID: userID, channelUser: channelUserID})
+	return f.err
+}
+
+func (f *fakeBinder) getCalls() []bindCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bindCall{}, f.calls...)
 }
 
 type fakeRepo struct {
@@ -211,7 +252,7 @@ func TestPollLoginConfirmedSavesEncryptedTokenAndStartsMonitor(t *testing.T) {
 	_, err := svc.StartLogin(ctx)
 	require.NoError(t, err)
 
-	view, connected, err := svc.PollLogin(ctx, "qc-1", "")
+	view, connected, err := svc.PollLogin(ctx, "qc-1", "", 0)
 	require.NoError(t, err)
 	assert.True(t, connected)
 	assert.Equal(t, proto.QRStatusConfirmed, view.Status)
@@ -243,7 +284,7 @@ func TestPollLoginNeedVerifyCode(t *testing.T) {
 	_, err := svc.StartLogin(context.Background())
 	require.NoError(t, err)
 
-	view, connected, err := svc.PollLogin(context.Background(), "qc-1", "1234")
+	view, connected, err := svc.PollLogin(context.Background(), "qc-1", "1234", 0)
 	require.NoError(t, err)
 	assert.False(t, connected)
 	assert.True(t, view.NeedVerifyCode)
@@ -251,7 +292,7 @@ func TestPollLoginNeedVerifyCode(t *testing.T) {
 
 func TestPollLoginUnknownSession(t *testing.T) {
 	svc := newTestService(t, &fakeRepo{}, &fakeClient{})
-	_, _, err := svc.PollLogin(context.Background(), "ghost", "")
+	_, _, err := svc.PollLogin(context.Background(), "ghost", "", 0)
 	assert.ErrorIs(t, err, ErrQRExpired)
 }
 
@@ -268,7 +309,7 @@ func TestPollLoginExpiredSession(t *testing.T) {
 	svc.sessions["qc-1"] = time.Now().Add(-10 * time.Minute)
 	svc.mu.Unlock()
 
-	_, _, err = svc.PollLogin(context.Background(), "qc-1", "")
+	_, _, err = svc.PollLogin(context.Background(), "qc-1", "", 0)
 	assert.ErrorIs(t, err, ErrQRExpired)
 }
 
@@ -285,7 +326,7 @@ func TestDisconnectClearsAccount(t *testing.T) {
 	defer cancel()
 	_, err := svc.StartLogin(ctx)
 	require.NoError(t, err)
-	_, _, err = svc.PollLogin(ctx, "qc-1", "")
+	_, _, err = svc.PollLogin(ctx, "qc-1", "", 0)
 	require.NoError(t, err)
 	waitFor(t, client.isStarted)
 
@@ -344,7 +385,7 @@ func TestSaveAccountWithoutTokenFails(t *testing.T) {
 	_, err := svc.StartLogin(context.Background())
 	require.NoError(t, err)
 
-	_, _, err = svc.PollLogin(context.Background(), "qc-1", "")
+	_, _, err = svc.PollLogin(context.Background(), "qc-1", "", 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bot_token")
 }
@@ -358,9 +399,116 @@ func TestPollLoginPropagatesClientError(t *testing.T) {
 	_, err := svc.StartLogin(context.Background())
 	require.NoError(t, err)
 
-	_, _, err = svc.PollLogin(context.Background(), "qc-1", "")
+	_, _, err = svc.PollLogin(context.Background(), "qc-1", "", 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "boom")
+}
+
+// TestMonitorSurvivesRequestContextCancel 回归:扫码登录由 HTTP 请求触发,
+// 请求返回后 ctx 必然取消;monitor 不能跟着死,否则登录成功即断流(线上事故)。
+func TestMonitorSurvivesRequestContextCancel(t *testing.T) {
+	client := &fakeClient{
+		qr: &proto.QRCode{QRCode: "qc-1"},
+		qrStatus: &proto.QRStatus{
+			Status: proto.QRStatusConfirmed, BotToken: "bt", BotID: "bot-1",
+		},
+	}
+	repo := &fakeRepo{}
+	svc := newTestService(t, repo, client)
+
+	// 用「请求级 ctx」完成扫码,然后立刻取消(模拟 gin 请求结束)
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	_, err := svc.StartLogin(reqCtx)
+	require.NoError(t, err)
+	_, _, err = svc.PollLogin(reqCtx, "qc-1", "", 42)
+	require.NoError(t, err)
+	cancelReq()
+
+	waitFor(t, client.isStarted)
+	before := client.updateCount()
+	time.Sleep(60 * time.Millisecond)
+	after := client.updateCount()
+
+	assert.Greater(t, after, before, "monitor 不应随请求 ctx 取消而退出")
+	assert.False(t, client.isStopped(), "请求结束不该触发 notifystop")
+	require.NoError(t, svc.Disconnect(context.Background()))
+}
+
+// TestPollLoginBindsOwner 扫码即绑定:确认后直接把渠道身份绑到发起扫码的账号。
+func TestPollLoginBindsOwner(t *testing.T) {
+	client := &fakeClient{
+		qr: &proto.QRCode{QRCode: "qc-1"},
+		qrStatus: &proto.QRStatus{
+			Status: proto.QRStatusConfirmed, BotToken: "bt", BotID: "bot-1", UserID: "owner-1",
+		},
+	}
+	repo := &fakeRepo{}
+	binder := &fakeBinder{}
+	svc := newTestService(t, repo, client)
+	svc.SetDirectBinder(binder)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := svc.StartLogin(ctx)
+	require.NoError(t, err)
+
+	_, connected, err := svc.PollLogin(ctx, "qc-1", "", 42)
+	require.NoError(t, err)
+	assert.True(t, connected)
+
+	calls := binder.getCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "wechat_claw", calls[0].channelType)
+	assert.Equal(t, int64(42), calls[0].userID)
+	assert.Equal(t, "owner-1", calls[0].channelUser)
+
+	account, err := repo.Get()
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), account.LoginUserID)
+}
+
+// TestBindOwnerFailureDoesNotBlockConnect 绑定失败不影响扫码结果(下次启动自愈)。
+func TestBindOwnerFailureDoesNotBlockConnect(t *testing.T) {
+	client := &fakeClient{
+		qr: &proto.QRCode{QRCode: "qc-1"},
+		qrStatus: &proto.QRStatus{
+			Status: proto.QRStatusConfirmed, BotToken: "bt", BotID: "bot-1", UserID: "owner-1",
+		},
+	}
+	svc := newTestService(t, &fakeRepo{}, client)
+	svc.SetDirectBinder(&fakeBinder{err: errors.New("db down")})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := svc.StartLogin(ctx)
+	require.NoError(t, err)
+	_, connected, err := svc.PollLogin(ctx, "qc-1", "", 42)
+	require.NoError(t, err)
+	assert.True(t, connected)
+}
+
+// TestStartHealsMissingBinding 启动时凭证在、绑定关系缺失 -> 自动补绑。
+func TestStartHealsMissingBinding(t *testing.T) {
+	initCrypto(t)
+	cipherText, err := crypto.Encrypt("bt")
+	require.NoError(t, err)
+	repo := &fakeRepo{account: &domain.Account{
+		ID: 1, BotID: "bot-1", ILinkUserID: "owner-1", LoginUserID: 42,
+		TokenCipher: cipherText, Status: domain.StatusActive,
+	}}
+	binder := &fakeBinder{}
+	client := &fakeClient{}
+	svc := NewService(repo, func(baseURL, token string) ClientAPI { return client }, HandlerDeps{})
+	svc.SetDirectBinder(binder)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.Start(ctx)
+
+	calls := binder.getCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, int64(42), calls[0].userID)
+	assert.Equal(t, "owner-1", calls[0].channelUser)
 }
 
 var _ im.Sender = (*proto.Sender)(nil)

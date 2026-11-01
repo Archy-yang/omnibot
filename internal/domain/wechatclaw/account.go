@@ -27,6 +27,8 @@ type Account struct {
 	BaseURL string `gorm:"size:255;column:base_url"`
 	// TokenCipher bot_token 密文。
 	TokenCipher string `gorm:"type:text;not null;column:token_cipher"`
+	// LoginUserID 发起扫码的 web 账号 id(扫码即绑定用;0 = 老数据未记录)。
+	LoginUserID int64 `gorm:"column:login_user_id;default:0"`
 	// SyncBuf getupdates 游标,重启续传避免重放历史消息。
 	SyncBuf string `gorm:"type:text;column:sync_buf"`
 	// Status active / expired。

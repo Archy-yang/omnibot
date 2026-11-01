@@ -6,6 +6,10 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
+
+	"omnibot/pkg/logger"
 )
 
 // maxMessageRunes 单条文本上限(微信侧有长度限制,超长需分段)。
@@ -47,11 +51,18 @@ func newClientID() string {
 
 // SendText 发送纯文本(超长自动分段)。
 func (s *Sender) SendText(ctx context.Context, openID, content string) error {
-	for _, part := range splitMessage(content) {
+	parts := splitMessage(content)
+	for _, part := range parts {
 		if _, err := s.client.SendText(ctx, openID, part, s.tokens.Token(openID), s.newClientID()); err != nil {
 			return err
 		}
 	}
+	// 排障锚点:出站是否真的发出去了(不记录消息内容)
+	logger.InfoWithFields("wechatclaw: reply sent",
+		zap.String("peer", openID),
+		zap.Int("parts", len(parts)),
+		zap.Int("runes", len([]rune(content))),
+	)
 	return nil
 }
 

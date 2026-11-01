@@ -619,6 +619,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		},
 	)
 	wechatClawSvc.SetSubAgentReporter(subAgentSvc)
+	// 31 号:扫码即绑定(扫码的人就是机器人主人,不再要求发绑定码)
+	wechatClawSvc.SetDirectBinder(bindingSvc)
 	// 29 号 N4:主动消息反馈文本通道(「有用/不用再提」),与飞书共用同一服务实例
 	wechatClawSvc.SetNoteFeedbackService(butlerSettingsSvc)
 	// 记忆管理命令(#记住 / #我的记忆 ...):memorySvc 实现即注入

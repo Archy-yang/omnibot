@@ -37,8 +37,8 @@ func (f *fakeHandler) getCalls() []im.InboundMessage {
 
 // fakeSender 记录出站调用。
 type fakeSender struct {
-	mu    sync.Mutex
-	sent  []sentMessage
+	mu   sync.Mutex
+	sent []sentMessage
 }
 
 func (f *fakeSender) SendText(ctx context.Context, openID, content string) error {

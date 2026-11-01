@@ -57,6 +57,12 @@ type AccountRepository interface {
 	DeleteAll() error
 }
 
+// DirectBinder 扫码即绑定能力(service/user.BindingService 实现)。
+// ClawBot 扫码的人就是机器人主人,不需要再发绑定码(31 号 §3.4)。
+type DirectBinder interface {
+	BindDirect(channelType string, userID int64, channelUserID string) error
+}
+
 // HandlerDeps 共享 IM pipeline 的依赖(绑定/落库/Agent/LLM)。
 type HandlerDeps struct {
 	Binding   im.BindingService
@@ -93,6 +99,9 @@ type Service struct {
 	factory ClientFactory
 	deps    HandlerDeps
 
+	// 扫码即绑定:登录发起人 ← 渠道身份(nil 时退化为需要绑定码)
+	binder DirectBinder
+
 	// 可选注入(与飞书同款能力,nil 时不启用)
 	subAgentReporter im.SubAgentReportProvider
 	memoryService    im.MemoryCommandService
@@ -125,6 +134,9 @@ func NewService(repo AccountRepository, factory ClientFactory, deps HandlerDeps)
 	}
 }
 
+// SetDirectBinder 注入扫码直绑能力。nil 时保持「扫码后仍需绑定码」的旧行为。
+func (s *Service) SetDirectBinder(b DirectBinder) { s.binder = b }
+
 // SetSubAgentReporter 注入后台 Agent 前置汇报(08 §4.5)。
 func (s *Service) SetSubAgentReporter(p im.SubAgentReportProvider) { s.subAgentReporter = p }
 
@@ -148,6 +160,10 @@ func (s *Service) Start(ctx context.Context) {
 		logger.InfoWithFields("wechatclaw: account expired, waiting for re-login",
 			zap.String("bot_id", account.BotID))
 		return
+	}
+	// 自愈:凭证在但绑定关系缺失(例如手动清过 user_channels)时补绑
+	if account.LoginUserID > 0 {
+		s.bindOwner(account, account.LoginUserID)
 	}
 	if err := s.startRuntime(ctx, account); err != nil {
 		logger.ErrorWithFields("wechatclaw: start monitor failed", zap.Error(err))
@@ -179,7 +195,7 @@ func (s *Service) StartLogin(ctx context.Context) (*LoginView, error) {
 }
 
 // PollLogin 轮询扫码状态。confirmed 时落库凭证并拉起长轮询。
-func (s *Service) PollLogin(ctx context.Context, qrcode, verifyCode string) (*PollView, bool, error) {
+func (s *Service) PollLogin(ctx context.Context, qrcode, verifyCode string, loginUserID int64) (*PollView, bool, error) {
 	if qrcode == "" {
 		return nil, false, ErrQRExpired
 	}
@@ -201,10 +217,12 @@ func (s *Service) PollLogin(ctx context.Context, qrcode, verifyCode string) (*Po
 	case channelfeishu.QRStatusNeedVerifyCode:
 		view.NeedVerifyCode = true
 	case channelfeishu.QRStatusConfirmed:
-		account, err := s.saveAccount(status)
+		account, err := s.saveAccount(status, loginUserID)
 		if err != nil {
 			return nil, false, err
 		}
+		// 扫码即绑定:扫的是谁的微信,就绑到发起扫码的 web 账号,不再要求发绑定码
+		s.bindOwner(account, loginUserID)
 		// 扫码成功后立即拉起长轮询,免重启
 		if err := s.startRuntime(ctx, account); err != nil {
 			logger.ErrorWithFields("wechatclaw: start monitor after login failed", zap.Error(err))
@@ -218,7 +236,7 @@ func (s *Service) PollLogin(ctx context.Context, qrcode, verifyCode string) (*Po
 }
 
 // saveAccount 把 confirmed 状态写入凭证(覆盖旧账号,单账号语义)。
-func (s *Service) saveAccount(status *channelfeishu.QRStatus) (*domain.Account, error) {
+func (s *Service) saveAccount(status *channelfeishu.QRStatus, loginUserID int64) (*domain.Account, error) {
 	if strings.TrimSpace(status.BotToken) == "" {
 		return nil, fmt.Errorf("wechatclaw: confirmed without bot_token")
 	}
@@ -234,6 +252,7 @@ func (s *Service) saveAccount(status *channelfeishu.QRStatus) (*domain.Account, 
 	account := &domain.Account{
 		BotID:       status.BotID,
 		ILinkUserID: status.UserID,
+		LoginUserID: loginUserID,
 		BaseURL:     status.BaseURL,
 		TokenCipher: cipherText,
 		Status:      domain.StatusActive,
@@ -248,6 +267,23 @@ func (s *Service) saveAccount(status *channelfeishu.QRStatus) (*domain.Account, 
 		return nil, err
 	}
 	return account, nil
+}
+
+// bindOwner 把机器人主人的渠道身份绑到发起扫码的 web 账号。
+//
+// 失败不阻断连接:扫码本身已成功,绑定关系可以在下次启动时由 Start 自愈补上。
+func (s *Service) bindOwner(account *domain.Account, userID int64) {
+	if s.binder == nil || userID <= 0 || account == nil || account.ILinkUserID == "" {
+		return
+	}
+	if err := s.binder.BindDirect("wechat_claw", userID, account.ILinkUserID); err != nil {
+		logger.WarnWithFields("wechatclaw: auto bind owner failed",
+			zap.Int64("user_id", userID),
+			zap.Error(err))
+		return
+	}
+	logger.InfoWithFields("wechatclaw: owner bound",
+		zap.Int64("user_id", userID))
 }
 
 // Status 当前连接状态。
@@ -347,7 +383,11 @@ func (s *Service) startRuntime(ctx context.Context, account *domain.Account) err
 		handler.SetNoteFeedbackService(s.noteFeedbackSvc)
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	// 关键:长轮询生命周期不能跟随调用方的 ctx。
+	// 扫码登录是由 HTTP 请求触发的,请求返回后 ctx 立刻取消——直接派生会让 monitor
+	// 在登录成功的同一毫秒内退出(线上事故:notifystart context canceled、sync_buf 永远为空)。
+	// WithoutCancel 切断取消与截止时间,后续只由 Disconnect / 进程退出取消。
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	mon := newMonitor(monitorConfig{
 		client:    client,
 		handler:   handler,

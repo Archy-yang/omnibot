@@ -27,14 +27,16 @@ type mockWeChatClawService struct {
 	discErr    error
 	pollQrcode string
 	pollVerify string
+	pollUserID int64
 }
 
 func (m *mockWeChatClawService) StartLogin(ctx context.Context) (*wechatclawsvc.LoginView, error) {
 	return m.loginView, m.loginErr
 }
 
-func (m *mockWeChatClawService) PollLogin(ctx context.Context, qrcode, verifyCode string) (*wechatclawsvc.PollView, bool, error) {
+func (m *mockWeChatClawService) PollLogin(ctx context.Context, qrcode, verifyCode string, loginUserID int64) (*wechatclawsvc.PollView, bool, error) {
 	m.pollQrcode, m.pollVerify = qrcode, verifyCode
+	m.pollUserID = loginUserID
 	return m.pollView, m.pollConn, m.pollErr
 }
 
@@ -109,6 +111,7 @@ func TestWeChatClawHandler_PollLoginPassesQuery(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "qc-1", svc.pollQrcode)
 	assert.Equal(t, "8888", svc.pollVerify)
+	assert.Equal(t, int64(7), svc.pollUserID)
 	assert.Contains(t, w.Body.String(), `"connected":true`)
 }
 
