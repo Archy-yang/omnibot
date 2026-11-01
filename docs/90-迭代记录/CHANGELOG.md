@@ -11,6 +11,37 @@
 
 ---
 
+## [v2.9.0] - 2026-11-01
+
+19 号飞书授权的「状态自愈」补强——解决「隔一段时间就要重新授权、IM 发起不了、Web 还显示已授权」。
+
+### 🐛 修复
+
+- **状态不再说谎**：`GET /api/v1/feishu-auth` 改为以 `lark-cli auth status --json` 为准（30s 缓存）；
+  CLI 里没有 user token 时把 DB 状态校正为 `need_relogin`，前端显示「凭证已失效」。
+  实测线上：DB 写 `authorized`（10-18），CLI 返回 `user identity missing` —— 两者分叉已久
+- **修掉 pending 死锁**：CLI 侧挂着的未完成 device flow，健康检查会尝试自动收尾；
+  收不了才标 `need_relogin`（此前 DB=authorized 时 `PollAuth` 永远跳过）
+- **一键重新授权**：`POST /api/v1/feishu-auth/relogin` 复用库中加密保存的 AppID/AppSecret 发起
+  device flow，用户不用再翻飞书后台找 secret
+- **IM 发起授权**：新增 `#飞书授权` 命令（飞书 / 微信 ClawBot 通用），直接回验证链接 + 用户码
+- **身份默认修正**：`feishu` 工具对用户域命令自动追加 `--as user`，避免走机器人身份后
+  scope 报错被误读成「授权掉了」（`api`/`schema`/`skills` 不注入）
+
+### ⚠️ 兼容性
+
+- DB：`status` 新增取值 `need_relogin`（已有行由健康检查自动纠正，无需迁移）
+- 前端：`FeishuAuthView.status` 增加 `need_relogin`；设置抽屉新增「重新授权」按钮
+- 展示版本号 `APP_VERSION` 同步至 v2.9.0
+
+### 📌 挂账
+
+- token 丢失的根因（keychain 落点 / CAS 冲突频率）仍需观测：健康检查会把它变成可见状态
+- 6h 定时健康检查（当前只在打开设置页时触发）
+- lark-cli 版本 1.0.94 → 1.0.98 升级（镜像内）
+
+---
+
 ## [v2.8.0] - 2026-10-30
 
 31 号「微信 ClawBot 接入」——把微信个人号接成第三个 IM 入口(Web / 飞书 / 微信公众号之外)。

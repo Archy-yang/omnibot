@@ -201,3 +201,54 @@ Execute:
   WaitDelay 有界返回 / 非超时错误可区分），larkauth 9 项全绿
 - 前端登录跳转两 bug 同日修复：feishu-auth handler 误读 request ctx（改读 gin.Context）+
   三处硬编码 `/login` 改跟随 BASE_URL（vite base=/chat/）
+
+
+---
+
+## 状态自愈（2026-11-01，v2.9 补强）
+
+### 问题
+
+线上出现「隔一段时间就要重新授权」，且 IM 无法发起、Web 仍显示已授权。排查结论：
+
+1. **状态是单向乐观值**：`user_larkcli_auths.status` 只在授权动作时写一次；token 事后失效没人回写
+2. **没有健康检查**：刷新完全交给 lark-cli（本设计如此），但我们从不校验 token 还在不在
+3. **pending 死锁**：CLI 里可能挂着未完成 device flow（`auth status` 报 `authorization pending`），
+   而 `PollAuth` 只在 DB=pending 时收尾 → DB=authorized 时永远收不了尾，也清不掉
+4. **IM 无入口**：`auth` 子命令被工具白名单挡死，IM 也没有命令；Web 重新授权还要重填 App Secret
+5. **身份漂移**：部分调用没带 `--as user`，走机器人身份 → scope 报错被误读成「授权掉了」
+
+实测证据（把 `lark_cli_states` 的 blob 解包后跑 `auth status --json`）：
+
+```json
+{"user":{"status":"missing","message":"no token in keychain for ou_..."},"identity":"none"}
+```
+
+而 DB 同一时刻是 `authorized`（10-18 写入）——两者已分叉。
+
+### 方案
+
+| 项 | 做法 |
+|---|---|
+| 真实态校正 | `larkauth.Service.Health`：`auth status --json`（30s 缓存）→ 有 token：authorized（补回 openId/name）；无 token：`need_relogin`；CLI 探测失败：保持 DB 状态（环境问题不算授权失效） |
+| pending 收尾 | `Health` 发现 CLI 挂着 `deviceCode` → 尝试 `LoginComplete` 收尾，成功转 authorized，失败标 `need_relogin` |
+| 一键重授权 | `POST /api/v1/feishu-auth/relogin`：解密库中 `AppSecretEnc` 复用 AppID/Secret 直接发起 device flow |
+| IM 入口 | `#飞书授权` 文本命令（共享 IM pipeline，飞书/微信 ClawBot 通用）→ 返回验证链接 + 用户码 |
+| 身份修正 | `feishu` 工具对用户域命令自动追加 `--as user`（`api`/`schema`/`skills` 除外） |
+| 前端 | 新增 `need_relogin` 状态：显示「凭证已失效」+「重新授权」按钮（不需要重填 secret） |
+
+### 状态机
+
+```
+pending --确认--> authorized
+authorized --健康检查无 token--> need_relogin --Relogin--> pending
+authorized --健康检查有 deviceCode--> 尝试收尾 --> authorized / need_relogin
+```
+
+### 测试
+
+- `Health`：无 token→need_relogin 且回写库；有 token→authorized 并补身份；挂 deviceCode→自动收尾；
+  CLI 探测失败→保持原状态；30s 缓存命中
+- `Relogin`：复用库存 AppID/Secret（断言 profile add 参数）、无记录→ErrNotAuthorized
+- IM：`#飞书授权` 回验证链接、失败给兜底、不进对话
+- 工具：`--as user` 注入（用户域补、显式不覆盖、raw api 不补）
