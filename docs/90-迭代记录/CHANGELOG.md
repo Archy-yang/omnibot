@@ -11,6 +11,51 @@
 
 ---
 
+## [v2.8.0] - 2026-10-30
+
+31 号「微信 ClawBot 接入」——把微信个人号接成第三个 IM 入口(Web / 飞书 / 微信公众号之外)。
+纯新增:新增 1 张表 + 1 个通道包,不改造既有通道行为。
+
+### 🚀 用户可见
+
+- **扫码接入微信**：设置抽屉新增「微信接入」，点「扫码连接微信」出二维码，手机微信确认后即连通；
+  扫码成功后长轮询立即拉起，无需重启服务。支持数字校验（手机端显示数字时输入）
+- **微信里直接对话**：微信里发的文字消息走与 Web/飞书**完全一致**的助手链路（上下文、记忆、工具、
+  后台任务、子 Agent 汇报），回复发回微信；非文本消息回「暂时只支持文字消息」
+- **绑定即用**：「渠道绑定」增加第三行「微信 ClawBot」；未绑定微信号只收到引导文案，
+  发送「绑定 123456」完成绑定（复用 v2.3 通用绑定码）
+- **断线可控**：「断开连接」停长轮询 + 通知服务端 + 清空凭证；token 失效（-14）自动标记需重新扫码
+- **重启自愈**：进程重启后按库里的凭证自动恢复长轮询，游标续传不重放历史消息
+
+### 🧱 架构
+
+- **共享 IM pipeline（N1）**：飞书 `HandleInbound` 上移为 `internal/channel/im`（渠道无关），
+  飞书改为薄壳（`channelType` / `source` / 文案参数化），ClawBot 复用同一条链路。
+  飞书原有测试零逻辑改动通过 = 重构回归证明
+- **协议层（N2）**：`internal/channel/wechatclaw` 原生实现 iLink 协议（扫码登录 / getupdates 长轮询 /
+  sendmessage / notifystart|stop），不依赖 OpenClaw 运行时；`uint64 message_id` 用 FlexString 保留精度
+- **凭证与运行态（N3）**：`wechat_claw_accounts` 单账号表，token AES-256-GCM 加密；
+  登录状态机（wait/scaned/need_verifycode/redirect/confirmed/expired）、长轮询退避（3 次失败退 30s）、
+  游标落库续传
+- **Web API（N4）**：`POST /api/v1/wechat-claw/login`、`GET /login/:qrcode`、`GET /status`、
+  `DELETE /api/v1/wechat-claw`（全部要求登录态）
+
+### ⚠️ 兼容性
+
+- DB 迁移：新增 `wechat_claw_accounts` 表（AutoMigrate 自动建，零回填）
+- 前端新增依赖：`qrcode`（本地渲染二维码，不上传二维码内容到第三方）
+- `user/channel-binding` 响应新增 `wechat_claw_bound` 字段（向后兼容，旧字段不变）
+- 展示版本号 `APP_VERSION` 同步至 v2.8.0
+
+### 📌 挂账
+
+- 图片 / 语音 / 文件收发（CDN 上传 + AES-128-ECB + SILK 转码，二期）
+- 「正在输入」状态（`getconfig` + `sendtyping`）
+- 官方协议若调整版本头/端点，需同步 `internal/channel/wechatclaw` 的常量与路径
+- ClawBot 单账号仍不支持多微信号并发；解绑后重扫覆盖旧凭证（已按此设计）
+
+---
+
 ## [v2.5.0] - 2026-10-23
 
 20 号个人管家路线图第四阶段「目标闭环」收官——28 号方案（方案 A：不建 Goal 实体，
