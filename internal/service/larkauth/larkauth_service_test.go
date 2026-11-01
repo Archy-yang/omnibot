@@ -412,3 +412,18 @@ func TestRelogin_NoRow(t *testing.T) {
 	_, err := svc.Relogin(context.Background(), 7)
 	assert.ErrorIs(t, err, ErrNotAuthorized)
 }
+
+// 重新授权不能把上次的身份回显冲掉(Upsert 是整行覆盖)。
+func TestRelogin_PreservesIdentityDisplay(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "missing"},
+		startURL:      "https://verify/new", startDevice: "dev-new",
+	}
+	svc := seedAuthorized(t, repo, cli)
+	repo.rows[7].Status = StatusNeedRelogin
+
+	_, err := svc.Relogin(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, "ou_old", repo.rows[7].OpenID, "身份回显应保留")
+	assert.Equal(t, "杨琦", repo.rows[7].UserName)
+}

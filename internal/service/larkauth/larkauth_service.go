@@ -198,8 +198,15 @@ func (s *Service) StartAuth(ctx context.Context, userID int64, appID, appSecret 
 	if err != nil {
 		return View{}, err
 	}
+	// 重新授权(Relogin)时保留上一次的身份回显:Upsert 是整行覆盖,
+	// 不清空的话 pending 界面会短暂变成"无名氏"。
+	var prevOpenID, prevUserName string
+	if prev, perr := s.repo.GetByUserID(userID); perr == nil && prev != nil {
+		prevOpenID, prevUserName = prev.OpenID, prev.UserName
+	}
 	row := &userdomain.LarkCLIAuth{
 		UserID: userID, ProfileName: profile, AppID: appID, AppSecretEnc: enc,
+		OpenID: prevOpenID, UserName: prevUserName,
 		Status:     userdomain.LarkAuthStatusPending,
 		DeviceCode: deviceCode, VerifiedURL: verifyURL,
 	}
