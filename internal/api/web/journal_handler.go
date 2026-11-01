@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"omnibot/internal/service/feishudoc"
@@ -20,6 +21,8 @@ type JournalService interface {
 	Matters(userID int64, status string) ([]memorysvc.MatterSummary, error)
 	MatterDetail(userID int64, id int64) (*memorysvc.MatterDetail, error)
 	UpdateMatter(userID, id int64, stateDesc, status *string) (bool, error)
+	// SetTargetMatter 设/清目标日(30号 N2;复用 28号 N2 service):target nil=清除。
+	SetTargetMatter(ctx context.Context, userID, id int64, target *time.Time) (string, error)
 }
 
 // SetJournalService 注入个人经历层服务。
@@ -145,6 +148,56 @@ func (h *Handler) HandleUpdateMatter(c *gin.Context) {
 	}
 	_ = okUpd // UpdateMatter 未命中已返回 ErrMatterNotFound
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// setMatterTargetRequest 目标日请求体(30号 N2)。
+// 指针区分「未提供」与「显式清除」:未提供(null/缺省)一律 400,
+// 清除必须显式传 "" 或 "clear",避免字段丢失时误清目标。
+type setMatterTargetRequest struct {
+	TargetDate *string `json:"target_date"`
+}
+
+// HandleSetMatterTarget PUT /api/v1/matters/:id/target — 设/清档案目标日(30号 N2)。
+// 语义与 28号 manage_matter set_target、29号 N1 清除口对齐:
+// 日期按本地时区解析(与 agent 工具同源),""/"clear" 清除。
+func (h *Handler) HandleSetMatterTarget(c *gin.Context) {
+	if h.journalService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "个人经历层服务未启用"})
+		return
+	}
+	userID, ok := h.requireUserID(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "档案 ID 非法"})
+		return
+	}
+	var req setMatterTargetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请求体格式错误"})
+		return
+	}
+	if req.TargetDate == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "target_date 必填;清除目标请传空串或 clear"})
+		return
+	}
+	raw := strings.TrimSpace(*req.TargetDate)
+	var target *time.Time
+	if raw != "" && !strings.EqualFold(raw, "clear") {
+		t, parseErr := time.ParseInLocation("2006-01-02", raw, time.Local)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "target_date 需为 YYYY-MM-DD 格式(如 2026-10-31);清除目标传空串或 clear"})
+			return
+		}
+		target = &t
+	}
+	if _, err := h.journalService.SetTargetMatter(c.Request.Context(), userID, id, target); err != nil {
+		mapJournalErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"target_at": target}})
 }
 
 func mapJournalErr(c *gin.Context, err error) {

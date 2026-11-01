@@ -18,10 +18,13 @@ import type { JournalItem, MatterDetail, MatterSummary } from '@/types/api';
 
 const props = defineProps<{
   visible: boolean;
+  /** 30号 N3:从主动记录直达档案;消费后 emit clear-initial 由父级置空 */
+  initialMatterId?: number | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  'clear-initial': [];
 }>();
 
 const { success, error } = useToast();
@@ -130,6 +133,58 @@ const targetDays = (iso: string): number => {
   return Math.round((utcTarget - utcToday) / 86400000);
 };
 
+// 30号 N2:目标日设/清(档案详情入口;列表徽标与详情共用 targetDays)
+const isEditingTarget = ref(false);
+const editingTarget = ref('');
+const isSavingTarget = ref(false);
+
+/** ISO 时间 → date input 值(本地时区,与 targetDays 口径一致) */
+const toDateInput = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const startEditTarget = (): void => {
+  editingTarget.value = detail.value?.target_at ? toDateInput(detail.value.target_at) : '';
+  isEditingTarget.value = true;
+};
+
+const applyTarget = async (date: string | null): Promise<void> => {
+  const current = detail.value;
+  if (!current || isSavingTarget.value) return;
+  isSavingTarget.value = true;
+  try {
+    const res = await journalService.setMatterTarget(current.id, date);
+    // 请求期间用户可能已返回列表/切换档案:只在仍是同一档案时回写
+    if (detail.value?.id === current.id) {
+      detail.value.target_at = res.target_at;
+      isEditingTarget.value = false;
+    }
+    const card = matters.value.find((m) => m.id === current.id);
+    if (card) card.target_at = res.target_at;
+    success(date ? '已设定目标日。' : '已清除目标日。');
+  } catch (err) {
+    error(getErrorMessage(err));
+  } finally {
+    isSavingTarget.value = false;
+  }
+};
+
+const handleSaveTarget = async (): Promise<void> => {
+  const date = editingTarget.value.trim();
+  if (!date) {
+    error('请选择目标日期。');
+    return;
+  }
+  await applyTarget(date);
+};
+
+const handleClearTarget = async (): Promise<void> => {
+  await applyTarget(null);
+};
+
 // 条目展开:溯源 + 编辑/删除
 const expandedId = ref<number | null>(null);
 const toggleExpand = (id: number): void => {
@@ -221,6 +276,7 @@ const handleSwitchStatus = (s: 'active' | 'done' | 'archived' | ''): void => {
 
 const openMatter = async (id: number): Promise<void> => {
   isLoadingDetail.value = true;
+  isEditingTarget.value = false;
   try {
     detail.value = await journalService.getMatter(id);
   } catch (err) {
@@ -231,6 +287,7 @@ const openMatter = async (id: number): Promise<void> => {
 };
 
 const backToList = (): void => {
+  isEditingTarget.value = false;
   detail.value = null;
   void loadMatters();
 };
@@ -292,6 +349,18 @@ const handleMatterStatus = async (status: string): Promise<void> => {
   }
 };
 
+// 30号 N3:消费「主动记录 → 档案」直达意图;返回是否已接管本次打开
+const openFromInitial = (): boolean => {
+  const target = props.initialMatterId;
+  if (!target) return false;
+  activeTab.value = 'matters';
+  detail.value = null;
+  void loadMatters();
+  void openMatter(target);
+  emit('clear-initial');
+  return true;
+};
+
 // 抽屉打开时拉数据;首次挂载兜底
 watch(
   () => props.visible,
@@ -300,15 +369,17 @@ watch(
     expandedId.value = null;
     editingId.value = null;
     detail.value = null;
+    isEditingTarget.value = false;
+    if (openFromInitial()) return;
     void loadJournal();
     void loadMatters();
   }
 );
 onMounted(() => {
-  if (props.visible) {
-    void loadJournal();
-    void loadMatters();
-  }
+  if (!props.visible) return;
+  if (openFromInitial()) return;
+  void loadJournal();
+  void loadMatters();
 });
 </script>
 
@@ -422,10 +493,25 @@ onMounted(() => {
           <h3 class="matter-title">{{ detail.title }}</h3>
           <div class="matter-meta">
             <span class="status-chip" :class="detail.status">{{ statusLabel(detail.status) }}</span>
-            <!-- 28号 N3:目标日徽标(临近/过期红色提示) -->
+            <!-- 28号 N3:目标日徽标(临近/过期红色提示);30号 N2:设/清入口 -->
             <span v-if="detail.target_at" class="target-chip" :class="{ 'target-urgent': targetDays(detail.target_at) <= 3 }">
               🎯 {{ formatFull(detail.target_at).slice(0, 10) }}{{ targetDays(detail.target_at) >= 0 ? ` · 剩 ${targetDays(detail.target_at)} 天` : ` · 已过期 ${-targetDays(detail.target_at)} 天` }}
             </span>
+            <template v-if="isEditingTarget">
+              <input
+                v-model="editingTarget"
+                type="date"
+                class="target-input"
+                :disabled="isSavingTarget"
+                aria-label="目标日期"
+              />
+              <button type="button" class="mini-btn primary" :disabled="isSavingTarget" @click="handleSaveTarget">保存</button>
+              <button v-if="detail.target_at" type="button" class="mini-btn" :disabled="isSavingTarget" @click="handleClearTarget">清除</button>
+              <button type="button" class="mini-btn" :disabled="isSavingTarget" @click="isEditingTarget = false">取消</button>
+            </template>
+            <button v-else type="button" class="mini-btn" @click="startEditTarget">
+              {{ detail.target_at ? '改目标日' : '设目标日' }}
+            </button>
             <span class="matter-count">{{ detail.memory_count }} 条记录</span>
             <button
               type="button"
@@ -525,6 +611,10 @@ onMounted(() => {
           <div class="matter-card-head">
             <span class="matter-card-title">{{ m.title }}</span>
             <span class="status-chip" :class="m.status">{{ statusLabel(m.status) }}</span>
+            <!-- 30号 N2:列表也透出目标,避免必须点进详情才知道 -->
+            <span v-if="m.target_at" class="target-chip" :class="{ 'target-urgent': targetDays(m.target_at) <= 3 }">
+              🎯 {{ targetDays(m.target_at) >= 0 ? `剩 ${targetDays(m.target_at)} 天` : `已过期 ${-targetDays(m.target_at)} 天` }}
+            </span>
             <span class="matter-count">{{ m.memory_count }} 条记录</span>
           </div>
           <p class="matter-card-desc">{{ m.state_desc || '(暂无状态描述)' }}</p>
@@ -773,6 +863,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .matter-card-title {
   font-size: 14px;
@@ -887,6 +978,19 @@ onMounted(() => {
 .target-chip.target-urgent {
   color: #d97706;
   background: rgba(217, 119, 6, 0.12);
+}
+/* 30号 N2:目标日编辑(原生 date 控件,与设置抽屉同款轻量风格) */
+.target-input {
+  padding: 3px 8px;
+  border: 1px solid var(--border-l4, #ddd);
+  border-radius: 6px;
+  background: var(--ds-gray-00, #fff);
+  color: var(--color-text-primary, #111);
+  font-size: 12px;
+  font-family: inherit;
+}
+.target-input:disabled {
+  opacity: 0.5;
 }
 .timeline-label {
   margin: 14px 0 8px;

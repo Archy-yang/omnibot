@@ -258,3 +258,52 @@ func TestRegisterUnhandledEventDumper_UnlistedEventStillReportsNotFound(t *testi
 	assert.Contains(t, string(resp.Body), "not found handler",
 		"unlisted event types must still surface the SDK's not-found error so developers add them to the allowlist")
 }
+
+// ===== 30号 N4:高频杂音事件静默 =====
+//
+// 飞书会高频推送「已读回执」「消息撤回」，当前无业务语义、payload 也无排查价值。
+// 它们注册成 no-op handler（不 dump），避免 SDK 默认 ERROR 淹没真错误；
+// 未登记的新事件仍必须报 not found（白名单是显式行为）。
+func TestRegisterSilentEvents_TypesHandledWithoutNotFound(t *testing.T) {
+	disp := dispatcher.NewEventDispatcher("", "")
+	registerSilentEvents(disp, []string{
+		"im.message.message_read_v1",
+		"im.message.recalled_v1",
+	})
+
+	for _, evType := range []string{"im.message.message_read_v1", "im.message.recalled_v1"} {
+		t.Run(evType, func(t *testing.T) {
+			payload := []byte(`{"schema":"2.0","header":{"event_type":"` + evType + `","app_id":"cli_test"},"event":{}}`)
+			req := &larkevent.EventReq{
+				Header: map[string][]string{"Content-Type": {"application/json"}},
+				Body:   payload,
+			}
+			resp := disp.Handle(context.Background(), req)
+			require.NotNil(t, resp)
+			assert.Equal(t, 200, resp.StatusCode)
+			assert.NotContains(t, string(resp.Body), "not found handler",
+				"silent events must be registered so SDK stops logging ERROR")
+		})
+	}
+}
+
+// 守住实际清单:读回执/撤回必须在 silentEventTypes 里（防止只写测试不接线）。
+func TestSilentEventTypes_CoverReadReceiptAndRecall(t *testing.T) {
+	assert.Contains(t, silentEventTypes, "im.message.message_read_v1")
+	assert.Contains(t, silentEventTypes, "im.message.recalled_v1")
+}
+
+// 静默白名单不吞新事件:未登记类型仍然 not found。
+func TestRegisterSilentEvents_UnlistedEventStillReportsNotFound(t *testing.T) {
+	disp := dispatcher.NewEventDispatcher("", "")
+	registerSilentEvents(disp, []string{"im.message.message_read_v1"})
+
+	payload := []byte(`{"schema":"2.0","header":{"event_type":"never.seen.before","app_id":"cli_test"},"event":{}}`)
+	req := &larkevent.EventReq{
+		Header: map[string][]string{"Content-Type": {"application/json"}},
+		Body:   payload,
+	}
+	resp := disp.Handle(context.Background(), req)
+	require.NotNil(t, resp)
+	assert.Contains(t, string(resp.Body), "not found handler")
+}

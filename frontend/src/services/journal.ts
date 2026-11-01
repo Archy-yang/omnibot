@@ -50,6 +50,18 @@ export const journalService = {
     await request.put<ApiResponse<null>>(`/matters/${id}`, payload);
   },
 
+  /**
+   * 设/清目标日(30 号 N2)。
+   * targetDate: YYYY-MM-DD = 设置;null = 清除(后端要求显式传空串,防误清)。
+   */
+  async setMatterTarget(id: number, targetDate: string | null): Promise<{ target_at: string | null }> {
+    const response = await request.put<ApiResponse<{ target_at: string | null }>>(
+      `/matters/${id}/target`,
+      { target_date: targetDate ?? '' },
+    );
+    return response.data.data;
+  },
+
   /** 同步档案到飞书(23号):首建或幂等覆盖,返回文档链接 */
   async syncMatterDoc(id: number): Promise<SyncDocResponse> {
     const response = await request.post<ApiResponse<SyncDocResponse>>(`/matters/${id}/sync-doc`);

@@ -88,8 +88,10 @@ GET /api/v1/memories/journal?kind=all|fact|loop&from=<RFC3339>&to=<RFC3339>&curs
 | GET | `/api/v1/matters?status=active` | 列表：id/title/state_desc/status/updated_at/挂靠记忆数 |
 | GET | `/api/v1/matters/:id` | 详情 + 时间线：matter 元信息 + 挂靠 memories 按 happened_at ASC（同 5.1 条目形状）+ pinned 前置 |
 | PUT | `/api/v1/matters/:id` | 用户纠正口：`{state_desc?, status?}`——只此两字段；title 不可改（§1.1） |
+| PUT | `/api/v1/matters/:id/target` | 目标日设/清（30 号 N2）：`{target_date: "YYYY-MM-DD" \| "" \| "clear"}`；独立于纠正口，复用 28 号 N2 目标语义 |
 
 - 全部 JWT 归属校验（他人 404，同 memory handler 现惯例）。
+- 目标日与 `state_desc/status` 刻意分开：前者是目标维度（28 号），后者是用户纠正（本方案），混在一个请求体里会让「只允许两字段」的边界失效。
 
 ## 6. 前端
 
