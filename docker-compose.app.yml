@@ -1,5 +1,5 @@
 # OmniBot 应用容器(服务生命周期交给 Docker,26 号基础设施调整)。
-# 数据库沿用宿主机已有的 omnibot-postgres-test(5433),经 host.docker.internal 访问;
+# 数据库沿用宿主机已有的 common-postgres(映射 15432),经 host.docker.internal 访问;
 # lark-cli 装在镜像内(Linux 版),授权状态持久化在 named volume(/root/.lark-cli);
 # sandbox_run 走 docker.sock。
 services:

@@ -172,9 +172,11 @@ test-coverage:  ## Run tests with coverage report
 # 数据库备份:长期记忆/对话历史是本产品核心资产,误删 volume/磁盘故障不可逆。
 BACKUP_DIR = backups
 BACKUP_KEEP ?= 14
-PG_CONTAINER ?= omnibot-postgres-test
-PG_USER ?= test
-PG_DB ?= omnibot_test
+# 正式/开发库:common-postgres 容器(宿主机 15432 映射),与 configs/config.yaml、
+# configs/config.docker.yaml 保持一致。别再指向已删除的 omnibot-postgres-test(5433)。
+PG_CONTAINER ?= common-postgres
+PG_USER ?= postgres
+PG_DB ?= omnibot
 
 backup:  ## Dump database to backups/ (gzip, keep last $(BACKUP_KEEP))
 	@echo "🗄️  Dumping $(PG_DB) from $(PG_CONTAINER)..."

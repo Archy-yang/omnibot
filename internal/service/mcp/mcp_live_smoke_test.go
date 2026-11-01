@@ -21,7 +21,7 @@ func openSmokeDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("SMOKE_DB_DSN")
 	if dsn == "" {
-		dsn = "host=localhost port=5433 user=test password=test123 dbname=omnibot_test sslmode=disable"
+		dsn = "host=localhost port=15432 user=postgres password=postgres dbname=omnibot sslmode=disable"
 	}
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
