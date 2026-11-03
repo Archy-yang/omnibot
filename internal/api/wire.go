@@ -82,6 +82,9 @@ type appDeps struct {
 	subAgentSvc     *agentpkg.SubAgentService
 	userChannelRepo userRepo.UserChannelRepository // 26 号:butler 送达器查 open_id
 
+	// 19 号:用户级飞书授权服务(供 web 状态/重授权 + IM #飞书授权 命令共用)
+	larkAuthService *larkauthSvc.Service
+
 	// 31 号:微信 ClawBot 接入(扫码登录 + 长轮询;单账号进程级)
 	wechatClawSvc *wechatclawsvc.Service
 
@@ -644,6 +647,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		llmConfigSvc:        llmConfigSvc,
 		subAgentSvc:         subAgentSvc,
 		userChannelRepo:     userChannelRepository,
+		larkAuthService:     larkauthService,
 		wechatClawSvc:       wechatClawSvc,
 		persistentScheduler: persistentScheduler,
 		butlerScan:          butlerScanSvc,

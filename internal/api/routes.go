@@ -158,7 +158,10 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// channel 复用现有 msgSvc/agentSvc/llmConfigSvc--同步 Run 路径,所有
 	// 跨入口能力(Agent、长期记忆、自定义 LLM 配置、agent_steps 复盘记录)自动继承。
 	// v2.2/v2.3: 身份解析改为 BindingService(绑定码 + 已绑解析 + 未绑引导),不再自动建号。
-	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.butlerSettings, d.userChannelRepo)
+	larkAuthAdapter := newIMLarkAuthAdapter(d.larkAuthService)
+	startFeishuChannel(cfg, d.bindingSvc, d.msgSvc, d.agentSvc, d.llmConfigSvc, d.subAgentSvc, d.butlerScan, d.butlerSettings, d.userChannelRepo, larkAuthAdapter)
+	// 19 号补强:微信 ClawBot 侧同样支持 #飞书授权
+	d.wechatClawSvc.SetLarkAuthCommander(larkAuthAdapter)
 
 	// 31 号:微信 ClawBot 长轮询。已有 active 账号则自动恢复,否则空转退出(等扫码)。
 	backtask.RunDetached("wechat claw channel", func() {
@@ -233,6 +236,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	{
 		feishuAuthAPIGroup.GET("", d.webHandler.HandleGetFeishuAuth)
 		feishuAuthAPIGroup.POST("", d.webHandler.HandleStartFeishuAuth)
+		feishuAuthAPIGroup.POST("/relogin", d.webHandler.HandleReloginFeishuAuth) // 19 号补强:用库存凭证一键重授权
 		feishuAuthAPIGroup.GET("/poll", d.webHandler.HandlePollFeishuAuth)
 		feishuAuthAPIGroup.DELETE("", d.webHandler.HandleDisconnectFeishuAuth)
 	}
@@ -347,6 +351,7 @@ func startFeishuChannel(
 	butlerScan *butlerpkg.ScanService,
 	butlerSettings *butlerpkg.SettingsService,
 	userChannelRepo userRepo.UserChannelRepository,
+	larkAuth imLarkAuthAdapter,
 ) {
 	feishuCfg := channelfeishu.Config{
 		AppID:     cfg.Feishu.AppID,
@@ -367,6 +372,8 @@ func startFeishuChannel(
 
 	handler := channelfeishu.NewMessageHandler(bindingSvc, msgSvc, agentSvc, llmConfigSvc, sender)
 	handler.SetSubAgentReporter(subAgentSvc)
+	// 19 号补强:IM 内 #飞书授权 直接拿验证链接(auth 子命令被工具白名单挡死,IM 无其它入口)
+	handler.SetLarkAuthCommander(larkAuth)
 	// 29号 N4:送达反馈文本通道(「有用/不用再提」);nil 安全(handler 不拦)
 	if butlerSettings != nil {
 		handler.SetNoteFeedbackService(butlerSettings)

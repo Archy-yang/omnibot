@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,10 @@ type mockCLI struct {
 	statusName    string
 	statusErr     error
 	logouts       []string
+	// AuthStatus 行为(健康检查)
+	authStatusRes   AuthStatusResult
+	authStatusErr   error
+	authStatusCalls int
 }
 
 func (m *mockCLI) ProfileAdd(_ int64, profile, appID, appSecret string) error {
@@ -75,7 +80,15 @@ func (m *mockCLI) Status(_ int64, profile string) (openID, userName string, err 
 	return m.statusOpenID, m.statusName, m.statusErr
 }
 
-func (m *mockCLI) Logout(_ int64, profile string) error { m.logouts = append(m.logouts, profile); return nil }
+func (m *mockCLI) AuthStatus(_ context.Context, _ int64, _ string) (AuthStatusResult, error) {
+	m.authStatusCalls++
+	return m.authStatusRes, m.authStatusErr
+}
+
+func (m *mockCLI) Logout(_ int64, profile string) error {
+	m.logouts = append(m.logouts, profile)
+	return nil
+}
 
 func newService(repo *mockRepo, cli *mockCLI) *Service {
 	return NewService(repo, cli)
@@ -83,9 +96,10 @@ func newService(repo *mockRepo, cli *mockCLI) *Service {
 
 // 视图状态断言简写(与 domain 常量同源)。
 const (
-	StatusPending    = userdomain.LarkAuthStatusPending
-	StatusAuthorized = userdomain.LarkAuthStatusAuthorized
-	StatusFailed     = userdomain.LarkAuthStatusFailed
+	StatusPending     = userdomain.LarkAuthStatusPending
+	StatusAuthorized  = userdomain.LarkAuthStatusAuthorized
+	StatusFailed      = userdomain.LarkAuthStatusFailed
+	StatusNeedRelogin = userdomain.LarkAuthStatusNeedRelogin
 )
 
 func startInput() (int64, string, string) { return 7, "cli_app123", "sec-ret-1" }
@@ -271,4 +285,145 @@ func mustJSON(t *testing.T, v interface{}) string {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// ---- 健康检查 / 一键重授权 ----
+
+// seedAuthorized 造一条"库里写着已授权"的记录(模拟 token 事后失效前的状态)。
+func seedAuthorized(t *testing.T, repo *mockRepo, cli *mockCLI) *Service {
+	t.Helper()
+	crypto.InitWithKey([]byte("01234567890123456789012345678901"))
+	if _, err := NewService(repo, cli).StartAuth(context.Background(), 7, "cli_app123", "sec-1"); err != nil {
+		t.Fatalf("seed StartAuth: %v", err)
+	}
+	row := repo.rows[7]
+	row.Status = StatusAuthorized
+	row.OpenID = "ou_old"
+	row.UserName = "杨琦"
+	row.DeviceCode, row.VerifiedURL = "", ""
+	return NewService(repo, cli)
+}
+
+func TestHealth_AuthorizedButCLITokenMissing_MarksNeedRelogin(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "missing"},
+	}
+	svc := seedAuthorized(t, repo, cli)
+
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNeedRelogin, view.Status)
+	assert.Equal(t, StatusNeedRelogin, repo.rows[7].Status, "真实态必须回写数据库,否则 web 继续说谎")
+	assert.Equal(t, "cli_app123", view.AppID, "保留 AppID 以便一键重授权")
+}
+
+func TestHealth_CLITokenAvailable_ConfirmsAuthorized(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{
+			UserAvailable: true, UserStatus: "ok",
+			OpenID: "ou_new", UserName: "杨琦",
+		},
+	}
+	svc := seedAuthorized(t, repo, cli)
+	repo.rows[7].Status = StatusNeedRelogin
+
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusAuthorized, view.Status)
+	assert.Equal(t, "ou_new", repo.rows[7].OpenID, "顺手补回真实身份")
+}
+
+func TestHealth_PendingDeviceFlow_CompletesAndAuthorizes(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "pending", DeviceCode: "dev-x"},
+		statusOpenID:  "ou_done", statusName: "杨琦",
+	}
+	svc := seedAuthorized(t, repo, cli)
+
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusAuthorized, view.Status)
+	assert.Contains(t, cli.completed, "user-7", "应用 CLI 侧 device code 收尾,修掉死锁")
+}
+
+func TestHealth_PendingDeviceFlowCompleteFails_MarksNeedRelogin(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "pending", DeviceCode: "dev-x"},
+		completeErr:   errors.New("device code expired"),
+	}
+	svc := seedAuthorized(t, repo, cli)
+
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNeedRelogin, view.Status)
+}
+
+func TestHealth_CLIProbeErrorKeepsDBStatus(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{authStatusErr: errors.New("cli not found")}
+	svc := seedAuthorized(t, repo, cli)
+
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusAuthorized, view.Status, "环境问题不该把用户标成需要重授权")
+}
+
+func TestHealth_CachedWithinTTL(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{authStatusRes: AuthStatusResult{UserAvailable: true, UserStatus: "ok"}}
+	svc := seedAuthorized(t, repo, cli)
+
+	_, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	_, err = svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cli.authStatusCalls, "30s 内应命中缓存")
+
+	svc.now = func() time.Time { return time.Now().Add(31 * time.Second) }
+	_, err = svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, 2, cli.authStatusCalls)
+}
+
+func TestHealth_NoRowReturnsNone(t *testing.T) {
+	svc := NewService(newMockRepo(), &mockCLI{})
+	view, err := svc.Health(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, "none", view.Status)
+}
+
+func TestRelogin_ReusesStoredSecret(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "missing"},
+		startURL:      "https://verify/new", startUserCode: "CODE-1", startDevice: "dev-new",
+	}
+	svc := seedAuthorized(t, repo, cli)
+	repo.rows[7].Status = StatusNeedRelogin
+
+	view, err := svc.Relogin(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, view.Status)
+	assert.Equal(t, "https://verify/new", view.VerifyURL)
+	// 复用库里的 appID 与解密后的 secret(无需用户重填)
+	assert.Equal(t, [2]string{"user-7", "cli_app123"}, cli.profileAdds[len(cli.profileAdds)-1])
+	assert.Equal(t, "dev-new", repo.rows[7].DeviceCode)
+}
+
+func TestRelogin_NoRow(t *testing.T) {
+	svc := NewService(newMockRepo(), &mockCLI{})
+	_, err := svc.Relogin(context.Background(), 7)
+	assert.ErrorIs(t, err, ErrNotAuthorized)
+}
+
+// 重新授权不能把上次的身份回显冲掉(Upsert 是整行覆盖)。
+func TestRelogin_PreservesIdentityDisplay(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{
+		authStatusRes: AuthStatusResult{UserAvailable: false, UserStatus: "missing"},
+		startURL:      "https://verify/new", startDevice: "dev-new",
+	}
+	svc := seedAuthorized(t, repo, cli)
+	repo.rows[7].Status = StatusNeedRelogin
+
+	_, err := svc.Relogin(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, "ou_old", repo.rows[7].OpenID, "身份回显应保留")
+	assert.Equal(t, "杨琦", repo.rows[7].UserName)
 }

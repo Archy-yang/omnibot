@@ -163,6 +163,23 @@ const startFaPoll = () => {
   }, 2000);
 };
 
+// 19 号补强:用库存凭据一键重新授权(不需要用户重填 secret)
+const handleFaRelogin = async () => {
+  faBusy.value = true;
+  try {
+    const v = await feishuAuthService.relogin();
+    faView.value = v;
+    if (v.status === 'pending') {
+      startFaPoll();
+      success('已发起授权，请在浏览器里确认');
+    }
+  } catch (err) {
+    error(err instanceof Error ? err.message : '发起重新授权失败');
+  } finally {
+    faBusy.value = false;
+  }
+};
+
 const handleFaStart = async () => {
   faBusy.value = true;
   try {
@@ -945,6 +962,17 @@ const showEmbeddingApiKey = ref(false);
         <p class="form-hint">请在浏览器中打开以下链接并确认授权(用户码 <b>{{ faView.user_code }}</b>),确认后本页会自动检测到:</p>
         <a class="fa-link" :href="faView.verify_url" target="_blank" rel="noopener">{{ faView.verify_url }}</a>
         <button type="button" class="fa-btn" :disabled="faBusy" @click="handleFaCancel">取消</button>
+      </div>
+
+      <!-- need_relogin:授权记录在,但 CLI 里 token 已失效(健康检查发现) -->
+      <div v-else-if="faView?.status === 'need_relogin'" class="fa-pending">
+        <p class="form-hint">
+          授权记录还在（{{ faView.user_name || faView.app_id }}），但飞书那边的登录凭证已经失效，
+          需要重新确认一次。点下面的按钮会直接复用已保存的应用凭据发起授权，不用再填 App Secret。
+        </p>
+        <button type="button" class="fa-btn is-primary" :disabled="faBusy" @click="handleFaRelogin">
+          {{ faBusy ? '发起中...' : '重新授权' }}
+        </button>
       </div>
 
       <!-- failed / none:发起表单 -->

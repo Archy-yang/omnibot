@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
+	"gorm.io/gorm"
 	userdomain "omnibot/internal/domain/user"
 	"omnibot/internal/pkg/crypto"
-	"gorm.io/gorm"
 )
 
 // 语义化错误。
@@ -38,14 +40,139 @@ type View struct {
 	UserCode  string `json:"user_code,omitempty"`
 }
 
+// healthTTL 健康检查结果缓存时长:设置抽屉反复打开时不必每次都 shell 出去问 CLI。
+const healthTTL = 30 * time.Second
+
+// healthEntry 一次健康检查的快照。
+type healthEntry struct {
+	view View
+	at   time.Time
+}
+
 // Service 用户级 lark-cli 授权编排。
 type Service struct {
 	repo Repo
 	cli  LarkCLI
+
+	mu     sync.Mutex
+	health map[int64]healthEntry
+	now    func() time.Time
 }
 
 func NewService(repo Repo, cli LarkCLI) *Service {
-	return &Service{repo: repo, cli: cli}
+	return &Service{repo: repo, cli: cli, health: map[int64]healthEntry{}, now: time.Now}
+}
+
+// invalidateHealth 授权动作会改变真实态,清掉缓存。
+func (s *Service) invalidateHealth(userID int64) {
+	s.mu.Lock()
+	delete(s.health, userID)
+	s.mu.Unlock()
+}
+
+// Health 健康检查:以 CLI 真实态为准校正 DB 状态(19 号状态机补强)。
+//
+// 背景:token 刷新完全由 lark-cli 负责(19 号 §1.1),我们只记"上次收尾成功";
+// CLI 里的 user token 事后失效(容器重建/状态包丢失/CAS 冲突)时,DB 仍写 authorized,
+// 造成"web 显示已授权、工具报未授权"。本方法把两者对齐:
+//   - CLI 有可用 token → authorized(顺手补回 openId/userName)
+//   - CLI 挂着未完成 device flow → 先尝试收尾,收不了标 need_relogin
+//   - CLI 明确无 token → need_relogin
+//
+// CLI 探测本身失败(二进制缺失/超时)时不改状态——那是环境问题,不是授权失效。
+func (s *Service) Health(ctx context.Context, userID int64) (View, error) {
+	s.mu.Lock()
+	if e, ok := s.health[userID]; ok && s.now().Sub(e.at) < healthTTL {
+		s.mu.Unlock()
+		return e.view, nil
+	}
+	s.mu.Unlock()
+
+	row, err := s.repo.GetByUserID(userID)
+	if err != nil {
+		if isNotFound(err) {
+			return s.cacheHealth(userID, View{Status: "none"}), nil
+		}
+		return View{}, err
+	}
+	// pending 由 PollAuth 的惰性收尾负责,健康检查不抢
+	if row.Status == userdomain.LarkAuthStatusPending {
+		return s.cacheHealth(userID, s.viewOf(row)), nil
+	}
+
+	st, err := s.cli.AuthStatus(ctx, userID, row.ProfileName)
+	if err != nil {
+		log.Printf("larkauth: user=%d 健康检查失败(保持数据库状态): %v", userID, err)
+		return s.cacheHealth(userID, s.viewOf(row)), nil
+	}
+
+	switch {
+	case st.UserAvailable:
+		changed := row.Status != userdomain.LarkAuthStatusAuthorized
+		if st.OpenID != "" && st.OpenID != row.OpenID {
+			row.OpenID = st.OpenID
+			changed = true
+		}
+		if st.UserName != "" && st.UserName != row.UserName {
+			row.UserName = st.UserName
+			changed = true
+		}
+		row.Status = userdomain.LarkAuthStatusAuthorized
+		row.DeviceCode, row.VerifiedURL = "", ""
+		if changed {
+			if err := s.repo.Update(row); err != nil {
+				return View{}, err
+			}
+		}
+	case st.DeviceCode != "":
+		// CLI 侧挂着未完成的 device flow:尽力收尾一次(修掉"永远 pending 收不了尾"的死锁)
+		if completeErr := s.cli.LoginComplete(ctx, userID, row.ProfileName, st.DeviceCode); completeErr == nil {
+			if openID, name, stErr := s.cli.Status(userID, row.ProfileName); stErr == nil && openID != "" {
+				row.Status = userdomain.LarkAuthStatusAuthorized
+				row.OpenID, row.UserName = openID, name
+				row.DeviceCode, row.VerifiedURL = "", ""
+				if err := s.repo.Update(row); err != nil {
+					return View{}, err
+				}
+				break
+			}
+		}
+		row.Status = userdomain.LarkAuthStatusNeedRelogin
+		if err := s.repo.Update(row); err != nil {
+			return View{}, err
+		}
+	default:
+		if row.Status != userdomain.LarkAuthStatusNeedRelogin {
+			row.Status = userdomain.LarkAuthStatusNeedRelogin
+			if err := s.repo.Update(row); err != nil {
+				return View{}, err
+			}
+		}
+	}
+	return s.cacheHealth(userID, s.viewOf(row)), nil
+}
+
+// Relogin 用库里已存的 AppID/AppSecret 重新发起 device flow(无需用户重填 secret)。
+func (s *Service) Relogin(ctx context.Context, userID int64) (View, error) {
+	row, err := s.repo.GetByUserID(userID)
+	if err != nil {
+		if isNotFound(err) {
+			return View{}, ErrNotAuthorized
+		}
+		return View{}, err
+	}
+	secret, err := crypto.Decrypt(row.AppSecretEnc)
+	if err != nil {
+		return View{}, fmt.Errorf("larkauth: 解密 app secret 失败: %w", err)
+	}
+	return s.StartAuth(ctx, userID, row.AppID, secret)
+}
+
+func (s *Service) cacheHealth(userID int64, view View) View {
+	s.mu.Lock()
+	s.health[userID] = healthEntry{view: view, at: s.now()}
+	s.mu.Unlock()
+	return view
 }
 
 func profileFor(userID int64) string { return fmt.Sprintf("user-%d", userID) }
@@ -71,14 +198,22 @@ func (s *Service) StartAuth(ctx context.Context, userID int64, appID, appSecret 
 	if err != nil {
 		return View{}, err
 	}
+	// 重新授权(Relogin)时保留上一次的身份回显:Upsert 是整行覆盖,
+	// 不清空的话 pending 界面会短暂变成"无名氏"。
+	var prevOpenID, prevUserName string
+	if prev, perr := s.repo.GetByUserID(userID); perr == nil && prev != nil {
+		prevOpenID, prevUserName = prev.OpenID, prev.UserName
+	}
 	row := &userdomain.LarkCLIAuth{
 		UserID: userID, ProfileName: profile, AppID: appID, AppSecretEnc: enc,
-		Status: userdomain.LarkAuthStatusPending,
+		OpenID: prevOpenID, UserName: prevUserName,
+		Status:     userdomain.LarkAuthStatusPending,
 		DeviceCode: deviceCode, VerifiedURL: verifyURL,
 	}
 	if err := s.repo.Upsert(row); err != nil {
 		return View{}, err
 	}
+	s.invalidateHealth(userID)
 	return View{Status: row.Status, AppID: appID, VerifyURL: verifyURL, UserCode: userCode}, nil
 }
 
@@ -119,6 +254,7 @@ func (s *Service) PollAuth(ctx context.Context, userID int64) (View, error) {
 	if err := s.repo.Update(row); err != nil {
 		return View{}, err
 	}
+	s.invalidateHealth(userID)
 	return s.viewOf(row), nil
 }
 
@@ -128,6 +264,7 @@ func (s *Service) Disconnect(ctx context.Context, userID int64) error {
 	if err != nil {
 		return err
 	}
+	s.invalidateHealth(userID)
 	if logoutErr := s.cli.Logout(userID, row.ProfileName); logoutErr != nil {
 		log.Printf("larkauth: user=%d logout 失败(继续删行): %v", userID, logoutErr)
 	}

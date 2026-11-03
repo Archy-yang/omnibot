@@ -329,7 +329,8 @@ export interface ListSkillsResponse {
  * status: none=未发起 pending=等待确认 authorized=已授权 failed=发起失败
  */
 export interface FeishuAuthView {
-  status: 'none' | 'pending' | 'authorized' | 'failed';
+  /** need_relogin:授权记录在但 CLI 里 token 已失效(健康检查发现),需重新确认 */
+  status: 'none' | 'pending' | 'authorized' | 'failed' | 'need_relogin';
   app_id?: string;
   open_id?: string;
   user_name?: string;

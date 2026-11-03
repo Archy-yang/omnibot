@@ -318,3 +318,49 @@ func TestSubAgentReporterInjectsInstructionAndMarksReported(t *testing.T) {
 	assert.Equal(t, "先汇报后台任务", ag.gotConv[0]["content"])
 	assert.Equal(t, []int64{5, 6}, reporter.reported, "汇报后应标记防重复")
 }
+
+type fakeLarkAuth struct {
+	url   string
+	code  string
+	err   error
+	calls int
+}
+
+func (f *fakeLarkAuth) Relogin(ctx context.Context, userID int64) (string, string, error) {
+	f.calls++
+	return f.url, f.code, f.err
+}
+
+// 19 号补强:IM 里发 #飞书授权 → 回验证链接,不进对话。
+func TestHandleInboundLarkAuthCommand(t *testing.T) {
+	binding := &fakeBinding{resolveBound: true, resolveUserID: 7}
+	sender := &fakeSender{}
+	ag := &fakeAgent{}
+	h := newPipelineHandler(binding, sender, &fakeMessages{}, ag)
+	auth := &fakeLarkAuth{url: "https://accounts.feishu.cn/verify?x=1", code: "CODE-9"}
+	h.SetLarkAuthCommander(auth)
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#飞书授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	assert.Equal(t, 1, auth.calls)
+	assert.Equal(t, 0, ag.calls, "授权命令不该进对话")
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "https://accounts.feishu.cn/verify?x=1")
+	assert.Contains(t, sender.sent[0], "CODE-9")
+}
+
+func TestHandleInboundLarkAuthCommandFailure(t *testing.T) {
+	binding := &fakeBinding{resolveBound: true, resolveUserID: 7}
+	sender := &fakeSender{}
+	h := newPipelineHandler(binding, sender, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{err: errors.New("no record")})
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#飞书授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "失败")
+}
