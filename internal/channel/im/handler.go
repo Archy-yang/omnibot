@@ -239,7 +239,7 @@ func (h *Handler) HandleInbound(ctx context.Context, in InboundMessage) error {
 	// 主 Agent 同步 Run 时先汇报再回应当前消息。汇报后标记 reported(防重复)。
 	var reportedTaskIDs []int64
 	if h.subAgentReporter != nil {
-		instruction, taskIDs := h.subAgentReporter.GetPendingReportContext(userID)
+		instruction, taskIDs := h.subAgentReporter.GetPendingReportContext(userID, h.opts.Source)
 		if instruction != "" {
 			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
 			reportedTaskIDs = taskIDs
@@ -444,18 +444,7 @@ func parseBindCode(text string) (string, bool) {
 // toAgentMessages 把 llm.ChatMessage 转成 agent 包期望的 []map[string]interface{}。
 // 与 web handler 同款转换(每个 segment 只携带 role+content,工具消息历史由 agent 自己重建)。
 func ToAgentMessages(messages []llm.ChatMessage) []map[string]interface{} {
-	items := make([]map[string]interface{}, 0, len(messages))
-	for _, msg := range messages {
-		m := map[string]interface{}{"role": msg.Role, "content": msg.Content}
-		if len(msg.ToolCalls) > 0 {
-			m["tool_calls"] = msg.ToolCalls
-		}
-		if msg.ToolCallID != "" {
-			m["tool_call_id"] = msg.ToolCallID
-		}
-		items = append(items, m)
-	}
-	return items
+	return agentpkg.ChatMessagesToAgent(messages)
 }
 
 // recordsToAgentSteps 主 Agent 步骤转换(委托 agent.StepRecordsToAgentSteps 公共函数)。

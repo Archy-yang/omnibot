@@ -41,7 +41,10 @@ type SubAgentService struct {
 	stepRepo     chatrepo.AgentStepRepository  // 子 Agent 运行链路落 agent_steps(方案A,task_id 关联)
 	artifactRepo repoagent.ArtifactRepository  // 子 Agent 产物落 agent_artifacts(结构化 Artifact,#18)
 	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
-	notifier     TaskNotifier                  // 任务完成主动推送(方案A:飞书主动消息)
+	// notifiers 按任务来源分派的完成推送器(33 号):feishu / wechat_claw 各一个。
+	// 单实例改多实例的原因:推送实现绑定具体渠道 sender,一个实例无法同时服务两条 IM。
+	notifierMu   sync.RWMutex
+	notifiers    map[string]TaskNotifier
 	publisher    TaskCompletionPublisher       // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
 	finishedObserver func(*domainagent.AgentTask) // 任务终态观察者(25 号:持久任务 fail_streak/自动停用)
 
@@ -62,15 +65,19 @@ func NewSubAgentService(
 	eventRepo repoagent.TaskEventRepository,
 	notifier TaskNotifier,
 ) *SubAgentService {
-	return &SubAgentService{
+	svc := &SubAgentService{
 		taskRepo:      taskRepo,
 		runner:        runner,
 		stepRepo:      stepRepo,
 		artifactRepo:  artifactRepo,
 		eventRepo:     eventRepo,
-		notifier:      notifier,
+		notifiers:     make(map[string]TaskNotifier),
 		activeCancels: make(map[int64]context.CancelFunc),
 	}
+	if notifier != nil {
+		svc.notifiers[domainagent.SourceFeishu] = notifier // 兼容旧装配:构造期注入的即飞书推送器
+	}
+	return svc
 }
 
 // StartTask 建任务 + 起 goroutine 后台执行,立即返回 task_id(异步,不阻塞调用方)。
@@ -242,9 +249,10 @@ func (s *SubAgentService) executeTask(_ context.Context, task *domainagent.Agent
 	s.notifyCompleted(task.ID)
 }
 
-// GetCompletedUnreported 返回该用户已完成但未汇报的任务(含 failed,失败也要汇报)。
-func (s *SubAgentService) GetCompletedUnreported(userID int64) ([]*domainagent.AgentTask, error) {
-	return s.taskRepo.ListCompletedUnreported(userID)
+// GetCompletedUnreported 返回该用户在指定来源渠道下已完成但未汇报的任务(含 failed,失败也要汇报)。
+// 33 号:按来源隔离——Web 只看 web 任务,IM 只看本渠道任务,避免跨渠道抢报。
+func (s *SubAgentService) GetCompletedUnreported(userID int64, source string) ([]*domainagent.AgentTask, error) {
+	return s.taskRepo.ListCompletedUnreported(userID, source)
 }
 
 // MarkReported 标记任务已汇报。
@@ -478,11 +486,16 @@ func (s *SubAgentService) notifyCompleted(taskID int64) {
 	if task.Source == domainagent.SourceWeb && s.publisher != nil {
 		s.publisher.PublishTaskCompleted(task.UserID, task.ID)
 	}
-	if s.notifier == nil {
-		return
+	// 按来源分派(33 号):不同渠道的 notifier 绑定各自的 sender,不能共用一个实例。
+	notifier := s.notifierFor(task.Source)
+	if notifier == nil || task.NotifyTarget == "" {
+		return // 该渠道未接推送:保留"下次发消息时前置汇报"兜底
 	}
-	if task.Source != domainagent.SourceFeishu || task.NotifyTarget == "" {
-		return // 非飞书不主动推消息
+	// 渠道当前不可用(如微信断线/重扫中):不标记 reported,兜底路径仍能补报。
+	if a, ok := notifier.(interface{ Available() bool }); ok && !a.Available() {
+		logger.WarnWithFields("sub agent: notify channel unavailable, keep unreported",
+			zap.Int64("task_id", task.ID), zap.String("source", task.Source))
+		return
 	}
 	// 先标记 reported:防 web 前端轮询在此期间查到 unreported 触发重复汇报
 	if err := s.taskRepo.MarkReported(task.ID); err != nil {
@@ -490,19 +503,34 @@ func (s *SubAgentService) notifyCompleted(taskID int64) {
 			zap.Int64("task_id", task.ID), zap.Error(err))
 		// 标记失败仍继续推送(尽力把消息送到)
 	}
-	if err := s.notifier.NotifyTaskCompleted(context.Background(), task.NotifyTarget, task); err != nil {
-		logger.ErrorWithFields("sub agent: notify feishu failed",
-			zap.Int64("task_id", task.ID), zap.String("open_id", task.NotifyTarget), zap.Error(err))
+	if err := notifier.NotifyTaskCompleted(context.Background(), task.NotifyTarget, task); err != nil {
+		logger.ErrorWithFields("sub agent: notify failed",
+			zap.Int64("task_id", task.ID), zap.String("source", task.Source), zap.Error(err))
 	}
 }
 
 // ErrTaskNotOwned 任务不属于该用户(属主校验失败)。
 var ErrTaskNotOwned = errors.New("task not owned by user")
 
-// SetNotifier 注入任务完成推送器(飞书 channel 启动后调,因 sender 在那时才创建)。
-// 飞书未配置时保持 nil(web 任务靠轮询,不主动推)。
-func (s *SubAgentService) SetNotifier(n TaskNotifier) {
-	s.notifier = n
+// SetNotifierForSource 按任务来源注册完成推送器(33 号)。
+// 渠道启动后调(sender 在那时才创建);未注册的来源保持"仅前置汇报兜底"。
+func (s *SubAgentService) SetNotifierForSource(source string, n TaskNotifier) {
+	if source == "" {
+		return
+	}
+	s.notifierMu.Lock()
+	defer s.notifierMu.Unlock()
+	if s.notifiers == nil {
+		s.notifiers = make(map[string]TaskNotifier)
+	}
+	s.notifiers[source] = n
+}
+
+// notifierFor 取该来源的推送器(未注册返回 nil)。
+func (s *SubAgentService) notifierFor(source string) TaskNotifier {
+	s.notifierMu.RLock()
+	defer s.notifierMu.RUnlock()
+	return s.notifiers[source]
 }
 
 // SetCompletionPublisher 注入 web 实时推送器(08 §4.8;realtime.Hub)。
@@ -534,8 +562,8 @@ func (s *SubAgentService) ListTaskSteps(taskID, userID int64) ([]*conversation.A
 // GetPendingReportContext 返回待汇报的回执指令 + 对应任务 ID(供主对话前置汇报兜底)。
 // 封装:查未汇报任务 + 构造回执指令。无待汇报任务返回空 instruction + nil taskIDs。
 // web/飞书主对话 handler 在调主 Agent Run 前调用此方法,有指令则 prepend 到上下文。
-func (s *SubAgentService) GetPendingReportContext(userID int64) (instruction string, taskIDs []int64) {
-	unreported, err := s.taskRepo.ListCompletedUnreported(userID)
+func (s *SubAgentService) GetPendingReportContext(userID int64, source string) (instruction string, taskIDs []int64) {
+	unreported, err := s.taskRepo.ListCompletedUnreported(userID, source)
 	if err != nil || len(unreported) == 0 {
 		return "", nil
 	}

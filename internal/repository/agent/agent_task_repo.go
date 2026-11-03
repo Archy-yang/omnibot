@@ -27,9 +27,10 @@ type AgentTaskRepository interface {
 	// "任务存在 ⇒ submitted 事件存在"。
 	CreateWithEvent(task *agent.AgentTask, eventType, source string) error
 	MarkReported(id int64) error
-	// ListCompletedUnreported 返回该用户已 completed/failed 但未汇报的任务(C 模式核心查询)。
+	// ListCompletedUnreported 返回该用户在**指定来源渠道**下已完成但未汇报的任务(C 模式核心查询)。
 	// 包含 failed 任务--失败也要汇报(08 §9)。
-	ListCompletedUnreported(userID int64) ([]*agent.AgentTask, error)
+	// source 必填(33 号补强):汇报归属来源渠道,避免 A 渠道的任务被 B 渠道/Web 抢报。
+	ListCompletedUnreported(userID int64, source string) ([]*agent.AgentTask, error)
 	// ListByUser 列出该用户的任务(按创建时间倒序,limit 限上限)。
 	ListByUser(userID int64, limit int) ([]*agent.AgentTask, error)
 	// UpdateGoal 改 goal(pending 态 update_task 用)。
@@ -149,10 +150,10 @@ func (r *GormAgentTaskRepository) MarkReported(id int64) error {
 		Update("reported", true).Error
 }
 
-func (r *GormAgentTaskRepository) ListCompletedUnreported(userID int64) ([]*agent.AgentTask, error) {
+func (r *GormAgentTaskRepository) ListCompletedUnreported(userID int64, source string) ([]*agent.AgentTask, error) {
 	var tasks []*agent.AgentTask
-	err := r.db.Where("user_id = ? AND reported = ? AND status IN ?",
-		userID, false, []string{agent.TaskStatusCompleted, agent.TaskStatusFailed}).
+	err := r.db.Where("user_id = ? AND source = ? AND reported = ? AND status IN ?",
+		userID, source, false, []string{agent.TaskStatusCompleted, agent.TaskStatusFailed}).
 		Order("completed_at ASC").
 		Find(&tasks).Error
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"omnibot/frontend"
 	"omnibot/internal/api/web"
+	domainagent "omnibot/internal/domain/agent"
 	channelfactory "omnibot/internal/channel"
 	channelfeishu "omnibot/internal/channel/feishu"
 	channelweb "omnibot/internal/channel/web"
@@ -52,6 +53,22 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 31 号:微信 ClawBot 通道注册(异步发送/主动推送可用)。
 	// 用 provider 动态取当前 sender:重新扫码只换底层 client,通道实例不变。
 	channelfactory.Register(wechatclawchannel.NewChannel(d.wechatClawSvc.CurrentSender))
+
+	// 33 号:微信 ClawBot 任务完成推送。与飞书共用汇报转述组件(ReportComposer),
+	// 渠道差异只在发送方式(ClawBot 纯文本)。sender 每次动态解析,重扫/重连后自动跟随。
+	reportComposer := agentpkg.NewReportComposer(
+		d.agentSvc, d.msgSvc, d.msgSvc,
+		&agentpkg.SubAgentLLMConfigAdapter{Svc: d.llmConfigSvc},
+	)
+	d.subAgentSvc.SetNotifierForSource(domainagent.SourceWeChatClaw, wechatclawchannel.NewTaskNotifier(
+		func() wechatclawchannel.TextSender {
+			if sender := d.wechatClawSvc.CurrentSender(); sender != nil {
+				return sender
+			}
+			return nil
+		},
+		reportComposer,
+	))
 
 	// 微信回调路由(v1.9:注入 wechat channel 负责 XML 序列化,handler 业务路径只产纯文本)
 	wechatGroup := r.Group("/wechat")
@@ -276,6 +293,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		userAPIGroup.PUT("/llm-config", d.webHandler.HandleUpdateLLMConfig)
 		userAPIGroup.DELETE("/llm-config", d.webHandler.HandleDeleteLLMConfig)
 
+		// 32 号:联网搜索配置(按用户;地址/密钥/开关)
+		userAPIGroup.GET("/search-config", d.webHandler.HandleGetSearchConfig)
+		userAPIGroup.PUT("/search-config", d.webHandler.HandleUpdateSearchConfig)
+		userAPIGroup.DELETE("/search-config", d.webHandler.HandleDeleteSearchConfig)
+
 		// v2.3: 渠道绑定(状态查询 + 出码,通用码服务飞书+微信)
 		channelBindHandler := web.NewChannelBindHandler(d.bindingSvc)
 		userAPIGroup.GET("/channel-binding", channelBindHandler.HandleGetBindingStatus)
@@ -380,7 +402,7 @@ func startFeishuChannel(
 	}
 	// 飞书主动推送(方案A):子 Agent 完成时把结果推回飞书 open_id。
 	// sender 在此才创建,故 notifier 在飞书启动时注入(而非 subAgentSvc 创建时)。
-	subAgentSvc.SetNotifier(channelfeishu.NewFeishuTaskNotifier(sender, agentSvc, msgSvc, llmConfigSvc))
+	subAgentSvc.SetNotifierForSource(domainagent.SourceFeishu, channelfeishu.NewFeishuTaskNotifier(sender, agentSvc, msgSvc, llmConfigSvc))
 	// 26 号:主动管家飞书送达器(sender 在此才创建;未绑定渠道由 notifier 内静默降级为仅落库)
 	if butlerScan != nil && userChannelRepo != nil {
 		butlerScan.SetNotifier(channelfeishu.NewFeishuButlerNotifier(sender, userChannelRepo))

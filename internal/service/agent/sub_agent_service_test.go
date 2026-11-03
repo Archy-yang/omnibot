@@ -297,7 +297,7 @@ func TestSubAgentService_GetCompletedUnreported(t *testing.T) {
 	mustTransitionSvc(t, repo, t3.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
 	mustTransitionSvc(t, repo, t3.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a3"), nil)
 
-	got, err := svc.GetCompletedUnreported(1)
+	got, err := svc.GetCompletedUnreported(1, "web")
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 	assert.Equal(t, t1.ID, got[0].ID)
@@ -545,4 +545,26 @@ func mustTransitionSvc(t *testing.T, repo repoagent.AgentTaskRepository, id int6
 	ok, err := repo.TransitionStatus(id, from, to, artifact, errMsg)
 	require.NoError(t, err)
 	require.True(t, ok, "%s→%s 迁移应成功", from, to)
+}
+
+// 33 号:待汇报查询按来源隔离,避免 A 渠道的任务被 B 渠道补报。
+func TestSubAgentService_PendingReportScopedBySource(t *testing.T) {
+	svc, repo, _ := setupSubAgentService(t, &mockRunner{})
+
+	webTask := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("web 任务"), domainagent.SourceWeb, "")
+	fsTask := domainagent.NewAgentTask(1, domainagent.NewTaskSpec("飞书任务"), domainagent.SourceFeishu, "ou_x")
+	for _, tk := range []*domainagent.AgentTask{webTask, fsTask} {
+		require.NoError(t, repo.Create(tk))
+		mustTransitionSvc(t, repo, tk.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+		mustTransitionSvc(t, repo, tk.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, strPtrService("a"), nil)
+	}
+
+	_, webIDs := svc.GetPendingReportContext(1, domainagent.SourceWeb)
+	assert.Equal(t, []int64{webTask.ID}, webIDs)
+
+	_, fsIDs := svc.GetPendingReportContext(1, domainagent.SourceFeishu)
+	assert.Equal(t, []int64{fsTask.ID}, fsIDs)
+
+	_, clawIDs := svc.GetPendingReportContext(1, domainagent.SourceWeChatClaw)
+	assert.Empty(t, clawIDs, "微信渠道不该看到飞书/Web 的待汇报")
 }
