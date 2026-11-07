@@ -613,3 +613,35 @@ export interface StyleProfileView {
   observations: StyleObservationItem[];
   changes: StyleChangeItem[];
 }
+
+/** 32 号:用户级联网搜索配置(密钥只回显掩码) */
+export interface SearchConfigResponse {
+  /** 是否已配置(有可用密钥) */
+  has_config: boolean;
+  /** 用户开关(关闭后助手不再使用联网搜索) */
+  enabled: boolean;
+  /** 服务商标识(v1 仅 deepseek) */
+  provider: string;
+  /** 服务地址(可换成自建代理) */
+  base_url: string;
+  /** 密钥掩码,如 sk-ab...89;未配置为空 */
+  api_key_masked: string;
+  /** 每次默认返回条数 1~20 */
+  default_count: number;
+  /** 是否同时取回正文(默认关,正文交给 web_read) */
+  need_content: boolean;
+  /** 单次请求超时(秒)5~60 */
+  timeout_seconds: number;
+}
+
+/** 32 号:保存联网搜索配置(api_key 留空 = 保持原值;clear_key = 清除) */
+export interface UpdateSearchConfigRequest {
+  provider?: string;
+  base_url?: string;
+  api_key?: string;
+  clear_key?: boolean;
+  enabled?: boolean;
+  default_count?: number;
+  need_content?: boolean;
+  timeout_seconds?: number;
+}

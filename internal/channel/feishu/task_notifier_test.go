@@ -31,12 +31,8 @@ func TestFeishuNotifier_RunsAgentSavesAndPushes(t *testing.T) {
 	agentSvc := &mockAgentService{result: &agentpkg.AgentResult{FinalResponse: "主人，北京未来7天都是晴天，25-32度，适合出行~"}}
 	msgSvc := &mockMessageService{}
 
-	n := &FeishuTaskNotifier{
-		sender:   sender,
-		agentSvc: agentSvc,
-		msgSvc:   msgSvc,
-		// llmConfigSvc nil:测试不选用户配置,走默认
-	}
+	// llmConfigSvc nil:测试不选用户配置,走默认
+	n := NewFeishuTaskNotifier(sender, agentSvc, msgSvc, nil)
 
 	err := n.NotifyTaskCompleted(context.Background(), "ou_test_open_id", stubFeishuTask())
 	require.NoError(t, err)
@@ -63,11 +59,7 @@ func TestFeishuNotifier_FallsBackToReceiptOnAgentError(t *testing.T) {
 	agentSvc := &mockAgentService{err: assert.AnError}
 	msgSvc := &mockMessageService{}
 
-	n := &FeishuTaskNotifier{
-		sender:   sender,
-		agentSvc: agentSvc,
-		msgSvc:   msgSvc,
-	}
+	n := NewFeishuTaskNotifier(sender, agentSvc, msgSvc, nil)
 
 	err := n.NotifyTaskCompleted(context.Background(), "ou_test_open_id", stubFeishuTask())
 	require.NoError(t, err, "回落推送成功应返回 nil")

@@ -423,3 +423,78 @@ func mustTransitionWeb(t *testing.T, repo repoagent.AgentTaskRepository, id int6
 	require.NoError(t, err)
 	require.True(t, ok, "%s→%s 迁移应成功", from, to)
 }
+
+// 33 号:Web 的"未汇报轮询"只处理 web 任务——IM 任务的汇报归属各自渠道,
+// 否则 Web 一开就会把微信/飞书任务抢先汇报掉(线上事故根因)。
+func TestHandleListTasks_CompletedUnreported_ScopedToWeb(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, repo := setupAgentTaskHandlerTest(t)
+
+	art := "r"
+	webTask := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("web 任务"), domainagent.SourceWeb, "")
+	fsTask := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("飞书任务"), domainagent.SourceFeishu, "ou_x")
+	clawTask := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("微信任务"), domainagent.SourceWeChatClaw, "wx_x")
+	for _, tk := range []*domainagent.AgentTask{webTask, fsTask, clawTask} {
+		require.NoError(t, repo.Create(tk))
+		mustTransitionWeb(t, repo, tk.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+		mustTransitionWeb(t, repo, tk.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
+	}
+
+	router := gin.New()
+	router.Use(injectUserID(42))
+	router.GET("/api/v1/agent/tasks", handler.HandleListTasks)
+	req, _ := http.NewRequest("GET", "/api/v1/agent/tasks?status=completed_unreported", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp struct {
+		Data struct {
+			Tasks []struct {
+				ID int64 `json:"id"`
+			} `json:"tasks"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Tasks, 1, "只应返回 web 任务")
+	assert.Equal(t, webTask.ID, resp.Data.Tasks[0].ID)
+
+	// 任务中心(无 status)仍然显示全部三条——展示不受渠道归属影响
+	reqAll, _ := http.NewRequest("GET", "/api/v1/agent/tasks", nil)
+	wAll := httptest.NewRecorder()
+	router.ServeHTTP(wAll, reqAll)
+	var all struct {
+		Data struct {
+			Tasks []struct {
+				ID int64 `json:"id"`
+			} `json:"tasks"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(wAll.Body.Bytes(), &all))
+	assert.Len(t, all.Data.Tasks, 3, "任务中心展示全部渠道的任务")
+}
+
+// 33 号:Web 不能替 IM 生成汇报(会写 report 消息并标记 reported,掐掉来源渠道的兜底)。
+func TestHandleReportTask_RejectsNonWebSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, repo := setupAgentTaskHandlerTest(t)
+
+	art := "r"
+	fsTask := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("飞书任务"), domainagent.SourceFeishu, "ou_x")
+	require.NoError(t, repo.Create(fsTask))
+	mustTransitionWeb(t, repo, fsTask.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+	mustTransitionWeb(t, repo, fsTask.ID, domainagent.TaskStatusRunning, domainagent.TaskStatusCompleted, &art, nil)
+
+	router := gin.New()
+	router.Use(injectUserID(42))
+	router.POST("/api/v1/agent/tasks/:id/report", handler.HandleReportTask)
+
+	req, _ := http.NewRequest("POST", "/api/v1/agent/tasks/"+strconv.FormatInt(fsTask.ID, 10)+"/report", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "来源渠道")
+
+	got, _ := repo.GetByID(fsTask.ID)
+	assert.False(t, got.Reported, "被拒绝时不能标记已汇报")
+}

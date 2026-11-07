@@ -1,0 +1,18 @@
+# 构建上下文瘦身(此前无此文件,624MB 全量上传)。
+# 只排除"构建产物/本地环境/与编译无关的数据",不动任何源码与配置。
+.git
+.gitignore
+frontend/node_modules
+frontend/dist
+frontend/dist-ssr
+bin
+logs
+backups
+eval-out
+graphify-out
+uploads
+.uploads
+deployments
+docs
+*.log
+.DS_Store

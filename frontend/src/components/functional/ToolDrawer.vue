@@ -10,10 +10,18 @@
  */
 import { ref, watch } from 'vue';
 import { useToast } from '@/composables/useToast';
-import type { MCPServerItem, SkillFileInput, SkillItem, ToolItem } from '@/types/api';
+import type {
+  MCPServerItem,
+  SearchConfigResponse,
+  SkillFileInput,
+  SkillItem,
+  ToolItem,
+  UpdateSearchConfigRequest,
+} from '@/types/api';
 import { toolService } from '@/services/tool';
 import { mcpServerService } from '@/services/mcpServer';
 import { skillService } from '@/services/skill';
+import { searchConfigService } from '@/services/search';
 import DialogShell from '@/components/layout/DialogShell.vue';
 
 const props = defineProps<{
@@ -59,6 +67,102 @@ const handleToolToggle = async (tool: ToolItem, event: Event) => {
     error(err instanceof Error ? err.message : '更新工具状态失败');
   } finally {
     togglingTools.value.delete(tool.name);
+  }
+};
+
+// ===== 联网搜索(32 号):三方搜索服务,按用户存库 =====
+// 工具列表里的开关是系统级(模型可见性);本卡片的开关是当前用户的后端可用性。
+const searchCfg = ref<SearchConfigResponse | null>(null);
+const searchLoading = ref(false);
+const searchSaving = ref(false);
+const searchForm = ref({
+  enabled: true,
+  base_url: 'https://api.deepseek.com',
+  api_key: '',
+  default_count: 5,
+  timeout_seconds: 20,
+  need_content: false,
+});
+
+const applySearchCfg = (cfg: SearchConfigResponse) => {
+  searchCfg.value = cfg;
+  searchForm.value = {
+    enabled: cfg.enabled,
+    base_url: cfg.base_url || 'https://api.deepseek.com',
+    api_key: '', // 明文永不回显,留空 = 保持原值
+    default_count: cfg.default_count || 5,
+    timeout_seconds: cfg.timeout_seconds || 20,
+    need_content: cfg.need_content,
+  };
+};
+
+const loadSearchConfig = async () => {
+  searchLoading.value = true;
+  try {
+    applySearchCfg(await searchConfigService.getConfig());
+  } catch (err) {
+    console.error('Failed to load search config:', err);
+  } finally {
+    searchLoading.value = false;
+  }
+};
+
+const handleSaveSearch = async () => {
+  const baseUrl = searchForm.value.base_url.trim();
+  if (!/^https?:\/\//.test(baseUrl)) {
+    error('服务地址需以 http:// 或 https:// 开头');
+    return;
+  }
+  if (searchForm.value.default_count < 1 || searchForm.value.default_count > 20) {
+    error('每次条数应在 1~20 之间');
+    return;
+  }
+  if (searchForm.value.timeout_seconds < 5 || searchForm.value.timeout_seconds > 60) {
+    error('超时秒数应在 5~60 之间');
+    return;
+  }
+
+  const payload: UpdateSearchConfigRequest = {
+    enabled: searchForm.value.enabled,
+    base_url: baseUrl,
+    default_count: searchForm.value.default_count,
+    timeout_seconds: searchForm.value.timeout_seconds,
+    need_content: searchForm.value.need_content,
+  };
+  if (searchForm.value.api_key.trim()) {
+    payload.api_key = searchForm.value.api_key.trim();
+  }
+
+  searchSaving.value = true;
+  try {
+    applySearchCfg(await searchConfigService.saveConfig(payload));
+    success('联网搜索配置已保存');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '保存失败');
+  } finally {
+    searchSaving.value = false;
+  }
+};
+
+const handleClearSearch = async () => {
+  searchSaving.value = true;
+  try {
+    await searchConfigService.clearConfig();
+    applySearchCfg({
+      has_config: false,
+      enabled: true,
+      provider: 'deepseek',
+      base_url: 'https://api.deepseek.com',
+      api_key_masked: '',
+      default_count: 5,
+      need_content: false,
+      timeout_seconds: 20,
+    });
+    success('已清除联网搜索配置');
+  } catch (err) {
+    error(err instanceof Error ? err.message : '清除失败');
+  } finally {
+    searchSaving.value = false;
   }
 };
 
@@ -385,6 +489,7 @@ watch(
       loadTools();
       loadServers();
       loadSkills();
+      loadSearchConfig();
     }
   }
 );
@@ -602,6 +707,116 @@ watch(
     <!-- ===== 工具 tab(内置 function call 工具) ===== -->
     <div v-show="activeTab === 'tools'" class="section-tools">
       <div class="section-title">工具</div>
+
+      <!-- 32 号:联网搜索(三方 API,按用户配置) -->
+      <div class="search-card">
+        <div class="search-card-head">
+          <div>
+            <div class="search-card-title">联网搜索</div>
+            <p class="search-card-hint">用三方搜索服务找线索;读全文仍交给「读取网页」。</p>
+          </div>
+          <label class="tool-switch" title="关闭后助手不再使用联网搜索">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label="启用联网搜索"
+              :checked="searchForm.enabled"
+              :disabled="searchLoading || searchSaving"
+              @change="searchForm.enabled = ($event.target as HTMLInputElement).checked"
+            />
+            <span class="tool-switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="form-field">
+          <label class="form-label" for="search-base-url">服务地址</label>
+          <input
+            id="search-base-url"
+            v-model="searchForm.base_url"
+            class="form-input"
+            type="url"
+            placeholder="https://api.deepseek.com"
+            :disabled="searchLoading || searchSaving"
+          />
+        </div>
+
+        <div class="form-field">
+          <label class="form-label" for="search-api-key">API Key</label>
+          <input
+            id="search-api-key"
+            v-model="searchForm.api_key"
+            class="form-input"
+            type="password"
+            autocomplete="off"
+            :placeholder="
+              searchCfg?.api_key_masked
+                ? `${searchCfg.api_key_masked}(留空表示不修改)`
+                : '粘贴搜索服务的 API Key'
+            "
+            :disabled="searchLoading || searchSaving"
+          />
+        </div>
+
+        <div class="search-row">
+          <div class="form-field search-field-sm">
+            <label class="form-label" for="search-count">每次条数</label>
+            <input
+              id="search-count"
+              v-model.number="searchForm.default_count"
+              class="form-input"
+              type="number"
+              min="1"
+              max="20"
+            />
+          </div>
+          <div class="form-field search-field-sm">
+            <label class="form-label" for="search-timeout">超时(秒)</label>
+            <input
+              id="search-timeout"
+              v-model.number="searchForm.timeout_seconds"
+              class="form-input"
+              type="number"
+              min="5"
+              max="60"
+            />
+          </div>
+          <label class="search-check">
+            <input v-model="searchForm.need_content" type="checkbox" />
+            同时取回正文
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <span class="search-status">
+            {{
+              searchLoading
+                ? '加载中…'
+                : searchForm.enabled
+                  ? searchCfg?.has_config
+                    ? '已启用'
+                    : '未配置密钥'
+                  : '已关闭'
+            }}
+          </span>
+          <button
+            v-if="searchCfg?.has_config"
+            type="button"
+            class="form-btn"
+            :disabled="searchSaving"
+            @click="handleClearSearch"
+          >
+            清除配置
+          </button>
+          <button
+            type="button"
+            class="form-btn is-primary"
+            :disabled="searchLoading || searchSaving"
+            @click="handleSaveSearch"
+          >
+            保存
+          </button>
+        </div>
+      </div>
 
       <div v-if="toolsLoading" class="hint-text">加载中...</div>
       <div v-else-if="tools.length === 0" class="hint-text">暂无可用工具</div>
@@ -1149,5 +1364,53 @@ watch(
 }
 .skill-file-path {
   flex: 1;
+}
+/* ===== 联网搜索配置卡(32 号) ===== */
+.search-card {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--border-l2);
+  border-radius: 10px;
+  background: var(--code-bg);
+}
+.search-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.search-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--label-primary);
+}
+.search-card-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--label-tertiary);
+}
+.search-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.search-field-sm {
+  width: 96px;
+}
+.search-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--label-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.search-status {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--label-tertiary);
 }
 </style>

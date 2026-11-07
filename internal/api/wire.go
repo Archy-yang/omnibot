@@ -32,6 +32,7 @@ import (
 	mcpRepo "omnibot/internal/repository/mcp"
 	memoryRepo "omnibot/internal/repository/memory"
 	memoryrepo "omnibot/internal/repository/memory"
+	searchRepo "omnibot/internal/repository/search"
 	skillRepo "omnibot/internal/repository/skill"
 	subscriptionRepo "omnibot/internal/repository/subscription"
 	toolRepo "omnibot/internal/repository/tool"
@@ -47,6 +48,7 @@ import (
 	mcpService "omnibot/internal/service/mcp"
 	memoryService "omnibot/internal/service/memory"
 	sandboxsvc "omnibot/internal/service/sandbox"
+	searchService "omnibot/internal/service/search"
 	skillService "omnibot/internal/service/skill"
 	subscriptionService "omnibot/internal/service/subscription"
 	toolService "omnibot/internal/service/tool"
@@ -330,6 +332,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	toolRepoImpl := toolRepo.NewToolRepository(dbConn.GetGormDB())
 	mcpServerRepo := mcpRepo.NewMCPServerRepository(dbConn.GetGormDB())
 	toolSvc := toolService.NewToolService(toolRepoImpl)
+	// 32 号:联网搜索——配置按用户存库(密钥加密),工具与设置接口共用同一 service 实例。
+	searchSvc := searchService.NewService(searchRepo.NewConfigRepository(dbConn.GetGormDB()))
 	// Skill 技能服务(18 号 §4):DB 为事实源,内存目录缓存 CRUD 即失效(load_skill/目录注入即时生效)
 	skillSvc := skillService.NewSkillService(skillRepo.NewSkillRepository(dbConn.GetGormDB()))
 	// 27 号:lark-cli 状态 DB 物化——统一执行入口(hydrate → HOME 物化 → exec → 回写)。
@@ -366,6 +370,9 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// 天气(内置,NMC 中央气象台 REST,零 key):主 Agent 直调即答("今天穿什么"),子 Agent(白名单
 	// research)行程规划派活时可用。抓取类不同,天气是单点结构化查询,不属"管家不亲自抓网页"的边界
 	toolSvc.RegisterBuiltin(agenttools.CreateWeatherTool)
+	// 32 号:联网搜索(三方 API,按用户配置)。主 Agent 可见——找线索是单点查询,
+	// 读正文仍走子 Agent 专属的 web_read(边界未变)。
+	toolSvc.RegisterBuiltin(func() agentpkg.Tool { return agenttools.CreateWebSearchTool(searchSvc) })
 	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateRSSReaderTool)
 	toolSvc.RegisterBuiltinSubOnly(agenttools.CreateWebReadTool)
 	// 飞书 CLI 桥接(M5):受控执行 lark-cli,以用户身份操作飞书全业务域
@@ -577,6 +584,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	webHandler.SetDocSyncService(docSyncSvc) // 23号:service 实例在工具注册点前创建(F2 共用)
 	webHandler.SetSubAgentSupport(subAgentSvc)
 	webHandler.SetToolService(toolSvc)
+	webHandler.SetSearchConfigService(searchSvc) // 32 号:用户级联网搜索配置
 	webHandler.SetSkillService(skillSvc)
 	// 用户级飞书授权(19 号 M1):device flow 编排 + 状态管理
 	webHandler.SetLarkAuthService(larkauthService)

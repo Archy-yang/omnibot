@@ -292,7 +292,7 @@ type fakeReporter struct {
 	reported    []int64
 }
 
-func (f *fakeReporter) GetPendingReportContext(userID int64) (string, []int64) {
+func (f *fakeReporter) GetPendingReportContext(userID int64, source string) (string, []int64) {
 	return f.instruction, f.ids
 }
 

@@ -12,6 +12,7 @@ import (
 	"omnibot/internal/domain/conversation"
 	"omnibot/internal/domain/mcp"
 	"omnibot/internal/domain/memory"
+	"omnibot/internal/domain/search"
 	"omnibot/internal/domain/skill"
 	"omnibot/internal/domain/subscription"
 	"omnibot/internal/domain/tool"
@@ -194,6 +195,7 @@ func autoMigrate(db *gorm.DB) error {
 		&skill.Skill{},               // 18-Skill 技能系统:程序性知识包(DB 为事实源,目录按需注入)
 		&skill.SkillFile{},           // 18:技能附属文件(脚本/资源,sandbox_run 执行)
 		&wechatclaw.Account{},        // 31 号:微信 ClawBot 登录凭证(单账号,token 加密)
+		&search.Config{},             // 32 号:用户级联网搜索配置(API Key 加密)
 	)
 }
 

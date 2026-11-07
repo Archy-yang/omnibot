@@ -80,7 +80,7 @@ func (h *AgentTaskHandler) HandleListTasks(c *gin.Context) {
 	status := c.Query("status")
 	var dtos []taskDTO
 	if status == "completed_unreported" {
-		tasks, e := h.subAgentSvc.GetCompletedUnreported(userID)
+		tasks, e := h.subAgentSvc.GetCompletedUnreported(userID, domainagent.SourceWeb)
 		if e != nil {
 			logger.ErrorWithFields("list completed unreported failed", zap.Int64("user_id", userID), zap.Error(e))
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "查询任务失败"})
@@ -196,6 +196,12 @@ func (h *AgentTaskHandler) HandleReportTask(c *gin.Context) {
 	}
 	if task.Reported {
 		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "任务已汇报"})
+		return
+	}
+	// 33 号:汇报归属来源渠道——Web 只汇报 web 任务,IM 任务由各自渠道推送/补报。
+	// 结果本身仍可在任务中心查看(含 artifact),这里只拦"替别的渠道生成汇报"。
+	if task.Source != domainagent.SourceWeb {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "该任务的汇报归属来源渠道,请在对应渠道查看"})
 		return
 	}
 

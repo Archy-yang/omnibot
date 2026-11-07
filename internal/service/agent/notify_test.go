@@ -29,7 +29,7 @@ func (m *mockTaskNotifier) NotifyTaskCompleted(ctx context.Context, target strin
 func TestNotifyCompleted_Feishu(t *testing.T) {
 	notifier := &mockTaskNotifier{}
 	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}, true)
-	svc.SetNotifier(notifier)
+	svc.SetNotifierForSource(domainagent.SourceFeishu, notifier)
 
 	// 手动造一个飞书来源的 running 任务
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_openid_xxx")
@@ -51,7 +51,7 @@ func TestNotifyCompleted_Feishu(t *testing.T) {
 func TestNotifyCompleted_Web(t *testing.T) {
 	notifier := &mockTaskNotifier{}
 	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "r", delay: 20 * time.Millisecond}, true)
-	svc.SetNotifier(notifier)
+	svc.SetNotifierForSource(domainagent.SourceFeishu, notifier)
 
 	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeb, "")
 	require.NoError(t, repo.Create(task))
@@ -106,4 +106,68 @@ func TestNotifyCompleted_Feishu_NoPublisher(t *testing.T) {
 
 	svc.notifyCompleted(task.ID)
 	assert.False(t, pub.called, "飞书任务不应触发 WS 推送")
+}
+
+// mockAvailableNotifier 带可用性开关(33 号:微信断线/重扫中)。
+type mockAvailableNotifier struct {
+	mockTaskNotifier
+	available bool
+}
+
+func (m *mockAvailableNotifier) Available() bool { return m.available }
+
+// TestNotifyCompleted_WeChatClaw 微信任务走微信 notifier,且与飞书互不串台。
+func TestNotifyCompleted_WeChatClaw(t *testing.T) {
+	feishuNotifier := &mockTaskNotifier{}
+	clawNotifier := &mockTaskNotifier{}
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}, true)
+	svc.SetNotifierForSource(domainagent.SourceFeishu, feishuNotifier)
+	svc.SetNotifierForSource(domainagent.SourceWeChatClaw, clawNotifier)
+
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeChatClaw, "wx_peer_1")
+	require.NoError(t, repo.Create(task))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+
+	svc.notifyCompleted(task.ID)
+
+	require.True(t, clawNotifier.called, "微信任务应触发微信 notifier")
+	assert.Equal(t, "wx_peer_1", clawNotifier.target)
+	assert.False(t, feishuNotifier.called, "不能把微信任务推到飞书")
+
+	got, _ := repo.GetByID(task.ID)
+	assert.True(t, got.Reported, "推送后应标记 reported")
+}
+
+// 微信未连接:不推、也不标记 reported(保留前置汇报兜底)。
+func TestNotifyCompleted_WeChatClaw_UnavailableKeepsUnreported(t *testing.T) {
+	clawNotifier := &mockAvailableNotifier{available: false}
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}, true)
+	svc.SetNotifierForSource(domainagent.SourceWeChatClaw, clawNotifier)
+
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceWeChatClaw, "wx_peer_1")
+	require.NoError(t, repo.Create(task))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+
+	svc.notifyCompleted(task.ID)
+
+	assert.False(t, clawNotifier.called, "断线时不推送")
+	got, _ := repo.GetByID(task.ID)
+	assert.False(t, got.Reported, "断线时不能标记已汇报,否则下次消息的兜底汇报也没了")
+}
+
+// 该来源没注册 notifier:不推送、不标记(留给兜底)。
+func TestNotifyCompleted_NoNotifierForSource(t *testing.T) {
+	clawNotifier := &mockTaskNotifier{}
+	svc, repo, _ := setupSubAgentServiceWithArtifact(t, &mockRunner{artifact: "结果", delay: 20 * time.Millisecond}, true)
+	svc.SetNotifierForSource(domainagent.SourceWeChatClaw, clawNotifier)
+
+	task := domainagent.NewAgentTask(42, domainagent.NewTaskSpec("g"), domainagent.SourceFeishu, "ou_x")
+	require.NoError(t, repo.Create(task))
+	mustTransitionSvc(t, repo, task.ID, domainagent.TaskStatusPending, domainagent.TaskStatusRunning, nil, nil)
+
+	svc.notifyCompleted(task.ID)
+
+	assert.False(t, clawNotifier.called)
+	got, _ := repo.GetByID(task.ID)
+	assert.False(t, got.Reported)
 }

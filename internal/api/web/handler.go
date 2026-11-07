@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"omnibot/internal/client/llm"
+	domainagent "omnibot/internal/domain/agent"
+
 	"omnibot/internal/domain/conversation"
 	memorydomain "omnibot/internal/domain/memory"
 	domainuser "omnibot/internal/domain/user"
@@ -109,6 +111,8 @@ type Handler struct {
 	persistentTaskService PersistentTaskAPIService
 	// 主动管家(26 号:每日主动关心)。nil 时相关接口返回 503(向后兼容)。
 	proactiveService ProactiveSettingsAPIService
+	// 联网搜索配置(32 号)。nil 时相关接口返回 503(向后兼容)。
+	searchConfigService SearchConfigService
 }
 
 // NewHandler 创建 Web 聊天处理器
@@ -558,7 +562,7 @@ func (h *Handler) HandleSendMessageAgentStream(c *gin.Context) {
 	// 主 Agent 会先汇报再回应当前消息。汇报在流结束后标记 reported(防重复)。
 	var reportedTaskIDs []int64
 	if h.subAgentSvc != nil {
-		instruction, taskIDs := h.subAgentSvc.GetPendingReportContext(userID)
+		instruction, taskIDs := h.subAgentSvc.GetPendingReportContext(userID, domainagent.SourceWeb)
 		if instruction != "" {
 			ctxMessages = append([]llm.ChatMessage{{Role: "system", Content: instruction}}, ctxMessages...)
 			reportedTaskIDs = taskIDs

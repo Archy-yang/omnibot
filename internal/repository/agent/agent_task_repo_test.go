@@ -128,13 +128,24 @@ func TestAgentTaskRepository_ListCompletedUnreported(t *testing.T) {
 	mustTransition(t, repo, t5.ID, domain.TaskStatusPending, domain.TaskStatusRunning, nil, nil)
 	mustTransition(t, repo, t5.ID, domain.TaskStatusRunning, domain.TaskStatusCompleted, strPtr("a5"), nil)
 
-	got, err := repo.ListCompletedUnreported(1)
+	// 另一个来源(feishu)的未汇报任务:按 web 查时不应出现(33 号:渠道归属隔离)
+	t6 := domain.NewAgentTask(1, domain.NewTaskSpec("g6"), "feishu", "ou_x")
+	require.NoError(t, repo.Create(t6))
+	mustTransition(t, repo, t6.ID, domain.TaskStatusPending, domain.TaskStatusRunning, nil, nil)
+	mustTransition(t, repo, t6.ID, domain.TaskStatusRunning, domain.TaskStatusCompleted, strPtr("a6"), nil)
+
+	got, err := repo.ListCompletedUnreported(1, "web")
 	require.NoError(t, err)
 	// 应返回 t1(completed 未汇报)+ t3(failed 未汇报),不含 t2(已汇报)/t4(pending)/t5(别的用户)
 	assert.Len(t, got, 2)
 	// 按完成时间升序
 	assert.Equal(t, t1.ID, got[0].ID)
 	assert.Equal(t, t3.ID, got[1].ID)
+
+	feishuOnly, err := repo.ListCompletedUnreported(1, "feishu")
+	require.NoError(t, err)
+	require.Len(t, feishuOnly, 1)
+	assert.Equal(t, t6.ID, feishuOnly[0].ID, "按来源查询必须只返回该来源的任务")
 }
 
 func TestAgentTaskRepository_ListByUser(t *testing.T) {

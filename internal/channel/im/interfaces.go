@@ -62,7 +62,7 @@ type LLMConfigService interface {
 // nil 时不启用前置汇报(向后兼容,未装配后台 Agent 框架时)。
 type SubAgentReportProvider interface {
 	// GetPendingReportContext 返回待汇报的回执指令 + 对应任务 ID。无则 instruction 为空。
-	GetPendingReportContext(userID int64) (instruction string, taskIDs []int64)
+	GetPendingReportContext(userID int64, source string) (instruction string, taskIDs []int64)
 	// MarkReported 标记任务已汇报(防重复)。
 	MarkReported(taskID int64) error
 }
