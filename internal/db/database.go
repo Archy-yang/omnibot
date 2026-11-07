@@ -130,6 +130,11 @@ func InitDB(cfg *config.DatabaseConfig, opts ...Option) (*Database, error) {
 		return nil, fmt.Errorf("%w: skills→tools migration failed: %v", ErrInitFailed, err)
 	}
 
+	// v2.12:清理计划合并前的遗留结构(task_plans 表 + plan_id/plan_step_seq 列)
+	if err := cleanupLegacyPlanSchema(db); err != nil {
+		return nil, fmt.Errorf("%w: legacy plan schema cleanup failed: %v", ErrInitFailed, err)
+	}
+
 	// 种子数据:内置 main agent(idempotent,已存在则跳过)
 	if err := ensureMainAgent(db); err != nil {
 		return nil, fmt.Errorf("%w: seed main agent failed: %v", ErrInitFailed, err)

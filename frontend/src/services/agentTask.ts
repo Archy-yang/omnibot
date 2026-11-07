@@ -45,6 +45,11 @@ export const agentTaskService = {
   /**
    * 全量任务列表(任务中心):各状态含已汇报,倒序。
    */
+  /** 继续暂停的计划(34 号):重试失败那一步,后续继续按序执行 */
+  async resumePlan(planId: number): Promise<void> {
+    await request.post(`/agent/tasks/${planId}/resume`);
+  },
+
   async listAll(): Promise<AgentTaskItem[]> {
     const response = await request.get<ApiResponse<{ tasks: AgentTaskItem[] }>>('/agent/tasks');
     return response.data.data.tasks;

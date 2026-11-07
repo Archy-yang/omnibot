@@ -23,6 +23,11 @@ func TestCanTransition_Legal(t *testing.T) {
 		{TaskStatusRunning, TaskStatusCancelled},
 		{TaskStatusInputRequired, TaskStatusRunning},
 		{TaskStatusInputRequired, TaskStatusCancelled},
+		// 34 号:计划容器某步失败 → paused;续跑回 running,或直接取消/失败
+		{TaskStatusRunning, TaskStatusPaused},
+		{TaskStatusPaused, TaskStatusRunning},
+		{TaskStatusPaused, TaskStatusCancelled},
+		{TaskStatusPaused, TaskStatusFailed},
 	}
 	for _, tr := range legal {
 		assert.True(t, CanTransition(tr[0], tr[1]), "%s → %s 应为合法迁移", tr[0], tr[1])
@@ -30,17 +35,21 @@ func TestCanTransition_Legal(t *testing.T) {
 }
 
 func TestCanTransition_Illegal(t *testing.T) {
-	all := []string{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled, TaskStatusInputRequired}
+	all := []string{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled, TaskStatusInputRequired, TaskStatusPaused}
 	legal := map[[2]string]bool{
-		{TaskStatusPending, TaskStatusRunning}:          true,
-		{TaskStatusPending, TaskStatusCancelled}:        true,
-		{TaskStatusPending, TaskStatusFailed}:           true,
-		{TaskStatusRunning, TaskStatusCompleted}:        true,
-		{TaskStatusRunning, TaskStatusFailed}:           true,
-		{TaskStatusRunning, TaskStatusInputRequired}:    true,
-		{TaskStatusRunning, TaskStatusCancelled}:        true,
-		{TaskStatusInputRequired, TaskStatusRunning}:    true,
-		{TaskStatusInputRequired, TaskStatusCancelled}:  true,
+		{TaskStatusPending, TaskStatusRunning}:         true,
+		{TaskStatusPending, TaskStatusCancelled}:       true,
+		{TaskStatusPending, TaskStatusFailed}:          true,
+		{TaskStatusRunning, TaskStatusCompleted}:       true,
+		{TaskStatusRunning, TaskStatusFailed}:          true,
+		{TaskStatusRunning, TaskStatusInputRequired}:   true,
+		{TaskStatusRunning, TaskStatusCancelled}:       true,
+		{TaskStatusInputRequired, TaskStatusRunning}:   true,
+		{TaskStatusInputRequired, TaskStatusCancelled}: true,
+		{TaskStatusRunning, TaskStatusPaused}:          true,
+		{TaskStatusPaused, TaskStatusRunning}:          true,
+		{TaskStatusPaused, TaskStatusCancelled}:        true,
+		{TaskStatusPaused, TaskStatusFailed}:           true,
 	}
 	for _, from := range all {
 		for _, to := range all {
@@ -56,7 +65,7 @@ func TestCanTransition_Illegal(t *testing.T) {
 // cancelled 不可被 completed/failed 覆盖,completed 不可再取消)。
 func TestCanTransition_TerminalFrozen(t *testing.T) {
 	for _, terminal := range []string{TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled} {
-		for _, to := range []string{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled, TaskStatusInputRequired} {
+		for _, to := range []string{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled, TaskStatusInputRequired, TaskStatusPaused} {
 			assert.False(t, CanTransition(terminal, to), "终态 %s 不可迁移到 %s", terminal, to)
 		}
 	}

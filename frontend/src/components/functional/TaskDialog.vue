@@ -209,6 +209,7 @@ const statusLabel = (s: string): string =>
     failed: '失败',
     cancelled: '已取消',
     input_required: '待输入',
+    paused: '已暂停',
   })[s] ?? s;
 
 const displayName = (t: { name: string; goal: string }): string => {
@@ -218,6 +219,24 @@ const displayName = (t: { name: string; goal: string }): string => {
 };
 
 const isActive = (s: string) => isActiveStatus(s);
+
+// 计划暂停 → 继续(重试失败步);成功后重新拉详情,进度会继续前进
+const resuming = ref(false);
+const resumePlan = async (planId: number) => {
+  resuming.value = true;
+  try {
+    await agentTaskService.resumePlan(planId);
+    await openDetail(planId);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : '继续失败');
+  } finally {
+    resuming.value = false;
+  }
+};
+
+/** 计划步骤已完成数(容器的"进度"来自子任务,不是执行流水) */
+const stepDoneCount = (children: { status: string }[]): number =>
+  children.filter((c) => c.status === 'completed').length;
 
 // llm_call 的 request 是完整 messages JSON(动辄几十 KB),只给截断预览
 const llmRequestPreview = (raw: string): string =>
@@ -300,6 +319,7 @@ const stepStatusClass = (s: string) =>
             <span class="task-row-name">{{ displayName(t) }}</span>
             <span class="task-row-goal">{{ t.goal }}</span>
           </span>
+          <span v-if="t.kind === 'plan'" class="task-row-progress">{{ t.step_done || 0 }}/{{ t.step_total || 0 }}</span>
           <span class="task-row-status" :class="`stx-${t.status}`">{{ statusLabel(t.status) }}</span>
           <span class="task-row-time">{{ t.finished_at || t.created_at }}</span>
           <span class="task-row-id">#{{ t.id }}</span>
@@ -333,6 +353,13 @@ const stepStatusClass = (s: string) =>
               {{ statusLabel(detail.status) }}
             </span>
             <span class="task-row-id">#{{ detail.id }}</span>
+            <button
+              v-if="detail.kind === 'plan' && detail.status === 'paused'"
+              type="button"
+              class="task-resume"
+              :disabled="resuming"
+              @click="resumePlan(detail.id)"
+            >{{ resuming ? '继续中…' : '继续' }}</button>
           </div>
           <div class="task-head-goal">{{ detail.goal }}</div>
           <div class="task-head-times">
@@ -340,14 +367,36 @@ const stepStatusClass = (s: string) =>
             <span v-if="detail.started_at">开始 {{ detail.started_at }}</span>
             <span v-if="detail.completed_at">完成 {{ detail.completed_at }}</span>
           </div>
+
         </div>
 
-        <!-- 执行流水 -->
-        <div class="steps-title">执行流水（{{ steps.length }} 步）</div>
-        <div v-if="steps.length === 0" class="steps-empty">
+        <!-- 计划步骤(34 号):子任务折叠在容器里,点进去看各自流水 -->
+        <template v-if="detail.kind === 'plan' && detail.children && detail.children.length">
+          <div class="steps-title">步骤（{{ stepDoneCount(detail.children) }}/{{ detail.children.length }}）</div>
+          <div class="plan-children">
+            <button
+              v-for="c in detail.children"
+              :key="c.id"
+              type="button"
+              class="plan-child"
+              @click="openDetail(c.id)"
+            >
+              <span class="plan-child-seq">{{ c.step_seq }}</span>
+              <span class="plan-child-main">
+                <span class="plan-child-name">{{ c.name }}</span>
+                <span v-if="c.artifact_head" class="plan-child-head">{{ c.artifact_head }}</span>
+              </span>
+              <span class="task-row-status" :class="`stx-${c.status}`">{{ statusLabel(c.status) }}</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- 执行流水(容器自己没有流水) -->
+        <div v-if="detail.kind !== 'plan'" class="steps-title">执行流水（{{ steps.length }} 步）</div>
+        <div v-if="detail.kind !== 'plan' && steps.length === 0" class="steps-empty">
           {{ isActive(detail.status) ? '还没有执行记录，等运行起来再来看。' : '没有执行记录。' }}
         </div>
-        <div v-else class="steps">
+        <div v-else-if="detail.kind !== 'plan'" class="steps">
           <div
             v-for="s in steps"
             :key="s.seq"
@@ -511,12 +560,6 @@ const stepStatusClass = (s: string) =>
   border-color: var(--error);
 }
 
-.pt-hint {
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--label-tertiary);
-  line-height: 1.6;
-}
 
 .task-loading,
 .task-empty {
@@ -637,6 +680,10 @@ const stepStatusClass = (s: string) =>
   background: var(--label-caption);
 }
 
+.task-dot.dot-paused::before {
+  background: #d97706;
+}
+
 .task-dot.dot-completed::before {
   background: #10a34a;
 }
@@ -653,7 +700,8 @@ const stepStatusClass = (s: string) =>
 
 .task-dot.dot-running,
 .task-dot.dot-pending,
-.task-dot.dot-input_required {
+.task-dot.dot-input_required,
+.task-dot.dot-paused {
   color: var(--accent);
 }
 
@@ -686,6 +734,88 @@ const stepStatusClass = (s: string) =>
   white-space: nowrap;
 }
 
+.task-row-progress {
+  flex: none;
+  font-size: 11px;
+  color: var(--label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-resume {
+  margin-left: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--label-secondary);
+  cursor: pointer;
+}
+
+.task-resume:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.task-resume:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.plan-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.plan-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-child:hover {
+  background: var(--bg-active);
+}
+
+.plan-child-seq {
+  flex: none;
+  width: 16px;
+  font-size: 11px;
+  color: var(--label-tertiary);
+}
+
+.plan-child-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-child-name {
+  font-size: 13px;
+  color: var(--label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-child-head {
+  font-size: 11px;
+  color: var(--label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .task-row-status {
   flex: none;
   font-size: 12px;
@@ -700,6 +830,10 @@ const stepStatusClass = (s: string) =>
 
 .task-row-status.stx-completed {
   color: #0a7d33;
+}
+
+.task-row-status.stx-paused {
+  color: #b45309;
 }
 
 .task-row-status.stx-failed {

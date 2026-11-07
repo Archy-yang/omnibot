@@ -109,3 +109,14 @@ func TestFeishuNotifier_ReportIncludesHistory(t *testing.T) {
 	lastContent, _ := last["content"].(string)
 	assert.Contains(t, lastContent, "请汇报这个子任务的结果")
 }
+
+// 34 号:计划异常消息走纯文本(SendText)。飞书客户端不渲染 markdown,
+// 一行进度/暂停说明不需要卡片。
+func TestFeishuNotifier_SendPlanText(t *testing.T) {
+	sender := &mockSender{}
+	n := NewFeishuTaskNotifier(sender, &mockAgentService{}, &mockMessageService{}, nil)
+
+	require.NoError(t, n.SendPlanText(context.Background(), "ou_test_open_id", "⚠️ 计划第 2/3 步卡住了"))
+	assert.Equal(t, "text", sender.lastMode)
+	assert.Contains(t, sender.sentContent, "2/3")
+}

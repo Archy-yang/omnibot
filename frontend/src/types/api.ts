@@ -455,6 +455,22 @@ export interface AgentTaskItem {
   reported: boolean;
   created_at: string;
   finished_at?: string;
+  /** 34 号:task=普通任务;plan=计划容器(子步骤折叠在它下面) */
+  kind?: 'task' | 'plan';
+  /** 计划容器:进行到第几步/共几步(已完成的子步骤数) */
+  step_done?: number;
+  step_total?: number;
+  /** 计划容器的子步骤(仅 kind=plan) */
+  children?: AgentTaskStepItem[];
+}
+
+/** 计划子步骤(任务列表/详情里折叠展示) */
+export interface AgentTaskStepItem {
+  id: number;
+  step_seq: number;
+  name: string;
+  status: string;
+  artifact_head?: string;
 }
 
 /**
@@ -488,6 +504,12 @@ export interface AgentTaskDetail {
   /** 失败原因(failed 时) */
   error_msg?: string;
   spec: AgentTaskSpec;
+  /** 归属计划(34 号;非计划任务为空) */
+  /** 34 号:容器标记与子步骤 */
+  kind?: 'task' | 'plan';
+  parent_id?: number;
+  step_seq?: number;
+  children?: AgentTaskStepItem[];
 }
 
 /**

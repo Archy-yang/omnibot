@@ -43,10 +43,13 @@ type SubAgentService struct {
 	eventRepo    repoagent.TaskEventRepository // 任务事件流落 agent_task_events(#22)
 	// notifiers 按任务来源分派的完成推送器(33 号):feishu / wechat_claw 各一个。
 	// 单实例改多实例的原因:推送实现绑定具体渠道 sender,一个实例无法同时服务两条 IM。
-	notifierMu   sync.RWMutex
-	notifiers    map[string]TaskNotifier
-	publisher    TaskCompletionPublisher       // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
-	finishedObserver func(*domainagent.AgentTask) // 任务终态观察者(25 号:持久任务 fail_streak/自动停用)
+	notifierMu sync.RWMutex
+	notifiers  map[string]TaskNotifier
+	publisher  TaskCompletionPublisher // web 任务完成实时推送(08 §4.8,realtime.Hub 实现)
+	// finishedObservers 任务终态观察者多播(25 号周期任务 + 34 号计划推进器)。
+	// 从单槽位改多播的原因:两个能力都要在终态做各自的事,单槽位只能二选一。
+	observerMu        sync.RWMutex
+	finishedObservers []func(*domainagent.AgentTask)
 
 	// activeCancels 记录 running 任务的 cancel 函数,供 CancelTask 触发 ctx 取消。
 	// key=taskID。executeTask 启动注册,结束(成功/失败/panic)注销。mutex 保护并发。
@@ -85,6 +88,11 @@ func NewSubAgentService(
 // 去角色后不校验任何注册:任何任务都交给通用执行器。source 来源渠道(web/feishu);notifyTarget 主动推送目标。
 // originTurnID 是触发本任务的用户意图 Turn(Phase 1,16-架构迭代路线图 §5.3),0 表示无。
 func (s *SubAgentService) StartTask(ctx context.Context, userID int64, taskSpec domainagent.TaskSpec, source, notifyTarget string, originTurnID int64) (int64, error) {
+	return s.startTask(ctx, userID, taskSpec, source, notifyTarget, originTurnID)
+}
+
+// startTask 建普通任务 + 起 goroutine。
+func (s *SubAgentService) startTask(ctx context.Context, userID int64, taskSpec domainagent.TaskSpec, source, notifyTarget string, originTurnID int64) (int64, error) {
 	task := domainagent.NewAgentTask(userID, taskSpec, source, notifyTarget)
 	if originTurnID > 0 {
 		task.OriginTurnID = &originTurnID
@@ -104,6 +112,62 @@ func (s *SubAgentService) StartTask(ctx context.Context, userID int64, taskSpec 
 	// 后台执行。用独立 context(不继承请求 ctx,请求结束子 Agent 继续跑)。
 	go s.executeTask(context.Background(), task)
 	return task.ID, nil
+}
+
+// CreatePlanTree 创建计划容器 + 有序子任务(34 号合并建模)。
+// 子任务创建即 reported=true:只有容器终态才汇报,避免 9 步变 9 条消息。
+// 一条事务落库,保证"计划存在 ⇒ 步骤齐全"。
+func (s *SubAgentService) CreatePlanTree(_ context.Context, userID int64, name, goal string, steps []domainagent.PlanStepSpec, source, notifyTarget string, originTurnID int64) (*domainagent.AgentTask, error) {
+	if err := domainagent.ValidatePlanSteps(steps); err != nil {
+		return nil, err
+	}
+	spec := domainagent.NewTaskSpec(goal)
+	spec.Name = name
+	plan := domainagent.NewPlanTask(userID, spec, source, notifyTarget, originTurnID)
+	children := make([]*domainagent.AgentTask, 0, len(steps))
+	for i, step := range steps {
+		childSpec := domainagent.PlanStepSpecFor(plan, step, i+1, len(steps), "")
+		children = append(children, domainagent.NewPlanChild(userID, 0, i+1, childSpec, source, notifyTarget))
+	}
+	if err := s.taskRepo.CreatePlan(plan, children); err != nil {
+		return nil, fmt.Errorf("create plan: %w", err)
+	}
+	return plan, nil
+}
+
+// LaunchChild 异步派发计划子任务。executeTask 自带 pending→running CAS,
+// 重复调用安全(已跑/已终态会静默跳过)。
+func (s *SubAgentService) LaunchChild(_ context.Context, childID int64) error {
+	task, err := s.taskRepo.GetByID(childID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return fmt.Errorf("plan child %d not found", childID)
+	}
+	if task.ParentTaskID == nil {
+		return fmt.Errorf("task %d is not a plan child", childID)
+	}
+	if task.IsTerminal() {
+		return nil
+	}
+	go s.executeTask(context.Background(), task)
+	return nil
+}
+
+// ChildrenOf 列出计划子任务(按执行顺序)。
+func (s *SubAgentService) ChildrenOf(planID int64) ([]*domainagent.AgentTask, error) {
+	return s.taskRepo.ListChildren(planID)
+}
+
+// ResetChildForRetry 续跑:把失败的当前步重置为 pending。
+func (s *SubAgentService) ResetChildForRetry(childID int64) error {
+	return s.taskRepo.ResetForRetry(childID)
+}
+
+// NotifyFinished 补发终态通知(计划容器由推进器改状态,不经 executeTask,需手动收尾)。
+func (s *SubAgentService) NotifyFinished(taskID int64) {
+	s.notifyCompleted(taskID)
 }
 
 // executeTask 跑子 Agent,写 Artifact,更新状态。goroutine 内执行,panic 兜底。
@@ -281,13 +345,17 @@ func (s *SubAgentService) GetTaskArtifact(taskID int64) (*domainagent.Artifact, 
 // TaskSummary 任务概要(供 query_task 工具返回给 LLM)。精简,避免 token 爆炸:
 // 只给状态/goal 摘要/步骤数 + 关键时间点(创建/开始/结束,LLM 能回答"任务何时派/何时跑完")。
 type TaskSummary struct {
-	ID        int64      `json:"id"`
-	UserID    int64      `json:"-"`
-	SubAgent  string     `json:"sub_agent"`
-	Name      string     `json:"name,omitempty"` // 任务短名(可空,空则展示层回落 goal 摘要)
-	Goal      string     `json:"goal"`
-	Status    string     `json:"status"`
-	StepCount int        `json:"step_count"`
+	ID        int64  `json:"id"`
+	UserID    int64  `json:"-"`
+	SubAgent  string `json:"sub_agent"`
+	Name      string `json:"name,omitempty"` // 任务短名(可空,空则展示层回落 goal 摘要)
+	Goal      string `json:"goal"`
+	Status    string `json:"status"`
+	StepCount int    `json:"step_count"`
+	// 34 号合并建模:容器/子任务信息(任务中心树形展示)
+	Kind      string     `json:"kind,omitempty"`
+	ParentID  *int64     `json:"parent_id,omitempty"`
+	StepSeq   int        `json:"step_seq,omitempty"`
 	Reported  bool       `json:"reported"`
 	CreatedAt time.Time  `json:"created_at"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -332,6 +400,7 @@ func (s *SubAgentService) toSummary(task *domainagent.AgentTask) (*TaskSummary, 
 		Name: task.Name,
 		Goal: task.Goal, Status: task.Status, Reported: task.Reported, Artifact: task.Artifact,
 		CreatedAt: task.CreatedAt, StartedAt: task.StartedAt,
+		Kind: domainagent.NormalizeKind(task.Kind), ParentID: task.ParentTaskID, StepSeq: task.StepSeq,
 	}
 	if task.Status == domainagent.TaskStatusCancelled && task.CancelledAt != nil {
 		sm.FinishedAt = task.CancelledAt
@@ -361,6 +430,10 @@ func (s *SubAgentService) CancelTask(userID, taskID int64) error {
 	}
 	if task.IsTerminal() {
 		return fmt.Errorf("任务已结束(状态:%s),不可取消", task.Status)
+	}
+	// 34 号:容器不是可执行任务,单任务取消会留下"计划已取消但步骤还在跑"的孤儿。
+	if task.IsPlan() {
+		return fmt.Errorf("这是计划容器,请用 manage_plan 取消整单")
 	}
 	// CAS 当前态 → cancelled(带事件):失败=读后被并发结束,如实拒绝
 	ok, err := s.taskRepo.TransitionStatusWithEvent(taskID, task.Status, domainagent.TaskStatusCancelled, nil, nil, domainagent.EventTaskCancelled, "main")
@@ -477,9 +550,16 @@ func (s *SubAgentService) notifyCompleted(taskID int64) {
 	if err != nil || task == nil {
 		return
 	}
-	// 终态观察者(25 号):先于推送渠道分支,所有终态(含取消)都到达
-	if s.finishedObserver != nil {
-		s.finishedObserver(task)
+	// 终态观察者(25 号周期任务 / 34 号计划推进器):先于推送渠道分支,所有终态(含取消)都到达
+	s.notifyObservers(task)
+	// 计划子任务(34 号):只有容器终态才汇报,子任务标 reported 后直接返回,
+	// 否则 Web 轮询会把 9 步拆成 9 条汇报,打断对话。
+	if task.ParentTaskID != nil {
+		if err := s.taskRepo.MarkReported(task.ID); err != nil {
+			logger.ErrorWithFields("sub agent: mark plan step reported failed",
+				zap.Int64("task_id", task.ID), zap.Error(err))
+		}
+		return
 	}
 	// web:实时推送事件(08 §4.8),前端收到后走 /report 链路拉取汇报。
 	// 不标 reported——reported 由 /report 处理,推送丢失时轮询兜底仍可发现。
@@ -526,6 +606,15 @@ func (s *SubAgentService) SetNotifierForSource(source string, n TaskNotifier) {
 	s.notifiers[source] = n
 }
 
+// PlanNotifierFor 取该来源的计划推送器(34 号):渠道未实现 PlanChannelNotifier 返回 nil。
+// 计划照常推进,只是不主动推消息(任务中心仍可见)——不因推送能力缺失卡住执行。
+func (s *SubAgentService) PlanNotifierFor(source string) PlanChannelNotifier {
+	if p, ok := s.notifierFor(source).(PlanChannelNotifier); ok {
+		return p
+	}
+	return nil
+}
+
 // notifierFor 取该来源的推送器(未注册返回 nil)。
 func (s *SubAgentService) notifierFor(source string) TaskNotifier {
 	s.notifierMu.RLock()
@@ -538,11 +627,33 @@ func (s *SubAgentService) SetCompletionPublisher(p TaskCompletionPublisher) {
 	s.publisher = p
 }
 
-// SetFinishedObserver 注入任务终态观察者(25 号:持久任务调度器维护 fail_streak/
-// 自动停用)。notifyCompleted 加载终态任务后触发,成功/失败/取消都会到达,
-// 观察者自行过滤;单槽位(当前只有调度器一个观察方)。
+// SetFinishedObserver 注入任务终态观察者(25 号:持久任务 fail_streak/自动停用)。
+// 34 号起内部是多播:SetFinishedObserver 与 AddFinishedObserver 等价(追加),
+// 保留原名是为了不改装配层既有调用。
 func (s *SubAgentService) SetFinishedObserver(fn func(*domainagent.AgentTask)) {
-	s.finishedObserver = fn
+	s.AddFinishedObserver(fn)
+}
+
+// AddFinishedObserver 追加一个终态观察者(多播,按注册顺序调用)。
+// notifyCompleted 加载终态任务后触发,成功/失败/取消都会到达,观察者自行过滤。
+func (s *SubAgentService) AddFinishedObserver(fn func(*domainagent.AgentTask)) {
+	if fn == nil {
+		return
+	}
+	s.observerMu.Lock()
+	defer s.observerMu.Unlock()
+	s.finishedObservers = append(s.finishedObservers, fn)
+}
+
+// notifyObservers 拷贝后调用:避免观察者回调里再注册造成死锁。
+func (s *SubAgentService) notifyObservers(task *domainagent.AgentTask) {
+	s.observerMu.RLock()
+	observers := make([]func(*domainagent.AgentTask), len(s.finishedObservers))
+	copy(observers, s.finishedObservers)
+	s.observerMu.RUnlock()
+	for _, fn := range observers {
+		fn(task)
+	}
 }
 
 // ListTaskSteps 返回某子 Agent 任务的执行步骤链(LLM调用 + 工具调用),按 seq 正序还原时序。

@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/pkg/toolcore"
@@ -80,14 +81,23 @@ func GetUserIDFromContext(ctx context.Context) int64 {
 // 工具结果给主 Agent LLM,让其生成自然语言确认("已安排X处理,稍后汇报")回用户。
 //
 // userID 从 ctx 取(主 Agent RunStream 已通过 withUserID 注入)。
-func CreateDelegateTool(svc *SubAgentService) Tool {
+//
+// plans(可选)注入计划能力:传了 steps 时建计划并派第一步(34 号 §3.4);
+// 未注入时 steps 参数直接报错,不静默降级成"只派第一步"。
+func CreateDelegateTool(svc *SubAgentService, plans ...PlanCreator) Tool {
+	var planCreator PlanCreator
+	if len(plans) > 0 {
+		planCreator = plans[0]
+	}
 	return Tool{
 		Name:         "delegate",
 		DisplayLabel: "安排了子任务",
 		Description: "把耗时任务委派给后台执行器异步执行(不阻塞当前对话,通用不绑角色)。" +
 			"委派 = goal(必) + name(短名) + deliverables(交付物) + completion_criteria(完成标准),可选 background/persona_hint。" +
 			"派活后立即返回,执行器后台跑,完成后向用户汇报。适合需要多步检索/研究/汇总的耗时任务。" +
-			"注意:本工具是创建后台任务的唯一方式,返回的 task_id 是唯一合法的任务编号——向用户提及任务编号时必须原样引用本工具的返回值。",
+			"注意:本工具是创建后台任务的唯一方式,返回的 task_id 是唯一合法的任务编号——向用户提及任务编号时必须原样引用本工具的返回值。" +
+			"有先后依赖、后一步要用前一步结果的活,用 steps 拆成 2-9 步交给计划按序执行(比一个 180 秒的大任务靠谱)," +
+			"此时返回 plan_id,步骤状态用 manage_plan 查。",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -127,6 +137,20 @@ func CreateDelegateTool(svc *SubAgentService) Tool {
 					"type":        "string",
 					"description": "可选任务类型标签(纯溯源/展示,如'研究''写代码'),不参与执行。可空",
 				},
+				"steps": map[string]interface{}{
+					"type":        "array",
+					"description": "可选计划步骤(2-9 步,按顺序自动执行)。只用于有先后依赖的活:后一步会拿到前一步的结果摘要。给了 steps 就不必再单独给 goal 之外的任务合同(每步自带)。",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"name":                map[string]interface{}{"type": "string", "description": "步骤短名(4-12字)"},
+							"goal":                map[string]interface{}{"type": "string", "description": "本步目标(必填),写清这一步要产出什么"},
+							"deliverables":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "description": map[string]interface{}{"type": "string"}}}},
+							"completion_criteria": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+						},
+						"required": []string{"name", "goal"},
+					},
+				},
 			},
 			"required": []string{"goal"},
 		},
@@ -139,6 +163,11 @@ func CreateDelegateTool(svc *SubAgentService) Tool {
 			userID := GetUserIDFromContext(ctx)
 			if userID == 0 {
 				return "", fmt.Errorf("delegate: no user id in context")
+			}
+
+			// 计划路径(34 号):给了 steps 就建计划 + 派第一步,不再走单任务。
+			if steps := parsePlanSteps(args["steps"]); len(steps) > 0 {
+				return startPlannedTask(ctx, planCreator, userID, goal, args, steps)
 			}
 
 			taskSpec := domainagent.NewTaskSpec(goal)
@@ -200,4 +229,64 @@ func CreateDelegateTool(svc *SubAgentService) Tool {
 			return fmt.Sprintf(`{"task_id": %d, "status": "pending", "message": "已安排后台执行器处理,稍后汇报"}`, taskID), nil
 		},
 	}
+}
+
+// parsePlanSteps 解析 steps 参数;不是数组或为空时返回 nil(退回单任务路径)。
+// 无法识别的元素跳过,由 domain.ValidateSteps 统一兜底校验(步数/空字段)。
+func parsePlanSteps(raw interface{}) []domainagent.PlanStepSpec {
+	arr, ok := raw.([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	steps := make([]domainagent.PlanStepSpec, 0, len(arr))
+	for _, it := range arr {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		goal, _ := m["goal"].(string)
+		step := domainagent.PlanStepSpec{Name: name, Goal: goal}
+		if dels, ok := m["deliverables"].([]interface{}); ok {
+			for _, d := range dels {
+				dm, ok := d.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				dn, _ := dm["name"].(string)
+				dd, _ := dm["description"].(string)
+				if dn != "" {
+					step.Deliverables = append(step.Deliverables, domainagent.Deliverable{Name: dn, Description: dd})
+				}
+			}
+		}
+		if crits, ok := m["completion_criteria"].([]interface{}); ok {
+			for _, c := range crits {
+				if s, ok := c.(string); ok && s != "" {
+					step.CompletionCriteria = append(step.CompletionCriteria, s)
+				}
+			}
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+// startPlannedTask 建计划并派第一步,返回给主 Agent 的 JSON(含 plan_id)。
+func startPlannedTask(ctx context.Context, creator PlanCreator, userID int64, goal string, args map[string]interface{}, steps []domainagent.PlanStepSpec) (string, error) {
+	if creator == nil {
+		return "", fmt.Errorf("计划能力未装配:请去掉 steps 只派一个任务")
+	}
+	name, _ := args["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		name = truncateGoal(goal, 20)
+	}
+	plan, err := creator.CreateAndStart(ctx, userID, name, goal, steps,
+		getSourceFromContext(ctx), getNotifyTargetFromContext(ctx), domainagent.TurnIDFromContext(ctx))
+	if err != nil {
+		return "", fmt.Errorf("派计划失败: %w", err)
+	}
+	msg := fmt.Sprintf("已拆成 %d 步,逐步执行,做完一步说一步", len(steps))
+	return fmt.Sprintf(`{"plan_id": %d, "steps": %d, "status": %q, "message": %q}`,
+		plan.ID, len(steps), plan.Status, msg), nil
 }

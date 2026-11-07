@@ -31,8 +31,19 @@ type AgentTaskRepository interface {
 	// 包含 failed 任务--失败也要汇报(08 §9)。
 	// source 必填(33 号补强):汇报归属来源渠道,避免 A 渠道的任务被 B 渠道/Web 抢报。
 	ListCompletedUnreported(userID int64, source string) ([]*agent.AgentTask, error)
-	// ListByUser 列出该用户的任务(按创建时间倒序,limit 限上限)。
+	// ListByUser 列出该用户的**根任务**(按创建时间倒序,limit 限上限)。
+	// 34 号:计划子任务不算根任务,任务中心折叠在父任务里。
 	ListByUser(userID int64, limit int) ([]*agent.AgentTask, error)
+	// CreatePlan 同一事务创建计划容器 + 有序子任务(回填 ParentTaskID)。
+	CreatePlan(plan *agent.AgentTask, children []*agent.AgentTask) error
+	// ListChildren 列出某计划的子任务(按 StepSeq 升序)。
+	ListChildren(parentID int64) ([]*agent.AgentTask, error)
+	// UpdateTaskSpec 派发前更新子任务的任务包(注入上一步结论)。goal 同步。
+	UpdateTaskSpec(id int64, spec agent.TaskSpec) error
+	// ResetForRetry 把失败的子任务重置为 pending(计划续跑重试当前步)。
+	ResetForRetry(id int64) error
+	// ListRootByStatus 按状态列出根任务(34 号:计划恢复扫 running 容器)。
+	ListRootByStatus(status string) ([]*agent.AgentTask, error)
 	// UpdateGoal 改 goal(pending 态 update_task 用)。
 	UpdateGoal(id int64, goal string) error
 	// AppendNote 追加补充信息到 Notes(running 态 update_task 用)。
@@ -152,7 +163,8 @@ func (r *GormAgentTaskRepository) MarkReported(id int64) error {
 
 func (r *GormAgentTaskRepository) ListCompletedUnreported(userID int64, source string) ([]*agent.AgentTask, error) {
 	var tasks []*agent.AgentTask
-	err := r.db.Where("user_id = ? AND source = ? AND reported = ? AND status IN ?",
+	// parent_task_id IS NULL:34 号合流后,计划子任务也在这张表里,但只有树根才汇报。
+	err := r.db.Where("user_id = ? AND source = ? AND parent_task_id IS NULL AND reported = ? AND status IN ?",
 		userID, source, false, []string{agent.TaskStatusCompleted, agent.TaskStatusFailed}).
 		Order("completed_at ASC").
 		Find(&tasks).Error
@@ -170,7 +182,7 @@ func (r *GormAgentTaskRepository) ListByUser(userID int64, limit int) ([]*agent.
 		limit = 200
 	}
 	var tasks []*agent.AgentTask
-	err := r.db.Where("user_id = ?", userID).
+	err := r.db.Where("user_id = ? AND parent_task_id IS NULL", userID).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -178,6 +190,69 @@ func (r *GormAgentTaskRepository) ListByUser(userID int64, limit int) ([]*agent.
 		return nil, err
 	}
 	return tasks, nil
+}
+
+// CreatePlan 同一事务创建容器 + 子任务:P nil 时子任务都挂到它下面。
+// 一条事务保证"计划存在 ⇒ 步骤齐全",避免半截计划(有容器没步骤)推进时卡死。
+func (r *GormAgentTaskRepository) CreatePlan(plan *agent.AgentTask, children []*agent.AgentTask) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(plan).Error; err != nil {
+			return err
+		}
+		parentID := plan.ID
+		for _, c := range children {
+			c.ParentTaskID = &parentID
+			if err := tx.Create(c).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ListChildren 列出计划子任务(按 StepSeq 升序,顺序即执行顺序)。
+func (r *GormAgentTaskRepository) ListChildren(parentID int64) ([]*agent.AgentTask, error) {
+	var list []*agent.AgentTask
+	err := r.db.Where("parent_task_id = ?", parentID).
+		Order("step_seq ASC").
+		Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ListRootByStatus 按状态列出根任务(不含计划子任务)。
+func (r *GormAgentTaskRepository) ListRootByStatus(status string) ([]*agent.AgentTask, error) {
+	var list []*agent.AgentTask
+	err := r.db.Where("status = ? AND parent_task_id IS NULL", status).
+		Order("id ASC").
+		Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ResetForRetry 失败子任务 → pending(续跑)。只对 failed 生效,其他状态不动。
+func (r *GormAgentTaskRepository) ResetForRetry(id int64) error {
+	return r.db.Model(&agent.AgentTask{}).
+		Where("id = ? AND status = ?", id, agent.TaskStatusFailed).
+		Updates(map[string]interface{}{
+			"status":     agent.TaskStatusPending,
+			"error_msg":  nil,
+			"started_at": nil,
+			"attempts":   gorm.Expr("attempts + 1"),
+		}).Error
+}
+
+// UpdateTaskSpec 更新任务包与 goal(派发前注入上一步结论)。
+// 结构体 Updates 才会触发 serializer:json,map 更新会写坏 JSON 列。
+func (r *GormAgentTaskRepository) UpdateTaskSpec(id int64, spec agent.TaskSpec) error {
+	patch := agent.AgentTask{TaskSpec: spec, Goal: spec.Goal}
+	return r.db.Model(&agent.AgentTask{}).Where("id = ?", id).
+		Select("task_spec", "goal").
+		Updates(&patch).Error
 }
 
 // UpdateGoal 改 goal(pending 态 update_task 用)。

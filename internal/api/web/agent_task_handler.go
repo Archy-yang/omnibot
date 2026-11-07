@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +27,17 @@ type AgentTaskHandler struct {
 	agentService     AgentService
 	llmConfigService LLMConfigService
 	messageService   MessageService // 落库汇报消息(Kind=report),刷新后历史仍能还原
+	// plans 计划续跑(34 号):Web 端"继续"按钮。为 nil 时接口报 503,不影响其他任务接口。
+	plans PlanResumer
 }
+
+// PlanResumer 计划续跑窄接口(agentpkg.PlanRunner 实现)。
+type PlanResumer interface {
+	Resume(ctx context.Context, userID, planID int64) error
+}
+
+// SetPlanRunner 注入计划能力(装配层在 PlanRunner 就绪后调用)。
+func (h *AgentTaskHandler) SetPlanRunner(p PlanResumer) { h.plans = p }
 
 // NewAgentTaskHandler 创建任务 handler。去角色后无 registry。
 func NewAgentTaskHandler(
@@ -53,6 +64,14 @@ type taskDTO struct {
 	Reported     bool   `json:"reported"`
 	CreatedAt    string `json:"created_at"`
 	FinishedAt   string `json:"finished_at,omitempty"` // completed/cancelled 的结束时间
+	// 34 号合并建模:容器/子任务信息。Kind=plan 的行在任务中心折叠子步骤。
+	Kind    string `json:"kind,omitempty"`
+	StepSeq int    `json:"step_seq,omitempty"`
+	// StepDone/StepTotal 仅 plan 行:进度 3/4。
+	StepDone  int `json:"step_done,omitempty"`
+	StepTotal int `json:"step_total,omitempty"`
+	// Children 仅 plan 行:子步骤(前端折叠在父任务里,点开可进各步详情)
+	Children []taskStepDTO `json:"children,omitempty"`
 }
 
 // taskDetailDTO 任务详情展示结构(任务中心详情页)。
@@ -69,6 +88,22 @@ type taskDetailDTO struct {
 	Artifact     string               `json:"artifact,omitempty"`  // 结果全文(completed 时)
 	ErrorMsg     string               `json:"error_msg,omitempty"` // failed 时
 	Spec         domainagent.TaskSpec `json:"spec"`                // 任务合同(背景/交付物/完成标准)
+	// 34 号合并建模:容器标记 + 子任务归属
+	Kind     string `json:"kind,omitempty"`
+	ParentID *int64 `json:"parent_id,omitempty"`
+	StepSeq  int    `json:"step_seq,omitempty"`
+	// Children 计划容器的子任务(仅 kind=plan 且详情页需要)
+	Children []taskStepDTO `json:"children,omitempty"`
+}
+
+// taskStepDTO 计划子任务展示(详情页/列表折叠)。
+type taskStepDTO struct {
+	ID      int64  `json:"id"`
+	StepSeq int    `json:"step_seq"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	// ArtifactHead 结果首行(不塞全文,详情点进去看)
+	ArtifactHead string `json:"artifact_head,omitempty"`
 }
 
 // HandleListTasks GET /api/v1/agent/tasks
@@ -102,9 +137,26 @@ func (h *AgentTaskHandler) HandleListTasks(c *gin.Context) {
 				ID: s.ID, Name: s.Name, SubAgentType: s.SubAgent, Goal: s.Goal,
 				Status: s.Status, Reported: s.Reported,
 				CreatedAt: s.CreatedAt.Format("2006-01-02 15:04"),
+				Kind:      s.Kind, StepSeq: s.StepSeq,
 			}
 			if s.FinishedAt != nil {
 				dto.FinishedAt = s.FinishedAt.Format("2006-01-02 15:04")
+			}
+			// 计划容器补进度与子步骤(折叠在父任务里,列表显示 3/4,展开看每步)
+			if s.Kind == domainagent.TaskKindPlan {
+				if children, e := h.subAgentSvc.ChildrenOf(s.ID); e == nil {
+					dto.StepTotal = len(children)
+					for _, c := range children {
+						if c.Status == domainagent.TaskStatusCompleted {
+							dto.StepDone++
+						}
+						step := taskStepDTO{ID: c.ID, StepSeq: c.StepSeq, Name: c.Name, Status: c.Status}
+						if c.Artifact != nil {
+							step.ArtifactHead = domainagent.FirstLine(*c.Artifact, 80)
+						}
+						dto.Children = append(dto.Children, step)
+					}
+				}
 			}
 			dtos = append(dtos, dto)
 		}
@@ -122,6 +174,7 @@ func newTaskDTO(t *domainagent.AgentTask) taskDTO {
 		ID: t.ID, Name: t.Name, SubAgentType: t.SubAgentType, Goal: t.Goal,
 		Status: t.Status, Reported: t.Reported,
 		CreatedAt: t.CreatedAt.Format("2006-01-02 15:04"),
+		Kind:      domainagent.NormalizeKind(t.Kind), StepSeq: t.StepSeq,
 	}
 }
 
@@ -151,6 +204,20 @@ func (h *AgentTaskHandler) HandleGetTaskDetail(c *gin.Context) {
 		Goal: task.Goal, Status: task.Status, Reported: task.Reported,
 		CreatedAt: task.CreatedAt.Format("2006-01-02 15:04:05"),
 		Spec:      task.TaskSpec,
+		Kind:      domainagent.NormalizeKind(task.Kind),
+		ParentID:  task.ParentTaskID, StepSeq: task.StepSeq,
+	}
+	// 计划容器:带上子任务(执行流水/结果在子任务详情里看)
+	if task.IsPlan() {
+		if children, e := h.subAgentSvc.ChildrenOf(task.ID); e == nil {
+			for _, c := range children {
+				step := taskStepDTO{ID: c.ID, StepSeq: c.StepSeq, Name: c.Name, Status: c.Status}
+				if c.Artifact != nil {
+					step.ArtifactHead = domainagent.FirstLine(*c.Artifact, 80)
+				}
+				detail.Children = append(detail.Children, step)
+			}
+		}
 	}
 	if task.StartedAt != nil {
 		detail.StartedAt = task.StartedAt.Format("2006-01-02 15:04:05")
@@ -166,6 +233,52 @@ func (h *AgentTaskHandler) HandleGetTaskDetail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"task": detail}})
+}
+
+// HandleResumeTask POST /api/v1/agent/tasks/:id/resume
+// 仅对"暂停的计划容器"生效(34 号):任务中心"继续"按钮走后端,不必回到对话里说一句。
+func (h *AgentTaskHandler) HandleResumeTask(c *gin.Context) {
+	userID := c.GetInt64(middleware.AuthUserIDKey)
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || taskID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "无效的任务 ID"})
+		return
+	}
+	if h.plans == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "计划能力未就绪"})
+		return
+	}
+	task, err := h.subAgentSvc.GetTask(taskID)
+	if err != nil || task == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "任务不存在"})
+		return
+	}
+	if task.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "无权操作此任务"})
+		return
+	}
+	if !task.IsPlan() {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "这不是计划,单任务不支持继续"})
+		return
+	}
+	if task.Status != domainagent.TaskStatusPaused {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "计划当前状态不可继续"})
+		return
+	}
+	if err := h.plans.Resume(c.Request.Context(), userID, taskID); err != nil {
+		switch {
+		case errors.Is(err, agentpkg.ErrPlanNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "计划不存在"})
+		case errors.Is(err, agentpkg.ErrPlanNotResumable):
+			c.JSON(http.StatusConflict, gin.H{"success": false, "error": "计划当前状态不可继续"})
+		default:
+			logger.ErrorWithFields("resume plan failed",
+				zap.Int64("plan_id", taskID), zap.Int64("user_id", userID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "继续失败"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"status": domainagent.TaskStatusRunning}})
 }
 
 // HandleReportTask POST /api/v1/agent/tasks/:id/report (SSE)
