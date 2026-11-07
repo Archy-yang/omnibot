@@ -101,3 +101,11 @@ func (a feishuReportLLM) GetFullConfig(userID int64) (apiKey, baseURL, model str
 	}
 	return cfg.APIKey, cfg.BaseURL, cfg.Model, true, nil
 }
+
+// SendPlanText 计划异常消息(34 号):纯文本一行,不必卡片。
+func (n *FeishuTaskNotifier) SendPlanText(ctx context.Context, openID, text string) error {
+	if n.sender == nil {
+		return fmt.Errorf("feishu notifier: sender not configured")
+	}
+	return n.sender.SendText(ctx, openID, text)
+}

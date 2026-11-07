@@ -265,6 +265,8 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 		messages = append(messages, conversation...)
 
 		tools := a.toolRegistry.ToOpenAITools()
+		// 诊断(2026-11-04):模型"声称已派活但零工具调用"时,先确认工具到底发没发出去。
+		logLLMTools(tools)
 
 		// 运行时共享状态 + hook 链。熔断计数/强制汇总等机制通过 hook 介入循环,
 		// 循环本身保持纯推理(调 LLM -> 解析 -> 执行工具 -> 判断结束)。
@@ -316,6 +318,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 
 			// 本轮内累积：一段 LLM 响应可能是文本（emit token）或工具调用（按 index 累积 delta）。
 			var roundContent string
+			var roundFinishReason string                        // 本轮 finish_reason(诊断工具调用是否被解析层丢失)
 			var roundReasoning string                           // deepseek 思考模式:本轮思考过程,千帆要求多轮回传
 			toolCallAccum := make(map[int]*toolCallAccumulator) // 按 index 索引
 
@@ -359,6 +362,9 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 						acc.argumentsBuilder.WriteString(chunk.ToolCallDelta.ArgumentsDelta)
 					}
 				}
+				if chunk.FinishReason != "" {
+					roundFinishReason = chunk.FinishReason
+				}
 			}
 
 			// 流结束。如果本轮没有工具调用 → ReAct 循环结束，本轮的 roundContent 就是最终回答。
@@ -377,6 +383,7 @@ func (a *ReActAgent) RunStream(ctx context.Context, conversation []map[string]in
 				}
 			}
 			if len(toolCallAccum) == 0 {
+				logRoundWithoutTools(rt.Step, roundFinishReason, roundContent, len(rt.DelegateTaskIDs))
 				// v1.5.5：记一条 llm_call 步骤（response 是本轮文本回答）。
 				out <- AgentEvent{
 					Type:           AgentEventLLMCall,

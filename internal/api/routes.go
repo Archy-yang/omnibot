@@ -11,12 +11,12 @@ import (
 
 	"omnibot/frontend"
 	"omnibot/internal/api/web"
-	domainagent "omnibot/internal/domain/agent"
 	channelfactory "omnibot/internal/channel"
 	channelfeishu "omnibot/internal/channel/feishu"
 	channelweb "omnibot/internal/channel/web"
 	channelwechat "omnibot/internal/channel/wechat"
 	wechatclawchannel "omnibot/internal/channel/wechatclaw"
+	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/middleware"
 	"omnibot/internal/pkg/backtask"
 	userRepo "omnibot/internal/repository/user"
@@ -121,6 +121,8 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		agentTaskGroup.GET("/tasks/:id", d.agentTaskHandler.HandleGetTaskDetail)
 		agentTaskGroup.GET("/tasks/:id/steps", d.agentTaskHandler.HandleListTaskSteps)
 		agentTaskGroup.POST("/tasks/:id/report", d.agentTaskHandler.HandleReportTask)
+		// 34 号:计划容器"继续"(仅 paused 生效)
+		agentTaskGroup.POST("/tasks/:id/resume", d.agentTaskHandler.HandleResumeTask)
 	}
 
 	// 持久任务接口(25 号):列表 + 控制;创建走对话内工具
@@ -155,6 +157,14 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		wechatClawAPIGroup.GET("/login/:qrcode", wechatClawHandler.HandlePollLogin)
 		wechatClawAPIGroup.GET("/status", wechatClawHandler.HandleGetStatus)
 		wechatClawAPIGroup.DELETE("", wechatClawHandler.HandleDisconnect)
+	}
+
+	// 任务计划恢复(34 号):进程重启后把 running 计划按当前步任务状态补推进/暂停。
+	// 一次性动作,放独立 goroutine,不阻塞启动。
+	if d.planRunner != nil {
+		backtask.RunDetached("plan recovery", func() {
+			d.planRunner.Recover(context.Background())
+		})
 	}
 
 	// 持久任务调度循环(25 号):启动恢复(不追帧) + 30s tick。

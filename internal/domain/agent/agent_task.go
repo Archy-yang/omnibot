@@ -25,7 +25,14 @@ type AgentTask struct {
 	Reported     bool     `gorm:"not null;default:false"` // 是否已汇报给主 Agent(C 模式核心字段)
 	Notes        []string `gorm:"serializer:json"`        // 补充信息(running 态 update_task 追加,子 Agent 下轮注入上下文)
 	TaskSpec     TaskSpec `gorm:"serializer:json"`        // 任务包(goal+背景+交付物+完成标准+约束),替代裸 goal
-	ParentTaskID *int64   `gorm:"index"`                  // 父任务 ID(预留:动态编排/任务链;当前 delegate 派出的为 nil)
+	ParentTaskID *int64   `gorm:"index"`                  // 父任务 ID(34 号:计划子任务指向容器;单任务为 nil)
+	// Kind 任务种类(34 号合并建模):"task"=可执行任务(默认),"plan"=计划容器。
+	// 容器没有 runner/超时/artifact,只承载"一组有序子任务";子任务靠 ParentTaskID 挂回来。
+	Kind string `gorm:"size:20;not null;default:task;index"`
+	// StepSeq 子任务在计划里的执行顺序(1-based;0=非计划子任务)。
+	StepSeq int `gorm:"not null;default:0"`
+	// Attempts 计划子任务的重试次数(34 号):超时类失败自动重试一次,Attempts 到时不再重试。
+	Attempts int `gorm:"not null;default:0"`
 	// ScheduleID 派生本实例的持久任务 ID(25 号,source=schedule 时必填)。
 	// 与 ParentTaskID 分列:两者 ID 空间不同,不得混用。
 	ScheduleID   *int64 `gorm:"index"`
@@ -57,7 +64,30 @@ const (
 	TaskStatusFailed        = "failed"
 	TaskStatusCancelled     = "cancelled"      // 用户/主 Agent 取消(cancel_task)
 	TaskStatusInputRequired = "input_required" // 子 Agent 主动要输入(update_task 补后回 running)
+	// TaskStatusPaused 计划容器暂停(某步失败等用户决定继续/取消)。仅 kind=plan 使用,
+	// 普通任务不会进入该状态(executeTask 不会产生它)。
+	TaskStatusPaused = "paused"
 )
+
+// 任务种类(34 号)。
+const (
+	TaskKindTask = "task" // 可执行任务(默认)
+	TaskKindPlan = "plan" // 计划容器:不执行,只按序派发子任务
+)
+
+// IsPlan 是否计划容器。
+func (t *AgentTask) IsPlan() bool { return t.Kind == TaskKindPlan }
+
+// IsPlanChild 是否计划里的子任务。
+func (t *AgentTask) IsPlanChild() bool { return t.ParentTaskID != nil }
+
+// NormalizeKind 空值回落 task(存量数据兼容)。
+func NormalizeKind(kind string) string {
+	if kind == "" {
+		return TaskKindTask
+	}
+	return kind
+}
 
 // IsTerminal 判断状态是否终态(不可再 query/update/cancel)。
 // 注意:input_required 不是终态(补输入后回 running)。
@@ -69,10 +99,10 @@ func (t *AgentTask) IsTerminal() bool {
 	return false
 }
 
-// IsActive 判断任务是否还在运行中(running 或 input_required,可补/可取消)。
+// IsActive 判断任务是否还在运行中(pending/running/input_required/paused,可补/可取消)。
 func (t *AgentTask) IsActive() bool {
 	switch t.Status {
-	case TaskStatusPending, TaskStatusRunning, TaskStatusInputRequired:
+	case TaskStatusPending, TaskStatusRunning, TaskStatusInputRequired, TaskStatusPaused:
 		return true
 	}
 	return false
@@ -82,8 +112,10 @@ func (t *AgentTask) IsActive() bool {
 // 状态机唯一事实源:CAS 落库(repo.TransitionStatus)与服务层判断都以此为准。
 // 与文档 §12.1 的差异:增加 pending → failed(启动阶段 panic 等异常落终态,避免僵尸 pending)。
 var taskTransitions = map[string][]string{
-	TaskStatusPending:       {TaskStatusRunning, TaskStatusCancelled, TaskStatusFailed},
-	TaskStatusRunning:       {TaskStatusCompleted, TaskStatusFailed, TaskStatusInputRequired, TaskStatusCancelled},
+	TaskStatusPending: {TaskStatusRunning, TaskStatusCancelled, TaskStatusFailed},
+	// 34 号:计划容器某步失败 → paused(等用户决定继续/取消);普通任务不走这条边。
+	TaskStatusRunning:       {TaskStatusCompleted, TaskStatusFailed, TaskStatusInputRequired, TaskStatusCancelled, TaskStatusPaused},
+	TaskStatusPaused:        {TaskStatusRunning, TaskStatusFailed, TaskStatusCancelled},
 	TaskStatusInputRequired: {TaskStatusRunning, TaskStatusCancelled},
 	// 终态(completed/failed/cancelled)无出边:不可迁出,CAS 拦截
 	TaskStatusCompleted: {},
@@ -118,6 +150,7 @@ func NewAgentTask(userID int64, taskSpec TaskSpec, source, notifyTarget string) 
 		Name:         taskSpec.Name, // 任务短名(人读展示)
 		Goal:         taskSpec.Goal, // 冗余快捷访问
 		TaskSpec:     taskSpec,
+		Kind:         TaskKindTask,
 		Status:       TaskStatusPending,
 		Source:       source,
 		NotifyTarget: notifyTarget,

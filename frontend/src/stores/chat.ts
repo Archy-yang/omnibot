@@ -343,6 +343,10 @@ export const useChatStore = defineStore(
           if (type === 'task.completed') {
             pollOnce().catch((err) => console.error('Realtime-triggered poll failed:', err));
           }
+          // 计划暂停(34 号):服务端已落一条消息,刷新历史让用户看到"卡在哪一步"
+          if (type === 'plan.paused') {
+            loadHistory().catch((err) => console.error('Plan paused refresh failed:', err));
+          }
         },
         onReconnect: () => {
           pollOnce().catch((err) => console.error('Reconnect poll failed:', err));

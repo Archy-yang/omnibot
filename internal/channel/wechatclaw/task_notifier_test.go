@@ -151,3 +151,20 @@ func TestTaskNotifier_Available(t *testing.T) {
 	current = nil
 	assert.False(t, n.Available(), "断开后应变为不可用")
 }
+
+// 34 号:计划异常消息走同一 sender,纯文本(ClawBot 不支持卡片)。
+func TestTaskNotifier_SendPlanText(t *testing.T) {
+	sender := &fakeSender{}
+	n := NewTaskNotifier(func() TextSender { return sender }, nil)
+
+	require.NoError(t, n.SendPlanText(context.Background(), "wx_user", "⚠️ 计划第 2/3 步卡住了"))
+	require.NotEmpty(t, sender.sent)
+	assert.Contains(t, sender.sent[len(sender.sent)-1], "卡住了")
+	assert.Equal(t, "wx_user", sender.targets[len(sender.targets)-1])
+}
+
+// 未连接时报错(调用方记日志,不静默假成功)。
+func TestTaskNotifier_SendPlanText_NotConnected(t *testing.T) {
+	n := NewTaskNotifier(func() TextSender { return nil }, nil)
+	assert.Error(t, n.SendPlanText(context.Background(), "wx", "x"))
+}

@@ -23,6 +23,7 @@ import (
 	wechatclawchannel "omnibot/internal/channel/wechatclaw"
 	"omnibot/internal/client/llm"
 	"omnibot/internal/db"
+	domainagent "omnibot/internal/domain/agent"
 	"omnibot/internal/pkg/auth"
 	"omnibot/internal/pkg/crypto"
 	"omnibot/internal/realtime"
@@ -92,6 +93,9 @@ type appDeps struct {
 
 	// 25 号:持久任务调度器(进程级后台循环,routes.go 启动)
 	persistentScheduler *agentpkg.PersistentTaskScheduler
+
+	// 34 号:任务计划推进器(启动时做一次重启恢复,routes.go 触发)
+	planRunner *agentpkg.PlanRunner
 
 	// 26 号:主动管家(扫描服务供飞书送达器注入;调度器进程级后台循环,routes.go 启动)
 	butlerScan      *butlerpkg.ScanService
@@ -509,7 +513,32 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 	// request_input 工具加入子 Agent 工具集(子 Agent 主动要输入,#19)
 	globalToolRegistry.Register(agentpkg.CreateRequestInputTool(subAgentSvc))
 	// delegate 工具加入主 Agent 工具集(主 Agent 派活给通用执行器,去角色后无 registry)
-	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentSvc))
+	// 34 号:注入计划能力——delegate 带 steps 时建计划并按序推进。
+	planRunner := agentpkg.NewPlanRunner(agentTaskRepo, subAgentSvc)
+	agentToolRegistry.Register(agentpkg.CreateDelegateTool(subAgentSvc, planRunner))
+	agentToolRegistry.Register(agentpkg.CreateManagePlanTool(planRunner))
+	// 计划推进挂终态观察者(与 25 号调度器多播共存,互不干扰)
+	subAgentSvc.AddFinishedObserver(planRunner.OnTaskFinished)
+	// 计划异常推送:只在某步失败/暂停时推一条(成功步骤静默),按来源分派。
+	// web 没有 IM 通道:落一条 report 消息进对话 + WS 通知前端刷新(否则用户只看到"卡住")。
+	planRunner.SetProgress(func(ctx context.Context, plan *domainagent.AgentTask, text string) {
+		if plan.Source == domainagent.SourceWeb {
+			if err := msgSvc.SaveReportMessage(ctx, plan.UserID, plan.ID, 0, text, nil, nil); err != nil {
+				logger.WarnWithFields("plan: save pause message failed",
+					zap.Int64("plan_id", plan.ID), zap.Error(err))
+			}
+			realtimeHub.Publish(plan.UserID, "plan.paused", map[string]interface{}{"plan_id": plan.ID})
+			return
+		}
+		n := subAgentSvc.PlanNotifierFor(plan.Source)
+		if n == nil {
+			return
+		}
+		if err := n.SendPlanText(ctx, plan.NotifyTarget, text); err != nil {
+			logger.WarnWithFields("plan: notify failed",
+				zap.Int64("plan_id", plan.ID), zap.String("source", plan.Source), zap.Error(err))
+		}
+	})
 	// 任务管理工具:主 Agent 对派出去的任务可查(query)/补充(update)/取消(cancel)。
 	agentToolRegistry.Register(agentpkg.CreateQueryTaskTool(subAgentSvc))
 	agentToolRegistry.Register(agentpkg.CreateUpdateTaskTool(subAgentSvc))
@@ -600,6 +629,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 
 	// 后台 Agent 任务接口(08 §4.7):轮询 + report
 	agentTaskHandler := web.NewAgentTaskHandler(subAgentSvc, agentSvc, llmConfigSvc, msgSvc)
+	agentTaskHandler.SetPlanRunner(planRunner) // 34 号:Web 任务中心的"继续"按钮
 
 	// v2.1: 邮箱密码认证装配
 	// AuthService 内部直接用 *gorm.DB 跑事务(users + user_channels + user_credentials),
@@ -658,6 +688,7 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 		larkAuthService:     larkauthService,
 		wechatClawSvc:       wechatClawSvc,
 		persistentScheduler: persistentScheduler,
+		planRunner:          planRunner,
 		butlerScan:          butlerScanSvc,
 		butlerScheduler:     butlerScheduler,
 		butlerSettings:      butlerSettingsSvc,

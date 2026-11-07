@@ -81,3 +81,24 @@ func (n *TaskNotifier) NotifyTaskCompleted(ctx context.Context, target string, t
 		zap.Int64("task_id", task.ID), zap.String("peer", target))
 	return nil
 }
+
+// SendPlanText 计划异常消息(34 号):纯文本,复用同一 sender。
+func (n *TaskNotifier) SendPlanText(ctx context.Context, target, text string) error {
+	sender, err := n.currentSender()
+	if err != nil {
+		return err
+	}
+	return sender.SendText(ctx, target, text)
+}
+
+// currentSender 取当前连接;断线/未配置返回错误(调用方记日志,不静默假成功)。
+func (n *TaskNotifier) currentSender() (TextSender, error) {
+	if n == nil || n.sender == nil {
+		return nil, fmt.Errorf("wechatclaw notifier: sender provider not configured")
+	}
+	sender := n.sender()
+	if sender == nil {
+		return nil, fmt.Errorf("wechatclaw notifier: not connected")
+	}
+	return sender, nil
+}
