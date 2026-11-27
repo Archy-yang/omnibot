@@ -350,9 +350,15 @@ authorized --健康检查有 deviceCode--> 尝试收尾 --> authorized / need_re
 - IM：`#飞书授权` 五态输出、前缀容忍空格、`#帮助` 列命令、授权命令不进对话
 - 工具：未授权 / CLI `token_missing` / 无配置 → 三种引导，链接进错误文案，渠道与 target 取自 ctx
 - `Executor`：失败时保留 `token_missing` 与 `verification_url`（400 字节回归）
+- profile：同应用复用不 remove / appId 变更才重建 / 列表不可解析时不动手 /
+  缺 secret 重建后重试一次 / 其它错误不重建
 - 提示词：IM 命令清单 golden 更新
 
 ### 残留风险
 
-- `ProfileAdd` 仍是"已存在则删除重建"：幂等化之后正常路径不再触发，但**用户手动 `#飞书授权` 且当前 pending 已过期**时仍会清空旧凭证。因为此时本来就要换新 device flow，影响可接受；彻底修法是"探测到缺 secret 才重建"（P2）
+- ~~`ProfileAdd` 仍是"已存在则删除重建"~~ → **已在 v2.13.0 修掉（P2）**：
+  同名同应用直接复用，只有 appId 变更或 device flow 报 `missing client_secret` 时才
+  `ProfileRebuild`（删除重建）并重试一次。`profile list` 读不到信息时按"同应用"处理——
+  宁可复用，不做破坏性操作
+- 残留：App Secret 被用户在飞书后台重置后，只能去 Web 重填（IM 不能收 Secret，安全红线）
 - refresh token 7 天不用即失效是 CLI 的机制，本轮只做"失效后能自愈"；根治需保活（定期用用户身份做轻量调用），需单独确认是否接受"系统替用户做动作"

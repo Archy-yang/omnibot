@@ -61,6 +61,9 @@ type mockCLI struct {
 	startDevice   string
 	startErr      error
 	startCalls    int
+	startErrFirst error // 第一次 LoginStart 返回它,之后正常
+	rebuilds      []string
+	rebuildErr    error
 	completed     []string
 	completeErr   error
 	statusOpenID  string
@@ -78,8 +81,16 @@ func (m *mockCLI) ProfileAdd(_ context.Context, _ int64, profile, appID, appSecr
 	return m.addErr
 }
 
+func (m *mockCLI) ProfileRebuild(_ context.Context, _ int64, profile, appID, appSecret string) error {
+	m.rebuilds = append(m.rebuilds, profile)
+	return m.rebuildErr
+}
+
 func (m *mockCLI) LoginStart(_ context.Context, _ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
 	m.startCalls++
+	if m.startCalls == 1 && m.startErrFirst != nil {
+		return "", "", "", m.startErrFirst
+	}
 	return m.startURL, m.startUserCode, m.startDevice, m.startErr
 }
 

@@ -307,6 +307,14 @@ func (s *Service) startAuth(ctx context.Context, userID int64, appID, appSecret,
 		return View{}, err
 	}
 	verifyURL, userCode, deviceCode, err := s.cli.LoginStart(ctx, userID, profile, "") // 空 = CLI 默认域集合
+	if err != nil && isMissingSecretError(err) {
+		// 存量壳 profile(secret 没落盘,如从宿主机迁移来的):删除重建后重试一次。
+		// 这是唯一会清凭证的路径,但此时凭据本来就是坏的,重建无损失。
+		if rbErr := s.cli.ProfileRebuild(ctx, userID, profile, appID, appSecret); rbErr != nil {
+			return View{}, rbErr
+		}
+		verifyURL, userCode, deviceCode, err = s.cli.LoginStart(ctx, userID, profile, "")
+	}
 	if err != nil {
 		return View{}, err
 	}
