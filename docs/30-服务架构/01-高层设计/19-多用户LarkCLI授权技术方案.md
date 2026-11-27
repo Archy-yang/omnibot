@@ -252,3 +252,113 @@ authorized --健康检查有 deviceCode--> 尝试收尾 --> authorized / need_re
 - `Relogin`：复用库存 AppID/Secret（断言 profile add 参数）、无记录→ErrNotAuthorized
 - IM：`#飞书授权` 回验证链接、失败给兜底、不进对话
 - 工具：`--as user` 注入（用户域补、显式不覆盖、raw api 不补）
+
+---
+
+## IM 内授权闭环（2026-11-27，v2.13）
+
+### 问题（线上实测）
+
+用户"又掉登录了"，而 IM 里走不完重新授权。逐层排查得到的证据：
+
+| 断点 | 证据 |
+|---|---|
+| 真实失效原因 | `auth status --json` → `user.status: missing`，`refreshExpiresAt` 已过 7 天（refresh token 不用就失效，CLI 会主动 clearing） |
+| DB 仍说已授权 | `user_larkcli_auths.status = authorized`，而 `Health()` 只被 Web 的 `GET /feishu-auth` 调用，对话链路从不校正 |
+| 错误被截断 | `Executor` 失败只回 stderr 尾部 400 字节，`agent_steps` 里只剩半截 JSON，`type/token_missing/hint` 全被切掉 |
+| 模型自救被挡死 | 模型试 `feishu auth ...` / `--help`，被域白名单正当地拒绝（安全边界不能放开） |
+| 命令没人知道 | `#飞书授权` 存在，但系统提示词里没有任何 IM 命令清单；用户问"是不是有井号命令"，模型只能答"我这边试不通" |
+| **IM 无法收尾** | `#飞书授权` 只做 `Relogin`（新 device flow）→ 回链接；**没有任何代码在用户确认后调用 `LoginComplete`**。`PollAuth` 只被 Web 的 `GET /feishu-auth/poll` 调用。用户确认后回来说"好了"没有任何路径能完成授权 |
+| 越急越归零 | 旧 `ProfileAdd` 遇同名 profile 会 `profile remove`（清空全部凭证）+ 重建；而每次 `#飞书授权` 都重开流程 → 连点几次等于反复清零 |
+
+### 关键实测约束（决定方案形状）
+
+1. `auth status --json` **不回显** pending 流程的 `deviceCode`（刚 `--no-wait` 起的也不回显）→ 不能靠 status 判断"用户是否已确认"，`AuthStatusResult.DeviceCode` 那条分支实际是死代码
+2. `auth login --device-code` **阻塞**到用户确认或 device code 过期 → 可长阻塞、也可切成短轮询
+3. device code 有效期 **600s**（CLI `expires_in`）
+4. `profile remove` 会清空凭证（CLI help 原文 "clears all associated credentials"）
+
+### 方案：三个入口 + 一个 sweeper + 一个渠道无关 notifier
+
+```
+入口层  ① 工具撞墙自动发起(feishu 工具捕获 token_missing)
+        ② #飞书授权(幂等：查状态 + 复用/发起)
+        ③ #帮助(让用户知道有这些命令)
+              ↓ EnsureAuth(userID, channel, target)
+驱动层  sweeper：8s tick → ListByStatus(pending)
+        → per-user TryLock(与 Web PollAuth 互斥)
+        → PollAuth(5s) → authorized / failed / expired
+              ↓ Notifier.NotifyAuth
+投递层  channelfactory.Get(channel).SendText(target, text)
+```
+
+### 幂等矩阵（`EnsureAuth`）
+
+| 当前 DB | CLI 真实态 | 动作 |
+|---|---|---|
+| 无行 | — | 返回 `none`，引导去 Web 首次配置（IM 不能收 App Secret） |
+| `authorized` | 有 user token | 直接返回，**不开**新流程 |
+| `authorized` | 无 token | 转 `need_relogin` 并发起 |
+| `authorized` | 探测失败 | 报错，不贸然作废（环境问题 ≠ 授权失效） |
+| `pending` 未过期 | — | **复用同一条验证链接**（修掉"越急越归零"） |
+| `pending` 已过期 | — | 重新发起 |
+| `failed` / `need_relogin` | — | 重新发起 |
+
+### 数据模型新增
+
+`user_larkcli_auths` 加四列（AutoMigrate 自动加，无破坏性）：
+
+- `notify_channel` / `notify_target`：记录"谁发起的"，收尾后推回同一会话
+- `expires_at`：device code 到期时间。**显式存储**而非 `UpdatedAt + TTL` 推断——`UpdatedAt` 会被无关写操作刷新，推断会得到"永不过期"的假象
+- `reissue_count`：自动换发次数，上限 1，防止无限刷链接骚扰
+
+### 协程纪律（本方案最容易写坏的地方）
+
+| 风险 | 处理 |
+|---|---|
+| 每用户一个常驻协程 | 不引入；全局只有 1 个 ticker goroutine |
+| `backtask.Gate` 的 timeout 只取消 ctx、不杀 goroutine | 内部**每个**阻塞调用必须吃 ctx（本轮把 `ProfileAdd`/`LoginStart`/`Status`/`Logout` 全部改为接 ctx；此前 `Status` 用 `context.Background()`，单次可拖 60s） |
+| per-user 锁 panic 后不释放 | `TryLock` 后必须 `defer Unlock` |
+| 扫库卡死钉住 ticker | `ListByStatus` 带 ctx + 3s 超时 |
+| 收尾与 Web 轮询并发 poll 同一 device_code | per-user `sync.Mutex`：sweeper `TryLock` 跳过，Web `TryLock` 失败直接回 DB 现状 |
+| 推送卡住拖住流程 | 先落状态再推送；通知用独立短 ctx（5s），失败只记日志 |
+
+### 流程
+
+```
+用户: "把这次充电记到飞书表格"
+  → feishu 工具 → CLI 返回 {"type":"authentication","subtype":"token_missing"}
+  → 工具识别 → EnsureAuth → pending + verification_url
+  → 工具结果带上链接（模型只需转述）
+  → sweeper 每 8s 收尾
+  → 用户确认 → 最迟 8s 后 authorized
+  → 按发起渠道推送："✅ 飞书授权已恢复（身份：X）。刚才没做完的事，说一声我接着办。"
+```
+
+链接过期：自动换发一次并推新链接；再过期则停止自动换发，提示「回复 #飞书授权」。
+
+### 明确不做
+
+- **IM 内首次授权**：需要用户输入 App Secret，聊天记录留凭证，触碰安全红线；首次仍走 Web
+- **授权成功后自动重放上次失败请求**：写操作不幂等，重放可能重复建文档/重复发消息；改为提示一句，由用户决定
+- **放开 `auth` 子命令给模型**：白名单是有意的安全边界
+
+### 测试
+
+- `EnsureAuth` 七态矩阵 + 连续三次调用只开一个 flow + 过期换发
+- `sweepOne`：成功/超时/失败/过期换发/二次过期停手；单轮预算内返回且锁已释放；拿不到锁立即跳过；notifier 报错不回滚状态
+- IM：`#飞书授权` 五态输出、前缀容忍空格、`#帮助` 列命令、授权命令不进对话
+- 工具：未授权 / CLI `token_missing` / 无配置 → 三种引导，链接进错误文案，渠道与 target 取自 ctx
+- `Executor`：失败时保留 `token_missing` 与 `verification_url`（400 字节回归）
+- profile：同应用复用不 remove / appId 变更才重建 / 列表不可解析时不动手 /
+  缺 secret 重建后重试一次 / 其它错误不重建
+- 提示词：IM 命令清单 golden 更新
+
+### 残留风险
+
+- ~~`ProfileAdd` 仍是"已存在则删除重建"~~ → **已在 v2.13.0 修掉（P2）**：
+  同名同应用直接复用，只有 appId 变更或 device flow 报 `missing client_secret` 时才
+  `ProfileRebuild`（删除重建）并重试一次。`profile list` 读不到信息时按"同应用"处理——
+  宁可复用，不做破坏性操作
+- 残留：App Secret 被用户在飞书后台重置后，只能去 Web 重填（IM 不能收 Secret，安全红线）
+- refresh token 7 天不用即失效是 CLI 的机制，本轮只做"失效后能自愈"；根治需保活（定期用用户身份做轻量调用），需单独确认是否接受"系统替用户做动作"

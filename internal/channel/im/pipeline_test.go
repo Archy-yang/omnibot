@@ -320,15 +320,17 @@ func TestSubAgentReporterInjectsInstructionAndMarksReported(t *testing.T) {
 }
 
 type fakeLarkAuth struct {
-	url   string
-	code  string
-	err   error
-	calls int
+	prompt  LarkAuthPrompt
+	err     error
+	calls   int
+	channel string
+	target  string
 }
 
-func (f *fakeLarkAuth) Relogin(ctx context.Context, userID int64) (string, string, error) {
+func (f *fakeLarkAuth) EnsureAuth(_ context.Context, _ int64, channel, target string) (LarkAuthPrompt, error) {
 	f.calls++
-	return f.url, f.code, f.err
+	f.channel, f.target = channel, target
+	return f.prompt, f.err
 }
 
 // 19 号补强:IM 里发 #飞书授权 → 回验证链接,不进对话。
@@ -337,7 +339,12 @@ func TestHandleInboundLarkAuthCommand(t *testing.T) {
 	sender := &fakeSender{}
 	ag := &fakeAgent{}
 	h := newPipelineHandler(binding, sender, &fakeMessages{}, ag)
-	auth := &fakeLarkAuth{url: "https://accounts.feishu.cn/verify?x=1", code: "CODE-9"}
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{
+		Status: "pending",
+		VerifyURL: "https://accounts.feishu.cn/verify?x=1&user_code=CODE-9",
+		UserCode:  "CODE-9",
+		ExpiresIn: 480,
+	}}
 	h.SetLarkAuthCommander(auth)
 
 	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
@@ -347,14 +354,18 @@ func TestHandleInboundLarkAuthCommand(t *testing.T) {
 	assert.Equal(t, 1, auth.calls)
 	assert.Equal(t, 0, ag.calls, "授权命令不该进对话")
 	require.Len(t, sender.sent, 1)
-	assert.Contains(t, sender.sent[0], "https://accounts.feishu.cn/verify?x=1")
+	assert.Contains(t, sender.sent[0], "https://accounts.feishu.cn/verify?x=1&user_code=CODE-9")
 	assert.Contains(t, sender.sent[0], "CODE-9")
+	assert.Contains(t, sender.sent[0], "自动完成", "必须告诉用户确认后不用再发命令")
+	assert.Equal(t, "wechat_claw", auth.channel, "发起渠道要记录,收尾后才能推回同一会话")
+	assert.Equal(t, "peer-1", auth.target)
 }
 
 func TestHandleInboundLarkAuthCommandFailure(t *testing.T) {
 	binding := &fakeBinding{resolveBound: true, resolveUserID: 7}
 	sender := &fakeSender{}
-	h := newPipelineHandler(binding, sender, &fakeMessages{}, &fakeAgent{})
+	ag := &fakeAgent{}
+	h := newPipelineHandler(binding, sender, &fakeMessages{}, ag)
 	h.SetLarkAuthCommander(&fakeLarkAuth{err: errors.New("no record")})
 
 	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
@@ -362,5 +373,145 @@ func TestHandleInboundLarkAuthCommandFailure(t *testing.T) {
 	}))
 
 	require.Len(t, sender.sent, 1)
-	assert.Contains(t, sender.sent[0], "失败")
+	assert.Contains(t, sender.sent[0], "检查不了")
+	assert.Equal(t, 0, ag.calls, "授权命令失败也不该进对话")
+}
+
+// v2.13:已授权时 #飞书授权 只说"正常",不再重开 device flow(旧实现每次都会重开)。
+func TestHandleInboundLarkAuthCommandAlreadyAuthorized(t *testing.T) {
+	sender := &fakeSender{}
+	ag := &fakeAgent{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, ag)
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized", UserName: "杨琦"}}
+	h.SetLarkAuthCommander(auth)
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#飞书授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "正常")
+	assert.Contains(t, sender.sent[0], "杨琦")
+	assert.Equal(t, 0, ag.calls)
+}
+
+// v2.13:从未配置过应用 → 明确引导去 Web 首次配置(IM 不能收 App Secret)。
+func TestHandleInboundLarkAuthCommandNeedConfig(t *testing.T) {
+	sender := &fakeSender{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{prompt: LarkAuthPrompt{Status: "none"}})
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#飞书授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "AppID")
+}
+
+// v2.13:#帮助 列出可用命令——上一轮故障里"没人知道有 #飞书授权"。
+func TestHandleInboundHelpCommand(t *testing.T) {
+	sender := &fakeSender{}
+	ag := &fakeAgent{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, ag)
+	h.SetLarkAuthCommander(&fakeLarkAuth{})
+	h.SetMemoryService(&fakeMemorySvc{})
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#帮助", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "#飞书授权")
+	assert.Contains(t, sender.sent[0], "#记住")
+	assert.Equal(t, 0, ag.calls, "帮助命令不该进对话")
+}
+
+// v2.13:前缀匹配容忍多余空格(全等匹配会让"发了没反应"变成新的坑)。
+func TestHandleInboundLarkAuthCommandSpacing(t *testing.T) {
+	sender := &fakeSender{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, &fakeAgent{})
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized"}}
+	h.SetLarkAuthCommander(auth)
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "  #飞书授权  ", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	assert.Equal(t, 1, auth.calls)
+	require.Len(t, sender.sent, 1)
+}
+
+// v2.13:#授权 是 #飞书授权 的别名(用户不会记得全称)。
+func TestHandleInboundLarkAuthAlias(t *testing.T) {
+	sender := &fakeSender{}
+	ag := &fakeAgent{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, ag)
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized", UserName: "杨琦"}}
+	h.SetLarkAuthCommander(auth)
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	assert.Equal(t, 1, auth.calls, "#授权 应触发同一条命令")
+	require.Len(t, sender.sent, 1)
+}
+
+// 不是命令的普通文本不能被前缀规则误伤(例如 "#授权一下那个文档" 这种口语)。
+// 直接测命令匹配器:走完整 pipeline 需要一整套 agent/messages 装配,与本用例无关。
+func TestHandleLarkAuthCommand_DoesNotSwallowChat(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized"}}
+	h.SetLarkAuthCommander(auth)
+
+	for _, text := range []string{"#授权一下那个文档", "#飞书授权码是多少", "帮我看看授权状态"} {
+		_, handled := h.HandleLarkAuthCommand(context.Background(), 7, text, "peer-1")
+		assert.False(t, handled, "%q 不该被当成命令", text)
+	}
+	assert.Equal(t, 0, auth.calls)
+}
+
+// 未装配任何命令服务时,#帮助 也要给一句确定的话,而不是沉默。
+func TestHandleHelpCommand_NoServices(t *testing.T) {
+	sender := &fakeSender{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, &fakeAgent{})
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#帮助", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "没有可用的命令")
+}
+
+// #帮助 的三个别名都要认(用户不会记得是 #help 还是 #命令)。
+func TestHandleHelpCommand_Aliases(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{})
+
+	for _, text := range []string{"#帮助", "#help", "#命令", "  #帮助  "} {
+		reply, handled := h.HandleHelpCommand(text)
+		assert.True(t, handled, "%q 应识别为帮助命令", text)
+		assert.Contains(t, reply, "#飞书授权")
+	}
+
+	for _, text := range []string{"帮助", "#帮", "#帮助我写周报"} {
+		_, handled := h.HandleHelpCommand(text)
+		assert.False(t, handled, "%q 不是帮助命令", text)
+	}
+}
+
+// 全部命令服务都装配时,#帮助 要把反馈指令也列出来(否则用户不知道「有用/不用再提」)。
+func TestHandleHelpCommand_AllServicesListed(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{})
+	h.SetMemoryService(&fakeMemorySvc{})
+	h.SetNoteFeedbackService(&fakeNoteFeedback{})
+
+	reply, handled := h.HandleHelpCommand("#帮助")
+	assert.True(t, handled)
+	for _, want := range []string{"#飞书授权", "#记住", "#我的记忆", "有用"} {
+		assert.Contains(t, reply, want)
+	}
 }

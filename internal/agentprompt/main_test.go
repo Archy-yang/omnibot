@@ -16,7 +16,7 @@ import (
 func TestMainAgentMigration_Golden_WithSubAgents(t *testing.T) {
 	got, err := BuildMainAgentSystemPrompt(true)
 	require.NoError(t, err)
-	want := DefaultSystemPrompt + MainResponseStylePrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt + MainSubscriptionRulesPrompt
+	want := DefaultSystemPrompt + MainResponseStylePrompt + MainChannelCommandsPrompt + MainDelegationRulesPrompt + MainReportingRulesPrompt + MainTaskMgmtToolsPrompt + MainSubscriptionRulesPrompt
 	require.Equal(t, want, got,
 		"主 Agent(有子 Agent)的 registry 组装必须与默认拼接逐字节一致")
 }

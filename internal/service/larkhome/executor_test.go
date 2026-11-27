@@ -95,3 +95,66 @@ func TestExecutor_EmptyBinFallsBackToDefault(t *testing.T) {
 	exec := NewExecutor(mgr, "")
 	assert.Equal(t, "lark-cli", exec.bin, "空 BinPath 应回落 lark-cli")
 }
+
+// v2.13 回归:CLI 失败时不能再把 stderr 砍成 400 字节尾巴。
+// 旧实现让 agent_steps 里只剩下半截 JSON,模型看不到 type/token_missing 与可执行 hint,
+// 于是只会回一句"去 Web 设置"——正是用户走不下去的地方。
+func TestExecutor_ErrorKeepsCLIHint(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "fail-lark-cli")
+	script := "#!/bin/sh\ncat >&2 <<'JSON'\n" +
+		`{"ok":false,"error":{"type":"authentication","subtype":"token_missing","message":"need_user_authorization","hint":"run lark-cli auth login --no-wait --json to get device_code and verification_url"}}` +
+		"\nJSON\nexit 3\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	_, err := exec.RunLarkCLI(context.Background(), 1, "", "docs", "+search")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_missing", "鉴权错误类型必须保留")
+	assert.Contains(t, err.Error(), "verification_url", "可执行 hint 不能被截掉")
+}
+
+// v2.13:错误合并与截断的边界(错误透传依赖这两个纯函数)。
+func TestCombineOutput(t *testing.T) {
+	assert.Equal(t, "err", combineOutput("", "err"), "只有 stderr 时不该带出前导空行")
+	assert.Equal(t, "out", combineOutput("out", ""))
+	assert.Equal(t, "out\nerr", combineOutput("out\n", "\nerr"))
+	assert.Equal(t, "", combineOutput("  \n", "\n"))
+}
+
+func TestTailText(t *testing.T) {
+	assert.Equal(t, "abcdef", tailText("abcdef", 10), "未超限原样返回")
+	assert.Equal(t, "abcdef", tailText("abcdef", 0), "limit<=0 表示不截断")
+	assert.Equal(t, "...def", tailText("abcdef", 3), "超限保留尾部并且要标出省略")
+}
+
+// 超长错误也只保留尾部 2KB:CLI 的 hint 通常在后半段。
+func TestExecutor_ErrorTruncatesToTail(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "noisy-lark-cli")
+	// 先打 3KB 噪声,再打关键错误
+	script := "#!/bin/sh\ni=0\nwhile [ $i -lt 60 ]; do echo 'noise noise noise noise noise noise' >&2; i=$((i+1)); done\n" +
+		"echo 'FINAL_HINT: run auth login' >&2\nexit 3\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	_, err := exec.RunLarkCLI(context.Background(), 1, "", "docs", "+search")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "FINAL_HINT", "尾部关键信息必须保留")
+	assert.Less(t, len(err.Error()), 2300, "总量要有上界")
+}
+
+// 上层 ctx 超时 → 必须返回超时错误(60s 是兜底上限,不是唯一上限)。
+func TestExecutor_CallerDeadlineBoundsRun(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "slow-lark-cli")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nsleep 5\n"), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := exec.RunLarkCLI(ctx, 1, "", "docs")
+	assert.Less(t, time.Since(start), 3*time.Second, "应跟随上层 deadline 返回")
+	assert.Contains(t, err.Error(), "超时")
+}

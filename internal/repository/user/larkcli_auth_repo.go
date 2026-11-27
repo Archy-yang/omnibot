@@ -3,6 +3,8 @@
 package user
 
 import (
+	"context"
+
 	"gorm.io/gorm"
 
 	userdomain "omnibot/internal/domain/user"
@@ -11,6 +13,9 @@ import (
 // LarkCLIAuthRepo 用户级 lark-cli 授权仓储。
 type LarkCLIAuthRepo interface {
 	GetByUserID(userID int64) (*userdomain.LarkCLIAuth, error)
+	// ListByStatus 按状态扫授权行(v2.13 sweeper 驱动收尾用)。
+	// 带 ctx:扫库卡住时不能把 ticker goroutine 永久钉死。
+	ListByStatus(ctx context.Context, status string) ([]*userdomain.LarkCLIAuth, error)
 	Upsert(row *userdomain.LarkCLIAuth) error
 	Update(row *userdomain.LarkCLIAuth) error
 	Delete(userID int64) error
@@ -26,6 +31,12 @@ func (r *larkCLIAuthRepo) GetByUserID(userID int64) (*userdomain.LarkCLIAuth, er
 		return nil, err // gorm.ErrRecordNotFound 原样上抛,service 层做兼容映射
 	}
 	return &row, nil
+}
+
+func (r *larkCLIAuthRepo) ListByStatus(ctx context.Context, status string) ([]*userdomain.LarkCLIAuth, error) {
+	var rows []*userdomain.LarkCLIAuth
+	err := r.db.WithContext(ctx).Where("status = ?", status).Find(&rows).Error
+	return rows, err
 }
 
 func (r *larkCLIAuthRepo) Upsert(row *userdomain.LarkCLIAuth) error {

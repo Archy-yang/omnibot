@@ -18,30 +18,63 @@ import (
 // ---- mocks ----
 
 type mockRepo struct {
-	rows map[int64]*userdomain.LarkCLIAuth
+	rows      map[int64]*userdomain.LarkCLIAuth
+	listErr   error
+	getErr    error
+	upsertErr error
+	updateErr error
 }
 
 func newMockRepo() *mockRepo { return &mockRepo{rows: map[int64]*userdomain.LarkCLIAuth{}} }
 
 func (m *mockRepo) GetByUserID(userID int64) (*userdomain.LarkCLIAuth, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
 	r, ok := m.rows[userID]
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return r, nil
+	// 像真 DB 一样返回副本:服务层改的是自己的对象,只有 Update 成功才会落库。
+	// (直接返回指针会让"写库失败但状态变了"这种错误被 mock 掩盖)
+	cp := *r
+	return &cp, nil
 }
 
-func (m *mockRepo) Upsert(row *userdomain.LarkCLIAuth) error { m.rows[row.UserID] = row; return nil }
-
-func (m *mockRepo) Update(row *userdomain.LarkCLIAuth) error {
-	if _, ok := m.rows[row.UserID]; !ok {
-		return ErrNotFound
+func (m *mockRepo) Upsert(row *userdomain.LarkCLIAuth) error {
+	if m.upsertErr != nil {
+		return m.upsertErr
 	}
 	m.rows[row.UserID] = row
 	return nil
 }
 
+func (m *mockRepo) Update(row *userdomain.LarkCLIAuth) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	if _, ok := m.rows[row.UserID]; !ok {
+		return ErrNotFound
+	}
+	cp := *row
+	m.rows[row.UserID] = &cp
+	return nil
+}
+
 func (m *mockRepo) Delete(userID int64) error { delete(m.rows, userID); return nil }
+
+func (m *mockRepo) ListByStatus(_ context.Context, status string) ([]*userdomain.LarkCLIAuth, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	var out []*userdomain.LarkCLIAuth
+	for _, r := range m.rows {
+		if r.Status == status {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
 
 type mockCLI struct {
 	profileAdds   [][2]string // {profile, appID}
@@ -50,11 +83,16 @@ type mockCLI struct {
 	startUserCode string
 	startDevice   string
 	startErr      error
+	startCalls    int
+	startErrFirst error // 第一次 LoginStart 返回它,之后正常
+	rebuilds      []string
+	rebuildErr    error
 	completed     []string
 	completeErr   error
 	statusOpenID  string
 	statusName    string
 	statusErr     error
+	statusCalls   int
 	logouts       []string
 	// AuthStatus 行为(健康检查)
 	authStatusRes   AuthStatusResult
@@ -62,12 +100,21 @@ type mockCLI struct {
 	authStatusCalls int
 }
 
-func (m *mockCLI) ProfileAdd(_ int64, profile, appID, appSecret string) error {
+func (m *mockCLI) ProfileAdd(_ context.Context, _ int64, profile, appID, appSecret string) error {
 	m.profileAdds = append(m.profileAdds, [2]string{profile, appID})
 	return m.addErr
 }
 
-func (m *mockCLI) LoginStart(_ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
+func (m *mockCLI) ProfileRebuild(_ context.Context, _ int64, profile, appID, appSecret string) error {
+	m.rebuilds = append(m.rebuilds, profile)
+	return m.rebuildErr
+}
+
+func (m *mockCLI) LoginStart(_ context.Context, _ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
+	m.startCalls++
+	if m.startCalls == 1 && m.startErrFirst != nil {
+		return "", "", "", m.startErrFirst
+	}
 	return m.startURL, m.startUserCode, m.startDevice, m.startErr
 }
 
@@ -76,7 +123,8 @@ func (m *mockCLI) LoginComplete(_ context.Context, _ int64, profile, deviceCode 
 	return m.completeErr
 }
 
-func (m *mockCLI) Status(_ int64, profile string) (openID, userName string, err error) {
+func (m *mockCLI) Status(_ context.Context, _ int64, profile string) (openID, userName string, err error) {
+	m.statusCalls++
 	return m.statusOpenID, m.statusName, m.statusErr
 }
 
@@ -85,7 +133,7 @@ func (m *mockCLI) AuthStatus(_ context.Context, _ int64, _ string) (AuthStatusRe
 	return m.authStatusRes, m.authStatusErr
 }
 
-func (m *mockCLI) Logout(_ int64, profile string) error {
+func (m *mockCLI) Logout(_ context.Context, _ int64, profile string) error {
 	m.logouts = append(m.logouts, profile)
 	return nil
 }
@@ -231,6 +279,7 @@ func TestPollAuth_TimeoutStaysPending(t *testing.T) {
 	assert.Equal(t, StatusPending, view.Status)
 	assert.Equal(t, StatusPending, repo.rows[7].Status, "超时≠失败,pending 行原样保留(验证链接仍在)")
 	assert.NotEmpty(t, repo.rows[7].VerifiedURL)
+	assert.Equal(t, 0, cli.statusCalls, "单次探测超时说明用户还没确认,不必再打一次 whoami")
 }
 
 // T3 Disconnect:logout 调用 + 行删除;logout 失败不影响删除;无授权行 → ErrNotFound。
@@ -257,7 +306,7 @@ type logoutErrCLI struct {
 	logoutErr bool
 }
 
-func (m *logoutErrCLI) Logout(_ int64, profile string) error {
+func (m *logoutErrCLI) Logout(_ context.Context, _ int64, profile string) error {
 	m.logouts = append(m.logouts, profile)
 	if m.logoutErr {
 		return errors.New("cli not found")
@@ -426,4 +475,24 @@ func TestRelogin_PreservesIdentityDisplay(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ou_old", repo.rows[7].OpenID, "身份回显应保留")
 	assert.Equal(t, "杨琦", repo.rows[7].UserName)
+}
+
+// v2.13:Web 轮询撞上 sweeper 正在收尾 → 不排队,直接回 DB 现状(下一轮再看)。
+// 若这里改成阻塞等待,前端一次 poll 会被拖到 10s。
+func TestPollAuth_LockBusyReturnsDBState(t *testing.T) {
+	initCrypto(t)
+	repo, cli := newMockRepo(), &mockCLI{startURL: "u", startDevice: "d"}
+	svc := newService(repo, cli)
+	_, err := svc.StartAuth(context.Background(), 7, "cli_x", "s")
+	require.NoError(t, err)
+	cli.completed = nil
+
+	mu := svc.userLock(7)
+	mu.Lock()
+	defer mu.Unlock()
+
+	view, err := svc.PollAuth(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, view.Status)
+	assert.Empty(t, cli.completed, "拿不到锁不得发起 CLI 调用")
 }

@@ -195,6 +195,15 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		d.wechatClawSvc.Start(context.Background())
 	})
 
+	// v2.13:飞书授权收尾驱动。device flow 的"用户确认"发生在浏览器里,我们收不到任何
+	// 回调——旧实现只靠 Web 前端轮询收尾,IM 发起的授权于是永远停在 pending。
+	// sweeper 每 8s 扫一次 pending 行,收尾成功/失败都按发起渠道推回 IM。
+	// notifier 必须在两个渠道都注册完之后注入(它按 channelfactory 查发送实现)。
+	d.larkAuthService.SetNotifier(newChannelAuthNotifier(d.userChannelRepo))
+	backtask.RunDetached("larkauth sweeper", func() {
+		d.larkAuthService.StartSweeper(context.Background())
+	})
+
 	// 长期记忆路由
 	memoryAPIGroup := r.Group("/api/v1/memories")
 	memoryAPIGroup.Use(middleware.AuthRequired(d.jwtSvc))

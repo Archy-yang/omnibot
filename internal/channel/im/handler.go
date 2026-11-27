@@ -17,6 +17,7 @@ import (
 	memorydomain "omnibot/internal/domain/memory"
 	agentpkg "omnibot/internal/service/agent"
 	chatsvc "omnibot/internal/service/chat"
+	larkauthsvc "omnibot/internal/service/larkauth"
 	usersvc "omnibot/internal/service/user"
 	"omnibot/pkg/logger"
 )
@@ -184,28 +185,22 @@ func (h *Handler) HandleInbound(ctx context.Context, in InboundMessage) error {
 		}
 	}
 
-	// 飞书授权重发(19 号补强):IM 里发「#飞书授权」拿验证链接——
-	// 之前授权失效只能去 web 重连,且 IM 的 auth 子命令被工具白名单挡死,用户无路可走。
-	if h.larkAuthSvc != nil && text == "#飞书授权" {
-		url, code, err := h.larkAuthSvc.Relogin(ctx, userID)
-		reply := ""
-		switch {
-		case err != nil:
-			logger.ErrorWithFields("im: lark relogin failed",
-				zap.String("channel", h.opts.ChannelType),
-				zap.Int64("user_id", userID), zap.Error(err))
-			reply = "发起飞书授权失败，请稍后在 Web 设置里重试。"
-		case url == "":
-			reply = "已发起授权，但没拿到验证链接，请稍后在 Web 设置里重试。"
-		case code != "":
-			reply = fmt.Sprintf("飞书授权需要你本人确认：\n%s\n\n用户码：%s\n确认后回来告诉我一声即可。", url, code)
-		default:
-			reply = fmt.Sprintf("飞书授权需要你本人确认：\n%s\n\n确认后回来告诉我一声即可。", url)
-		}
+	// 飞书授权(v2.13):IM 里发「#飞书授权」= 幂等的状态查询 + 发起/复用。
+	// 收尾由后台 sweeper 完成,用户确认后不用再发命令。
+	if reply, handled := h.HandleLarkAuthCommand(ctx, userID, text, in.OpenID); handled {
 		if sendErr := h.opts.Sender.SendText(ctx, in.OpenID, reply); sendErr != nil {
 			logger.WarnWithFields("im: send lark auth reply failed",
 				zap.String("channel", h.opts.ChannelType),
 				zap.String("open_id", in.OpenID), zap.Error(sendErr))
+		}
+		return nil
+	}
+
+	// 命令帮助:解决"用户和模型都不知道有哪些井号命令"的问题
+	if reply, handled := h.HandleHelpCommand(text); handled {
+		if sendErr := h.opts.Sender.SendText(ctx, in.OpenID, reply); sendErr != nil {
+			logger.WarnWithFields("im: send help reply failed",
+				zap.String("channel", h.opts.ChannelType), zap.Error(sendErr))
 		}
 		return nil
 	}
@@ -325,6 +320,85 @@ func (h *Handler) HandleNoteFeedback(userID int64, text string) (string, bool) {
 		return "最近没有可反馈的主动消息。", true
 	}
 	return reply, true
+}
+
+// larkAuthCommandPrefixes 授权命令别名。用前缀匹配而不是全等:
+// 用户手打容易多空格/少空格,全等匹配会让"发了没反应"成为新的坑。
+var larkAuthCommandPrefixes = []string{"#飞书授权", "#授权"}
+
+// HandleLarkAuthCommand 飞书授权命令(v2.13):幂等的「查状态 + 发起/复用」。
+//
+// 与旧实现(每次 Relogin 都重开一个 device flow)的区别:
+//   - 已授权 → 直接说"正常",不去动任何凭证
+//   - pending 且未过期 → 重发同一条链接(用户连发几次不会被冲掉)
+//   - 过期/失效 → 换一条新链接
+//
+// 收尾由后台 sweeper 完成,所以回复里明确写"确认后我会自动完成"。
+func (h *Handler) HandleLarkAuthCommand(ctx context.Context, userID int64, text, target string) (string, bool) {
+	if h.larkAuthSvc == nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(text)
+	matched := false
+	for _, prefix := range larkAuthCommandPrefixes {
+		if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return "", false
+	}
+
+	// 授权命令可能触发 profile add / device flow(最坏几十秒),给一个明确上限,
+	// 不能让它把 IM 消息处理线程钉住。
+	authCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	prompt, err := h.larkAuthSvc.EnsureAuth(authCtx, userID, h.opts.ChannelType, target)
+	if err != nil {
+		logger.ErrorWithFields("im: lark ensure auth failed",
+			zap.String("channel", h.opts.ChannelType),
+			zap.Int64("user_id", userID), zap.Error(err))
+		return larkauthsvc.BuildAuthProbeFailed(), true
+	}
+	switch prompt.Status {
+	case "authorized":
+		return larkauthsvc.BuildAuthAlreadyOK(prompt.UserName), true
+	case "none", "":
+		return larkauthsvc.BuildAuthNeedConfig(), true
+	default:
+		return larkauthsvc.BuildAuthPending(prompt.VerifyURL, prompt.UserCode, prompt.ExpiresIn/60), true
+	}
+}
+
+// HandleHelpCommand 命令帮助:把当前渠道可用的井号命令列出来。
+// 背景(v2.13):上一轮故障里用户问"是不是有井号开头的命令",而模型并不知道
+// #飞书授权 的存在,只能把人往 Web 引。帮助命令是最便宜的止血。
+func (h *Handler) HandleHelpCommand(text string) (string, bool) {
+	switch strings.TrimSpace(text) {
+	case "#帮助", "#help", "#命令":
+	default:
+		return "", false
+	}
+	lines := []string{"我支持这些命令（直接发给我就行）："}
+	if h.larkAuthSvc != nil {
+		lines = append(lines, "#飞书授权 · 查看飞书授权状态；失效时给验证链接")
+	}
+	if h.memoryService != nil {
+		lines = append(lines,
+			"#记住 <内容> · 让我长期记住一件事",
+			"#我的记忆 · 看看我记住了什么",
+			"#清空记忆 · 忘掉全部记忆",
+			"#删除记忆 <编号> · 删掉某一条",
+		)
+	}
+	if h.noteFeedbackSvc != nil {
+		lines = append(lines, "「有用」/「不用再提」· 给主动消息打分")
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "（当前没有可用的命令）")
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 // handleMemoryCommand 记忆管理命令(与微信命令体系对齐,PRD AC4.3)。

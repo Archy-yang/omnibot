@@ -18,18 +18,25 @@ import (
 
 // LarkCLI lark-cli 的窄接口(真实实现 *cliReal,单测 mock)。
 // userID 贯穿所有方法:27 号 DB 物化后,执行必须按用户 hydrate/回写(Executor 依赖它)。
+//
+// 全部方法带 ctx(v2.13):sweeper 是后台 goroutine,任何一处吃 Background 都会让
+// Gate 槽位无法释放——超时只能取消 ctx,不能杀 goroutine。
 type LarkCLI interface {
-	ProfileAdd(userID int64, profile, appID, appSecret string) error
+	// ProfileAdd 幂等写入 profile:同名同应用直接复用,不删除(删除会清空凭证)。
+	ProfileAdd(ctx context.Context, userID int64, profile, appID, appSecret string) error
+	// ProfileRebuild 删除重建 profile(会清空该 profile 的 token),
+	// 仅在确证凭据损坏(device flow 报 missing client_secret)时调用。
+	ProfileRebuild(ctx context.Context, userID int64, profile, appID, appSecret string) error
 	// LoginStart 发起 device flow:返回验证地址/用户码/设备码(--no-wait --json)。
-	LoginStart(userID int64, profile, domains string) (verifyURL, userCode, deviceCode string, err error)
+	LoginStart(ctx context.Context, userID int64, profile, domains string) (verifyURL, userCode, deviceCode string, err error)
 	// LoginComplete 收尾:轮询至用户确认或超时(ctx 控制)。
 	LoginComplete(ctx context.Context, userID int64, profile, deviceCode string) error
 	// Status 授权身份回显(whoami)。
-	Status(userID int64, profile string) (openID, userName string, err error)
+	Status(ctx context.Context, userID int64, profile string) (openID, userName string, err error)
 	// AuthStatus 真实授权态(auth status --json):CLI 里是否真的有可用 user token。
 	// 这是"数据库状态可能过期"的唯一权威判据——DB 只记录我们上次收尾的结果。
 	AuthStatus(ctx context.Context, userID int64, profile string) (AuthStatusResult, error)
-	Logout(userID int64, profile string) error
+	Logout(ctx context.Context, userID int64, profile string) error
 }
 
 // Runner 统一执行入口(27 号 larkhome.Executor;nil = 直跑本地 CLI,单机 volume 兜底形态)。
@@ -40,7 +47,6 @@ type Runner interface {
 // CLIConfig 真实实现配置。
 type CLIConfig struct {
 	BinPath         string        // 默认 lark-cli
-	Domains         string        // LoginStart 的 --domain,默认 all
 	CompleteTimeout time.Duration // LoginComplete 单次收尾超时,默认 5s(惰性收尾节奏)
 }
 
@@ -49,13 +55,6 @@ func (c CLIConfig) bin() string {
 		return c.BinPath
 	}
 	return "lark-cli"
-}
-
-func (c CLIConfig) domains() string {
-	if c.Domains != "" {
-		return c.Domains
-	}
-	return "all"
 }
 
 func (c CLIConfig) completeTimeout() time.Duration {
@@ -103,25 +102,76 @@ func (c *cliReal) run(ctx context.Context, userID int64, stdin string, args ...s
 	return out.String(), nil
 }
 
-// ProfileAdd 幂等写入 profile:**必须保证 secret 落盘**。
-// 旧实现把 "already" 错误静默当成功——profile 已存在时 secret 不会更新,
-// 存量壳 profile(如宿主迁移来的、secret 在 macOS Keychain 里的)会让
-// device flow 报 "missing required parameter: client_secret"(2026-10-18 实测)。
-// 故遇 "already" 一律删除重建,保证凭据必写入。
-func (c *cliReal) ProfileAdd(userID int64, profile, appID, appSecret string) error {
-	add := func() error {
-		_, err := c.run(context.Background(), userID, appSecret, "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin")
+// ProfileAdd 幂等写入 profile,已存在时**默认复用**(v2.13 P2)。
+//
+// 演进过程:
+//   - 旧实现把 "already" 静默当成功 → 存量壳 profile(secret 在 macOS Keychain 里)
+//     让 device flow 报 "missing required parameter: client_secret"(2026-10-18 实测)
+//   - 于是改成"遇 already 一律删除重建" → 但 `profile remove` 会清空该 profile 的
+//     全部凭证(CLI help 原文 "clears all associated credentials"),用户在授权中
+//     反复发命令就会被打回原点
+//   - 现在:同名同 appId → 直接复用,secret 缺失由 startAuth 的惰性修复兜底;
+//     只有 appId 变了才立即重建(否则 device flow 会指向旧应用)
+func (c *cliReal) ProfileAdd(ctx context.Context, userID int64, profile, appID, appSecret string) error {
+	err := c.addProfile(ctx, userID, profile, appID, appSecret)
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "already") {
 		return err
 	}
-	err := add()
-	if err == nil || !strings.Contains(err.Error(), "already") {
-		return err
+	// 已存在:先确认是不是同一个应用。读不到就按"同一个"处理(宁可复用,不做破坏性重建)。
+	if existing, e := c.profileAppID(ctx, userID, profile); e == nil && existing != "" && existing != appID {
+		return c.ProfileRebuild(ctx, userID, profile, appID, appSecret)
 	}
-	// 已存在(同名 profile / 同 app-id):删除重建
-	if _, rmErr := c.run(context.Background(), userID, "", "profile", "remove", profile); rmErr != nil {
-		return fmt.Errorf("lark-cli profile remove 失败(重授权前清理 %s): %w", profile, rmErr)
+	return nil
+}
+
+// ProfileRebuild 删除后重建 profile。会清空该 profile 下已有的 token,
+// 只在"确证凭据损坏"时调用(startAuth 遇到 missing client_secret)。
+func (c *cliReal) ProfileRebuild(ctx context.Context, userID int64, profile, appID, appSecret string) error {
+	if _, rmErr := c.run(ctx, userID, "", "profile", "remove", profile); rmErr != nil {
+		return fmt.Errorf("lark-cli profile remove 失败(重建 %s): %w", profile, rmErr)
 	}
-	return add()
+	return c.addProfile(ctx, userID, profile, appID, appSecret)
+}
+
+// addProfile 只执行 profile add(secret 走 stdin,不出现在 argv 里)。
+func (c *cliReal) addProfile(ctx context.Context, userID int64, profile, appID, appSecret string) error {
+	_, err := c.run(ctx, userID, appSecret, "profile", "add", "--name", profile, "--app-id", appID, "--app-secret-stdin")
+	return err
+}
+
+// profileAppID 查该 profile 当前绑定的 appId(profile list --json)。
+// 输出是数组,按 name 找;找不到返回空串(调用方按"同应用"处理)。
+func (c *cliReal) profileAppID(ctx context.Context, userID int64, profile string) (string, error) {
+	out, err := c.run(ctx, userID, "", "profile", "list")
+	if err != nil {
+		return "", err
+	}
+	var list []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &list); err != nil {
+		return "", err
+	}
+	for _, item := range list {
+		name := pickString(item, "name", "profile")
+		appID := pickString(item, "appId", "app_id")
+		// CLI 对没有 name 的条目会用 appId 顶替 name,这里两种都能匹配上
+		if name == profile || appID == profile {
+			return appID, nil
+		}
+	}
+	return "", nil
+}
+
+// isMissingSecretError 判断是否是"profile 里没有 client_secret"。
+// 这是 lark-cli 自己的错误文案(2026-10-18 实测),不是我们猜的关键词。
+func isMissingSecretError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "client_secret") || strings.Contains(msg, "app_secret")
 }
 
 // AuthStatusResult lark-cli auth status --json 的关键字段。
@@ -146,8 +196,8 @@ func pickString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func (c *cliReal) LoginStart(userID int64, profile, domains string) (string, string, string, error) {
-	out, err := c.run(context.Background(), userID, "", "--profile", profile, "auth", "login", "--no-wait", "--json", "--domain", domains)
+func (c *cliReal) LoginStart(ctx context.Context, userID int64, profile, domains string) (string, string, string, error) {
+	out, err := c.run(ctx, userID, "", "--profile", profile, "auth", "login", "--no-wait", "--json", "--domain", domains)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -192,8 +242,8 @@ func (c *cliReal) LoginComplete(ctx context.Context, userID int64, profile, devi
 	return err
 }
 
-func (c *cliReal) Status(userID int64, profile string) (string, string, error) {
-	out, err := c.run(context.Background(), userID, "", "--profile", profile, "whoami")
+func (c *cliReal) Status(ctx context.Context, userID int64, profile string) (string, string, error) {
+	out, err := c.run(ctx, userID, "", "--profile", profile, "whoami")
 	if err != nil {
 		return "", "", err
 	}
@@ -240,7 +290,7 @@ func (c *cliReal) AuthStatus(ctx context.Context, userID int64, profile string) 
 	return res, nil
 }
 
-func (c *cliReal) Logout(userID int64, profile string) error {
-	_, err := c.run(context.Background(), userID, "", "--profile", profile, "auth", "logout")
+func (c *cliReal) Logout(ctx context.Context, userID int64, profile string) error {
+	_, err := c.run(ctx, userID, "", "--profile", profile, "auth", "logout")
 	return err
 }
