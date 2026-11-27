@@ -441,3 +441,46 @@ func TestHandleInboundLarkAuthCommandSpacing(t *testing.T) {
 	assert.Equal(t, 1, auth.calls)
 	require.Len(t, sender.sent, 1)
 }
+
+// v2.13:#授权 是 #飞书授权 的别名(用户不会记得全称)。
+func TestHandleInboundLarkAuthAlias(t *testing.T) {
+	sender := &fakeSender{}
+	ag := &fakeAgent{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, ag)
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized", UserName: "杨琦"}}
+	h.SetLarkAuthCommander(auth)
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#授权", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	assert.Equal(t, 1, auth.calls, "#授权 应触发同一条命令")
+	require.Len(t, sender.sent, 1)
+}
+
+// 不是命令的普通文本不能被前缀规则误伤(例如 "#授权一下那个文档" 这种口语)。
+// 直接测命令匹配器:走完整 pipeline 需要一整套 agent/messages 装配,与本用例无关。
+func TestHandleLarkAuthCommand_DoesNotSwallowChat(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	auth := &fakeLarkAuth{prompt: LarkAuthPrompt{Status: "authorized"}}
+	h.SetLarkAuthCommander(auth)
+
+	for _, text := range []string{"#授权一下那个文档", "#飞书授权码是多少", "帮我看看授权状态"} {
+		_, handled := h.HandleLarkAuthCommand(context.Background(), 7, text, "peer-1")
+		assert.False(t, handled, "%q 不该被当成命令", text)
+	}
+	assert.Equal(t, 0, auth.calls)
+}
+
+// 未装配任何命令服务时,#帮助 也要给一句确定的话,而不是沉默。
+func TestHandleHelpCommand_NoServices(t *testing.T) {
+	sender := &fakeSender{}
+	h := newPipelineHandler(&fakeBinding{resolveBound: true, resolveUserID: 7}, sender, &fakeMessages{}, &fakeAgent{})
+
+	require.NoError(t, h.HandleInbound(context.Background(), InboundMessage{
+		OpenID: "peer-1", Text: "#帮助", MsgID: "m-1", ChatType: "p2p",
+	}))
+
+	require.Len(t, sender.sent, 1)
+	assert.Contains(t, sender.sent[0], "没有可用的命令")
+}

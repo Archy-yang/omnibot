@@ -18,7 +18,8 @@ import (
 // ---- mocks ----
 
 type mockRepo struct {
-	rows map[int64]*userdomain.LarkCLIAuth
+	rows    map[int64]*userdomain.LarkCLIAuth
+	listErr error
 }
 
 func newMockRepo() *mockRepo { return &mockRepo{rows: map[int64]*userdomain.LarkCLIAuth{}} }
@@ -44,6 +45,9 @@ func (m *mockRepo) Update(row *userdomain.LarkCLIAuth) error {
 func (m *mockRepo) Delete(userID int64) error { delete(m.rows, userID); return nil }
 
 func (m *mockRepo) ListByStatus(_ context.Context, status string) ([]*userdomain.LarkCLIAuth, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	var out []*userdomain.LarkCLIAuth
 	for _, r := range m.rows {
 		if r.Status == status {
@@ -69,6 +73,7 @@ type mockCLI struct {
 	statusOpenID  string
 	statusName    string
 	statusErr     error
+	statusCalls   int
 	logouts       []string
 	// AuthStatus 行为(健康检查)
 	authStatusRes   AuthStatusResult
@@ -100,6 +105,7 @@ func (m *mockCLI) LoginComplete(_ context.Context, _ int64, profile, deviceCode 
 }
 
 func (m *mockCLI) Status(_ context.Context, _ int64, profile string) (openID, userName string, err error) {
+	m.statusCalls++
 	return m.statusOpenID, m.statusName, m.statusErr
 }
 
@@ -254,6 +260,7 @@ func TestPollAuth_TimeoutStaysPending(t *testing.T) {
 	assert.Equal(t, StatusPending, view.Status)
 	assert.Equal(t, StatusPending, repo.rows[7].Status, "超时≠失败,pending 行原样保留(验证链接仍在)")
 	assert.NotEmpty(t, repo.rows[7].VerifiedURL)
+	assert.Equal(t, 0, cli.statusCalls, "单次探测超时说明用户还没确认,不必再打一次 whoami")
 }
 
 // T3 Disconnect:logout 调用 + 行删除;logout 失败不影响删除;无授权行 → ErrNotFound。
@@ -449,4 +456,24 @@ func TestRelogin_PreservesIdentityDisplay(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ou_old", repo.rows[7].OpenID, "身份回显应保留")
 	assert.Equal(t, "杨琦", repo.rows[7].UserName)
+}
+
+// v2.13:Web 轮询撞上 sweeper 正在收尾 → 不排队,直接回 DB 现状(下一轮再看)。
+// 若这里改成阻塞等待,前端一次 poll 会被拖到 10s。
+func TestPollAuth_LockBusyReturnsDBState(t *testing.T) {
+	initCrypto(t)
+	repo, cli := newMockRepo(), &mockCLI{startURL: "u", startDevice: "d"}
+	svc := newService(repo, cli)
+	_, err := svc.StartAuth(context.Background(), 7, "cli_x", "s")
+	require.NoError(t, err)
+	cli.completed = nil
+
+	mu := svc.userLock(7)
+	mu.Lock()
+	defer mu.Unlock()
+
+	view, err := svc.PollAuth(context.Background(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, view.Status)
+	assert.Empty(t, cli.completed, "拿不到锁不得发起 CLI 调用")
 }

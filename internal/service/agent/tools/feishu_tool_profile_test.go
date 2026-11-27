@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -159,4 +160,56 @@ func TestFeishuTool_NeedConfig(t *testing.T) {
 		map[string]interface{}{"args": []interface{}{"docs", "+search"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AppID")
+}
+
+// ---- v2.13 授权失败识别:只认 CLI 的结构化错误类型,不做语义猜测 ----
+
+func TestIsFeishuAuthFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"CLI 提示需要用户授权", errors.New(`need_user_authorization (user: ou_x)`), true},
+		{"subtype token_missing", errors.New(`{"error":{"type":"authentication","subtype":"token_missing"}}`), true},
+		{"type authentication", errors.New(`{ "type": "authentication", "message": "x" }`), true},
+		{"refresh token 过期", errors.New("refresh_token expired for ou_x, clearing"), true},
+		{"网络错误", errors.New("dial tcp: connection refused"), false},
+		{"参数错误", errors.New("unknown flag \"--base\""), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isFeishuAuthFailure(c.err))
+		})
+	}
+}
+
+// 授权服务刚恢复 → 让模型直接重试,不再给链接。
+func TestFeishuTool_AuthJustRecovered(t *testing.T) {
+	bin := writeFeishuStub(t, profileEchoStub)
+	tool := CreateFeishuTool(FeishuCLIConfig{
+		BinPath:     bin,
+		Resolver:    &stubResolver{err: larkauth.ErrNotAuthorized},
+		AuthEnsurer: &stubAuthEnsurer{prompt: AuthPrompt{Status: "authorized"}},
+	})
+	_, err := tool.Execute(toolcore.WithUserID(context.Background(), 7),
+		map[string]interface{}{"args": []interface{}{"docs", "+search"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "刚刚恢复")
+}
+
+// 自动发起本身失败(解密失败/CLI 挂了)→ 退回可读文案,不能把内部错误抛给用户。
+func TestFeishuTool_EnsureErrorFallsBackToGuide(t *testing.T) {
+	bin := writeFeishuStub(t, profileEchoStub)
+	tool := CreateFeishuTool(FeishuCLIConfig{
+		BinPath:     bin,
+		Resolver:    &stubResolver{err: larkauth.ErrNotAuthorized},
+		AuthEnsurer: &stubAuthEnsurer{err: errors.New("larkauth: 解密 app secret 失败")},
+	})
+	_, err := tool.Execute(toolcore.WithUserID(context.Background(), 7),
+		map[string]interface{}{"args": []interface{}{"docs", "+search"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "设置-飞书授权", "兜底文案要给出可执行出口")
+	assert.NotContains(t, err.Error(), "解密", "内部错误细节不外泄")
 }

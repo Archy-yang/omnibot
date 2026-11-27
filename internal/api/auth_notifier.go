@@ -15,15 +15,21 @@ import (
 	"fmt"
 
 	channelfactory "omnibot/internal/channel"
-	userrepo "omnibot/internal/repository/user"
+	userdomain "omnibot/internal/domain/user"
 )
+
+// userChannelLister 只需要"按用户查绑定"这一个能力(接口最小化,便于单测)。
+// *userrepo.GormUserChannelRepository 满足它。
+type userChannelLister interface {
+	GetByUserID(userID int64) ([]*userdomain.UserChannel, error)
+}
 
 // channelAuthNotifier 实现 larkauth.Notifier。
 type channelAuthNotifier struct {
-	channels userrepo.UserChannelRepository
+	channels userChannelLister
 }
 
-func newChannelAuthNotifier(channels userrepo.UserChannelRepository) *channelAuthNotifier {
+func newChannelAuthNotifier(channels userChannelLister) *channelAuthNotifier {
 	return &channelAuthNotifier{channels: channels}
 }
 

@@ -113,3 +113,33 @@ func TestExecutor_ErrorKeepsCLIHint(t *testing.T) {
 	assert.Contains(t, err.Error(), "token_missing", "鉴权错误类型必须保留")
 	assert.Contains(t, err.Error(), "verification_url", "可执行 hint 不能被截掉")
 }
+
+// v2.13:错误合并与截断的边界(错误透传依赖这两个纯函数)。
+func TestCombineOutput(t *testing.T) {
+	assert.Equal(t, "err", combineOutput("", "err"), "只有 stderr 时不该带出前导空行")
+	assert.Equal(t, "out", combineOutput("out", ""))
+	assert.Equal(t, "out\nerr", combineOutput("out\n", "\nerr"))
+	assert.Equal(t, "", combineOutput("  \n", "\n"))
+}
+
+func TestTailText(t *testing.T) {
+	assert.Equal(t, "abcdef", tailText("abcdef", 10), "未超限原样返回")
+	assert.Equal(t, "abcdef", tailText("abcdef", 0), "limit<=0 表示不截断")
+	assert.Equal(t, "...def", tailText("abcdef", 3), "超限保留尾部并且要标出省略")
+}
+
+// 超长错误也只保留尾部 2KB:CLI 的 hint 通常在后半段。
+func TestExecutor_ErrorTruncatesToTail(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "noisy-lark-cli")
+	// 先打 3KB 噪声,再打关键错误
+	script := "#!/bin/sh\ni=0\nwhile [ $i -lt 60 ]; do echo 'noise noise noise noise noise noise' >&2; i=$((i+1)); done\n" +
+		"echo 'FINAL_HINT: run auth login' >&2\nexit 3\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	_, err := exec.RunLarkCLI(context.Background(), 1, "", "docs", "+search")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "FINAL_HINT", "尾部关键信息必须保留")
+	assert.Less(t, len(err.Error()), 2300, "总量要有上界")
+}
