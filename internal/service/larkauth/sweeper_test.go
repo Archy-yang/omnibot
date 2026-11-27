@@ -275,3 +275,113 @@ func TestBuildAuthPending_IncludesCodeAndTTL(t *testing.T) {
 	assert.True(t, strings.Contains(text, "CODE-9"))
 	assert.True(t, strings.Contains(text, "8 分钟"))
 }
+
+// ---- 错误分支 ----
+
+// 读该行失败(DB 抖动)→ 本轮放弃,不改状态。
+func TestSweepOne_GetRowError(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{}
+	seedPending(t, repo, cli, 7)
+	repo.getErr = errors.New("db down")
+
+	svc := newService(repo, cli)
+	svc.sweepOne(context.Background(), 7)
+	assert.Equal(t, StatusPending, repo.rows[7].Status)
+	assert.Empty(t, cli.completed)
+}
+
+// 过期需要换发,但密文坏了 → 不动手(不删行、不标 failed),只记日志等人工处理。
+func TestSweepOne_ExpiredDecryptError(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{}
+	seedPending(t, repo, cli, 7)
+	repo.rows[7].ExpiresAt = time.Now().Add(-time.Minute)
+	repo.rows[7].AppSecretEnc = "broken-ciphertext"
+
+	svc := newService(repo, cli)
+	svc.sweepOne(context.Background(), 7)
+
+	assert.Equal(t, StatusPending, repo.rows[7].Status, "解密失败不应把用户打成 failed")
+	assert.Equal(t, 1, cli.startCalls, "不得发起新流程")
+}
+
+// 过期换发本身失败(CLI 挂了)→ 标 failed 并提示手动重来,不无限重试。
+func TestSweepOne_ReissueFailureMarksFailed(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{}
+	seedPending(t, repo, cli, 7)
+	repo.rows[7].ExpiresAt = time.Now().Add(-time.Minute)
+	cli.startErr = errors.New("lark-cli auth login failed")
+
+	svc := newService(repo, cli)
+	n := newFakeNotifier()
+	svc.SetNotifier(n)
+
+	svc.sweepOne(context.Background(), 7)
+
+	assert.Equal(t, StatusFailed, repo.rows[7].Status)
+	require.Len(t, n.calls, 1)
+	assert.Contains(t, n.calls[0].text, "#飞书授权")
+}
+
+// ---- 循环本体 ----
+
+// StartSweeper 会真的按间隔跑,并且 ctx 取消后返回(不留后台 goroutine)。
+func TestStartSweeper_TicksAndStopsOnCancel(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{statusOpenID: "ou_done"}
+	seedPending(t, repo, cli, 7)
+
+	svc := newService(repo, cli)
+	svc.interval = 10 * time.Millisecond
+	n := newFakeNotifier()
+	svc.SetNotifier(n)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.StartSweeper(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-n.notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sweeper 应按间隔扫描到 pending 行并完成收尾")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ctx 取消后 StartSweeper 必须返回")
+	}
+}
+
+// 收尾调用本身出错(写库失败)→ 只记日志,状态保持 pending,下一轮还能重试。
+func TestSweepOne_PollErrorKeepsPending(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{statusOpenID: "ou_done"}
+	seedPending(t, repo, cli, 7)
+	repo.updateErr = errors.New("db write failed")
+
+	svc := newService(repo, cli)
+	n := newFakeNotifier()
+	svc.SetNotifier(n)
+	svc.sweepOne(context.Background(), 7)
+
+	assert.Equal(t, StatusPending, repo.rows[7].Status)
+	assert.Empty(t, n.calls, "收尾失败不该给用户发成功消息")
+}
+
+// 二次过期需要标 failed,但写库失败 → 不改内存态、不发消息(下一轮再试)。
+func TestSweepOne_ExpiredUpdateError(t *testing.T) {
+	repo, cli := newMockRepo(), &mockCLI{}
+	seedPending(t, repo, cli, 7)
+	repo.rows[7].ExpiresAt = time.Now().Add(-time.Minute)
+	repo.rows[7].ReissueCount = maxReissue
+	repo.updateErr = errors.New("db write failed")
+
+	svc := newService(repo, cli)
+	n := newFakeNotifier()
+	svc.SetNotifier(n)
+	svc.sweepOne(context.Background(), 7)
+
+	assert.Empty(t, n.calls, "状态没落库就不要告诉用户已经失败")
+}

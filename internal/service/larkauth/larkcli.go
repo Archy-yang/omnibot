@@ -47,7 +47,6 @@ type Runner interface {
 // CLIConfig 真实实现配置。
 type CLIConfig struct {
 	BinPath         string        // 默认 lark-cli
-	Domains         string        // LoginStart 的 --domain,默认 all
 	CompleteTimeout time.Duration // LoginComplete 单次收尾超时,默认 5s(惰性收尾节奏)
 }
 
@@ -56,13 +55,6 @@ func (c CLIConfig) bin() string {
 		return c.BinPath
 	}
 	return "lark-cli"
-}
-
-func (c CLIConfig) domains() string {
-	if c.Domains != "" {
-		return c.Domains
-	}
-	return "all"
 }
 
 func (c CLIConfig) completeTimeout() time.Duration {

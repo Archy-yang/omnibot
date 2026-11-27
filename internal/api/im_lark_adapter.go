@@ -8,13 +8,19 @@ import (
 	larkauthSvc "omnibot/internal/service/larkauth"
 )
 
+// larkAuthEnsurer 授权服务在本文件所需的最小能力(接口最小化,便于单测)。
+// *larkauth.Service 满足它。
+type larkAuthEnsurer interface {
+	EnsureAuth(ctx context.Context, userID int64, channel, target string) (larkauthSvc.View, error)
+}
+
 // imLarkAuthAdapter 把 larkauth.Service 适配成 IM pipeline 的窄面:
 // IM 只需要「幂等地查/发起授权」,不关心 service 的其它能力。
 type imLarkAuthAdapter struct {
-	svc *larkauthSvc.Service
+	svc larkAuthEnsurer
 }
 
-func newIMLarkAuthAdapter(svc *larkauthSvc.Service) imLarkAuthAdapter {
+func newIMLarkAuthAdapter(svc larkAuthEnsurer) imLarkAuthAdapter {
 	return imLarkAuthAdapter{svc: svc}
 }
 
@@ -40,10 +46,10 @@ var _ im.LarkAuthCommander = imLarkAuthAdapter{}
 // toolsLarkAuthAdapter 把 larkauth.Service 适配成 feishu 工具的 AuthEnsurer:
 // 工具层只看 status/verify_url,不依赖授权服务的内部结构。
 type toolsLarkAuthAdapter struct {
-	svc *larkauthSvc.Service
+	svc larkAuthEnsurer
 }
 
-func newToolsLarkAuthAdapter(svc *larkauthSvc.Service) toolsLarkAuthAdapter {
+func newToolsLarkAuthAdapter(svc larkAuthEnsurer) toolsLarkAuthAdapter {
 	return toolsLarkAuthAdapter{svc: svc}
 }
 

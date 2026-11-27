@@ -484,3 +484,34 @@ func TestHandleHelpCommand_NoServices(t *testing.T) {
 	require.Len(t, sender.sent, 1)
 	assert.Contains(t, sender.sent[0], "没有可用的命令")
 }
+
+// #帮助 的三个别名都要认(用户不会记得是 #help 还是 #命令)。
+func TestHandleHelpCommand_Aliases(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{})
+
+	for _, text := range []string{"#帮助", "#help", "#命令", "  #帮助  "} {
+		reply, handled := h.HandleHelpCommand(text)
+		assert.True(t, handled, "%q 应识别为帮助命令", text)
+		assert.Contains(t, reply, "#飞书授权")
+	}
+
+	for _, text := range []string{"帮助", "#帮", "#帮助我写周报"} {
+		_, handled := h.HandleHelpCommand(text)
+		assert.False(t, handled, "%q 不是帮助命令", text)
+	}
+}
+
+// 全部命令服务都装配时,#帮助 要把反馈指令也列出来(否则用户不知道「有用/不用再提」)。
+func TestHandleHelpCommand_AllServicesListed(t *testing.T) {
+	h := newPipelineHandler(&fakeBinding{}, &fakeSender{}, &fakeMessages{}, &fakeAgent{})
+	h.SetLarkAuthCommander(&fakeLarkAuth{})
+	h.SetMemoryService(&fakeMemorySvc{})
+	h.SetNoteFeedbackService(&fakeNoteFeedback{})
+
+	reply, handled := h.HandleHelpCommand("#帮助")
+	assert.True(t, handled)
+	for _, want := range []string{"#飞书授权", "#记住", "#我的记忆", "有用"} {
+		assert.Contains(t, reply, want)
+	}
+}

@@ -47,8 +47,8 @@ type Notifier interface {
 // StartSweeper 启动收尾循环(进程级,阻塞;应在 RunDetached 中运行)。
 func (s *Service) StartSweeper(ctx context.Context) {
 	logger.InfoWithFields("larkauth: sweeper started",
-		zap.Duration("interval", sweepInterval), zap.Duration("budget", s.budget))
-	backtask.RunTickerLoop(ctx, sweepInterval, func(ctx context.Context) {
+		zap.Duration("interval", s.interval), zap.Duration("budget", s.budget))
+	backtask.RunTickerLoop(ctx, s.interval, func(ctx context.Context) {
 		s.SweepOnce(ctx)
 	})
 }

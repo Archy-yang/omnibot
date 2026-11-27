@@ -127,3 +127,41 @@ func TestLarkCLIAuthRepo_UpdateKeepsNotifyBinding(t *testing.T) {
 	assert.Equal(t, "wechat_claw", got.NotifyChannel, "收尾后仍要记得该推到哪个渠道")
 	assert.Equal(t, "peer-9", got.NotifyTarget)
 }
+
+// 首次落库走 Create 分支;再次 Upsert 走覆盖分支。
+func TestLarkCLIAuthRepo_UpsertCreateThenUpdate(t *testing.T) {
+	repo := NewLarkCLIAuthRepo(setupAuthTestDB(t))
+
+	first := &domain.LarkCLIAuth{
+		UserID: 7, ProfileName: "user-7", AppID: "cli_old", AppSecretEnc: "enc:x",
+		Status: domain.LarkAuthStatusPending,
+	}
+	require.NoError(t, repo.Upsert(first))
+
+	second := &domain.LarkCLIAuth{
+		UserID: 7, ProfileName: "user-7", AppID: "cli_new", AppSecretEnc: "enc:y",
+		Status: domain.LarkAuthStatusNeedRelogin,
+	}
+	require.NoError(t, repo.Upsert(second))
+
+	got, err := repo.GetByUserID(7)
+	require.NoError(t, err)
+	assert.Equal(t, "cli_new", got.AppID, "Upsert 应覆盖同一 user_id 的行")
+	assert.Equal(t, domain.LarkAuthStatusNeedRelogin, got.Status)
+}
+
+func TestLarkCLIAuthRepo_GetMissing(t *testing.T) {
+	repo := NewLarkCLIAuthRepo(setupAuthTestDB(t))
+	_, err := repo.GetByUserID(7)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "未授权应是 ErrRecordNotFound(上层据此判 none)")
+}
+
+// Disconnect 走 Delete:整行消失,profile 名不再被解析出来。
+func TestLarkCLIAuthRepo_Delete(t *testing.T) {
+	repo := NewLarkCLIAuthRepo(setupAuthTestDB(t))
+	seedAuthRow(t, repo, 7, domain.LarkAuthStatusAuthorized)
+
+	require.NoError(t, repo.Delete(7))
+	_, err := repo.GetByUserID(7)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}

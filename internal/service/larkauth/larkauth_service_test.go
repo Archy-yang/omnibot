@@ -18,27 +18,46 @@ import (
 // ---- mocks ----
 
 type mockRepo struct {
-	rows    map[int64]*userdomain.LarkCLIAuth
-	listErr error
+	rows      map[int64]*userdomain.LarkCLIAuth
+	listErr   error
+	getErr    error
+	upsertErr error
+	updateErr error
 }
 
 func newMockRepo() *mockRepo { return &mockRepo{rows: map[int64]*userdomain.LarkCLIAuth{}} }
 
 func (m *mockRepo) GetByUserID(userID int64) (*userdomain.LarkCLIAuth, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
 	r, ok := m.rows[userID]
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return r, nil
+	// 像真 DB 一样返回副本:服务层改的是自己的对象,只有 Update 成功才会落库。
+	// (直接返回指针会让"写库失败但状态变了"这种错误被 mock 掩盖)
+	cp := *r
+	return &cp, nil
 }
 
-func (m *mockRepo) Upsert(row *userdomain.LarkCLIAuth) error { m.rows[row.UserID] = row; return nil }
+func (m *mockRepo) Upsert(row *userdomain.LarkCLIAuth) error {
+	if m.upsertErr != nil {
+		return m.upsertErr
+	}
+	m.rows[row.UserID] = row
+	return nil
+}
 
 func (m *mockRepo) Update(row *userdomain.LarkCLIAuth) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
 	if _, ok := m.rows[row.UserID]; !ok {
 		return ErrNotFound
 	}
-	m.rows[row.UserID] = row
+	cp := *row
+	m.rows[row.UserID] = &cp
 	return nil
 }
 

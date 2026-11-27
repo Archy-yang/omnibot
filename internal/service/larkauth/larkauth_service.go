@@ -2,7 +2,6 @@ package larkauth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -77,6 +76,8 @@ type Service struct {
 	gate *backtask.Gate
 	// budget 单用户单轮收尾预算(默认 sweepBudget;测试可缩短)。
 	budget time.Duration
+	// interval sweeper 轮询间隔(默认 sweepInterval;测试可缩短)。
+	interval time.Duration
 }
 
 func NewService(repo Repo, cli LarkCLI) *Service {
@@ -85,8 +86,9 @@ func NewService(repo Repo, cli LarkCLI) *Service {
 		cli:    cli,
 		health: map[int64]healthEntry{},
 		now:    time.Now,
-		gate:   backtask.NewGate("larkauth-sweep"),
-		budget: sweepBudget,
+		gate:     backtask.NewGate("larkauth-sweep"),
+		budget:   sweepBudget,
+		interval: sweepInterval,
 	}
 }
 
@@ -483,6 +485,3 @@ func isTimeout(err error) bool {
 	}
 	return false
 }
-
-// jsonMarshal 供测试脱敏断言使用。
-func jsonMarshal(v interface{}) ([]byte, error) { return json.Marshal(v) }
