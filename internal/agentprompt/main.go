@@ -20,6 +20,8 @@ func MainAgentSections(hasSubAgents bool, extra ...PromptSection) []PromptSectio
 		return append(sections, extra...)
 	}
 	sections = append(sections,
+		// channel_commands:IM 内 # 命令清单(v2.13),persona 层,先于派活规则。
+		StaticSection("channel_commands", ScopeMain, -80, MainChannelCommandsPrompt),
 		// 派活规则 → 汇报规则 → 任务管理 → 订阅规则,按 Order 升序(100/110/120/130)。
 		StaticSection("delegation_rules", ScopeMain, 100, MainDelegationRulesPrompt),
 		StaticSection("reporting_rules", ScopeMain, 110, MainReportingRulesPrompt),

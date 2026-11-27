@@ -386,6 +386,8 @@ func buildAppDeps(cfg *config.Config) *appDeps {
 			Timeout:  time.Duration(cfg.Feishu.CLI.TimeoutSeconds) * time.Second,
 			Resolver: larkauthService, // 19 号 M2:按 ctx 用户动态 --profile;nil 时行为同现状
 			Runner:   larkExecutor,    // 27 号:按用户物化执行(HOME+回写)
+			// v2.13:授权失效时自动发起 device flow,把验证链接直接交给模型转述
+			AuthEnsurer: newToolsLarkAuthAdapter(larkauthService),
 		})
 	})
 	// 档案同步到飞书文档(23 号 F2):对话内承接"把XX档案同步到飞书"。窄接口适配:

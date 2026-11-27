@@ -95,3 +95,21 @@ func TestExecutor_EmptyBinFallsBackToDefault(t *testing.T) {
 	exec := NewExecutor(mgr, "")
 	assert.Equal(t, "lark-cli", exec.bin, "空 BinPath 应回落 lark-cli")
 }
+
+// v2.13 回归:CLI 失败时不能再把 stderr 砍成 400 字节尾巴。
+// 旧实现让 agent_steps 里只剩下半截 JSON,模型看不到 type/token_missing 与可执行 hint,
+// 于是只会回一句"去 Web 设置"——正是用户走不下去的地方。
+func TestExecutor_ErrorKeepsCLIHint(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "fail-lark-cli")
+	script := "#!/bin/sh\ncat >&2 <<'JSON'\n" +
+		`{"ok":false,"error":{"type":"authentication","subtype":"token_missing","message":"need_user_authorization","hint":"run lark-cli auth login --no-wait --json to get device_code and verification_url"}}` +
+		"\nJSON\nexit 3\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	_, err := exec.RunLarkCLI(context.Background(), 1, "", "docs", "+search")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_missing", "鉴权错误类型必须保留")
+	assert.Contains(t, err.Error(), "verification_url", "可执行 hint 不能被截掉")
+}

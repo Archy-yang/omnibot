@@ -25,8 +25,21 @@ type LarkCLIAuth struct {
 	Status       string    `gorm:"size:16;not null;default:pending" json:"status"`
 	DeviceCode   string    `gorm:"size:128" json:"-"` // pending 期间短时保存,收尾即清
 	VerifiedURL  string    `gorm:"size:512" json:"-"` // pending 期间验证地址(经 view 定向返回)
-	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
-	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+
+	// NotifyChannel / NotifyTarget 记录「谁发起了这次授权」(v2.13 IM 内闭环)。
+	// 收尾成功后按这两个字段把结果推回同一个 IM 会话;Web 发起时为 "web"(不推送)。
+	NotifyChannel string `gorm:"size:32" json:"-"`
+	NotifyTarget  string `gorm:"size:128" json:"-"`
+
+	// ExpiresAt device code 到期时间(取自 CLI expires_in,实测 600s)。
+	// 显式存储而非 UpdatedAt+TTL 推断:UpdatedAt 会被无关写操作刷新,推断会得到"永不过期"的假象。
+	ExpiresAt time.Time `gorm:"index" json:"-"`
+	// ReissueCount 自动换发次数(链接过期后系统自动重发的新链接数量)。
+	// 上限由 service 控制,防止无限刷链接骚扰用户;用户手动发起时归零。
+	ReissueCount int `gorm:"not null;default:0" json:"-"`
+
+	CreatedAt time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt time.Time `gorm:"not null" json:"updated_at"`
 }
 
 func (LarkCLIAuth) TableName() string { return "user_larkcli_auths" }

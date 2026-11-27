@@ -76,10 +76,25 @@ type MemoryCommandService interface {
 	Delete(ctx context.Context, userID int64, memoryID int64) (bool, error)
 }
 
-// LarkAuthCommander IM 内重新发起飞书授权(device flow)的窄面。
-// 授权必须用户本人在浏览器确认,IM 侧只负责把验证链接送出去。
+// LarkAuthPrompt IM 侧看到的授权状态(v2.13)。
+// 刻意不复用 service 层的 View:通道层不该依赖授权服务的内部结构。
+type LarkAuthPrompt struct {
+	// Status: authorized(已可用) / pending(等浏览器确认) / none(从未配置)
+	Status    string
+	UserName  string
+	VerifyURL string
+	UserCode  string
+	// ExpiresIn 验证链接剩余有效秒数(pending 时有效)。
+	ExpiresIn int
+}
+
+// LarkAuthCommander IM 内重新发起/查询飞书授权(device flow)的窄面。
+// 授权必须用户本人在浏览器确认,IM 侧只负责把验证链接送出去;
+// 收尾由后台 sweeper 完成,所以命令本身是幂等的(重复发不会冲掉进行中的流程)。
 type LarkAuthCommander interface {
-	Relogin(ctx context.Context, userID int64) (verifyURL, userCode string, err error)
+	// EnsureAuth 幂等:已授权直接返回可用;未过期的 pending 复用同一条链接。
+	// channel/target 记录发起渠道,收尾成功后按它把结果推回同一会话。
+	EnsureAuth(ctx context.Context, userID int64, channel, target string) (LarkAuthPrompt, error)
 }
 
 // NoteFeedbackService 主动消息反馈窄面(service/butler SettingsService 实现)。

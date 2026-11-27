@@ -83,3 +83,80 @@ func TestFeishuTool_ResolverNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out, "--profile")
 }
+
+// ---- v2.13:工具撞到授权失效时自动发起重授权 ----
+
+type stubAuthEnsurer struct {
+	prompt  AuthPrompt
+	err     error
+	calls   int
+	channel string
+	target  string
+}
+
+func (s *stubAuthEnsurer) EnsureAuthPrompt(_ context.Context, _ int64, channel, target string) (AuthPrompt, error) {
+	s.calls++
+	s.channel, s.target = channel, target
+	return s.prompt, s.err
+}
+
+// 未授权(DB 里就没有 authorized 行)→ 自动发起 device flow,把链接交给模型。
+func TestFeishuTool_NotAuthorized_AutoStartsRelogin(t *testing.T) {
+	bin := writeFeishuStub(t, profileEchoStub)
+	ensurer := &stubAuthEnsurer{prompt: AuthPrompt{
+		Status:    "pending",
+		VerifyURL: "https://accounts.feishu.cn/oauth/v1/device/verify?user_code=ABCD-1234",
+	}}
+	tool := CreateFeishuTool(FeishuCLIConfig{
+		BinPath:     bin,
+		Resolver:    &stubResolver{err: larkauth.ErrNotAuthorized},
+		AuthEnsurer: ensurer,
+	})
+	ctx := toolcore.WithUserID(context.Background(), 7)
+	ctx = toolcore.WithSource(ctx, "feishu")
+	ctx = toolcore.WithNotifyTarget(ctx, "ou_peer")
+
+	_, err := tool.Execute(ctx, map[string]interface{}{"args": []interface{}{"docs", "+search"}})
+	require.Error(t, err, "授权不可用仍应作为错误返回(模型据此回复用户)")
+	assert.Equal(t, 1, ensurer.calls, "应自动发起一次重新授权")
+	assert.Contains(t, err.Error(), "https://accounts.feishu.cn/oauth/v1/device/verify?user_code=ABCD-1234")
+	assert.Contains(t, err.Error(), "自动完成")
+	assert.Equal(t, "feishu", ensurer.channel, "发起渠道取自 ctx,收尾后才能推回同一会话")
+	assert.Equal(t, "ou_peer", ensurer.target)
+}
+
+// CLI 报 token_missing(DB 还以为已授权)→ 同样自动发起,而不是把残缺 JSON 丢给模型。
+func TestFeishuTool_CLITokenMissing_AutoStartsRelogin(t *testing.T) {
+	// 假 CLI:输出与真实 lark-cli 同款的鉴权错误,并以非零码退出
+	stub := `cat >&2 <<'JSON'
+{"ok":false,"error":{"type":"authentication","subtype":"token_missing","message":"need_user_authorization"}}
+JSON
+exit 3`
+	bin := writeFeishuStub(t, stub)
+	ensurer := &stubAuthEnsurer{prompt: AuthPrompt{Status: "pending", VerifyURL: "https://verify/token-missing"}}
+	tool := CreateFeishuTool(FeishuCLIConfig{
+		BinPath:     bin,
+		Resolver:    &stubResolver{profile: "user-7"},
+		AuthEnsurer: ensurer,
+	})
+
+	_, err := tool.Execute(toolcore.WithUserID(context.Background(), 7),
+		map[string]interface{}{"args": []interface{}{"docs", "+search"}})
+	require.Error(t, err)
+	assert.Equal(t, 1, ensurer.calls)
+	assert.Contains(t, err.Error(), "https://verify/token-missing")
+}
+
+// 从未配置过应用 → 明确引导去 Web 首次配置。
+func TestFeishuTool_NeedConfig(t *testing.T) {
+	bin := writeFeishuStub(t, profileEchoStub)
+	tool := CreateFeishuTool(FeishuCLIConfig{
+		BinPath:     bin,
+		Resolver:    &stubResolver{err: larkauth.ErrNotAuthorized},
+		AuthEnsurer: &stubAuthEnsurer{prompt: AuthPrompt{Status: "none"}},
+	})
+	_, err := tool.Execute(toolcore.WithUserID(context.Background(), 7),
+		map[string]interface{}{"args": []interface{}{"docs", "+search"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AppID")
+}

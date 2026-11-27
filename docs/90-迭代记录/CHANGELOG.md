@@ -11,6 +11,53 @@
 
 ---
 
+## [v2.13.0] - 2026-11-27
+
+IM 内飞书授权闭环：掉登录之后，在会话里点一个链接就能恢复，不用再回 Web。
+
+### 🐛 修复（线上实测链路）
+
+- **IM 收不了尾**：`#飞书授权` 只发链接，用户浏览器确认后**没有任何代码去调 `LoginComplete`**
+  （唯一调用点是 Web 前端的轮询）→ 补上后台 sweeper，8s 一轮驱动收尾
+- **状态长期说谎**：`Health` 只被 Web 设置抽屉触发，对话链路从不校正 → 工具在"DB 说已授权、
+  CLI 说没 token"时直接失败
+- **错误被截断**：`Executor` 只回 stderr 尾部 400 字节，`type/token_missing/hint` 全被切掉
+  → 改为 stdout+stderr 合并保留 2KB
+- **越急越归零**：每次 `#飞书授权` 都重开 device flow，且 `profile remove` 会清空凭证
+  → `EnsureAuth` 幂等：已授权直接返回、未过期的 pending 复用同一条链接
+- **命令没人知道**：系统提示词里没有任何 IM 命令清单 → 新增 `#帮助` + `channel_commands` 提示词段
+
+### ✨ 新增
+
+- **工具撞墙自动发起**：`feishu` 工具识别 CLI 的 `token_missing` / `need_user_authorization`
+  → 自动 `EnsureAuth`，把验证链接直接放进工具结果让模型转述
+- **收尾结果主动推回 IM**：渠道无关 notifier（`channelfactory` + `SendText`），按发起渠道推送；
+  成功 / 失败 / 链接换发都有对应文案
+- **链接过期自动换发一次**：再过期则停手，提示回复 `#飞书授权`（防无限刷链接）
+- **`#帮助`**：列出当前渠道可用命令（`#飞书授权` / `#记住` / `#我的记忆` …）
+
+### 🔧 内部
+
+- `user_larkcli_auths` 加 `notify_channel` / `notify_target` / `expires_at` / `reissue_count`
+- `LarkCLI` 全部方法接 ctx（此前 `Status` 用 `context.Background()`，单次可拖 60s）
+- `PollAuth`：单次探测超时后不再多打一次 whoami；与 sweeper 共用 per-user 锁（TryLock 不排队）
+- 协程纪律：全局 1 个 ticker；`backtask.Gate` 单飞 + 单轮 10s 预算 + `defer Unlock`
+
+### ✅ 测试
+
+- `EnsureAuth` 七态矩阵、连续三次只开一个 flow、过期换发
+- `sweepOne` 五种结局 + 预算内返回且锁释放 + 拿不到锁跳过 + 推送失败不回滚状态
+- IM 命令五态、`#帮助`、前缀容忍空格
+- 工具三种引导（未授权 / token_missing / 无配置）
+- `Executor` 400 字节回归（保留 `token_missing` 与 `verification_url`）
+
+### 明确不做
+
+- IM 内首次授权（需要用户在聊天里发 App Secret，安全红线）
+- 授权成功后自动重放上次失败请求（写操作不幂等）
+
+---
+
 ## [v2.12.1] - 2026-11-04
 
 计划卡住的三个缺口修复（用户实测：第 1 步超时后整单沉默停摆）。

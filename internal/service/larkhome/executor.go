@@ -75,11 +75,31 @@ func (e *Executor) exec(ctx context.Context, homeDir, stdin string, args ...stri
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			return "", fmt.Errorf("lark-cli 执行超时(60s)")
 		}
-		tail := errOut.String()
-		if len(tail) > 400 {
-			tail = tail[len(tail)-400:]
-		}
-		return "", fmt.Errorf("lark-cli 执行失败: %s", strings.TrimSpace(tail))
+		// 失败时要尽量保留 CLI 的完整错误:lark-cli 把可执行的修复建议(如
+		// device flow 的 hint / 缺哪个 scope)写在错误 JSON 里,砍太狠模型就只能瞎猜。
+		// 400 字节的旧实现曾把 "type":"authentication" 和 hint 前半段整段切掉。
+		return "", fmt.Errorf("lark-cli 执行失败: %s", tailText(combineOutput(out.String(), errOut.String()), 2048))
 	}
 	return out.String(), nil
+}
+
+// combineOutput 合并 stdout/stderr(非空行才拼,避免开头多一个空行)。
+func combineOutput(stdout, stderr string) string {
+	stdout, stderr = strings.TrimSpace(stdout), strings.TrimSpace(stderr)
+	switch {
+	case stdout == "":
+		return stderr
+	case stderr == "":
+		return stdout
+	default:
+		return stdout + "\n" + stderr
+	}
+}
+
+// tailText 超长时保留尾部(CLI 的错误与 hint 通常在后半段)。
+func tailText(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	return "..." + s[len(s)-limit:]
 }

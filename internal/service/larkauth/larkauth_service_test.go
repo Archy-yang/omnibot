@@ -43,6 +43,16 @@ func (m *mockRepo) Update(row *userdomain.LarkCLIAuth) error {
 
 func (m *mockRepo) Delete(userID int64) error { delete(m.rows, userID); return nil }
 
+func (m *mockRepo) ListByStatus(_ context.Context, status string) ([]*userdomain.LarkCLIAuth, error) {
+	var out []*userdomain.LarkCLIAuth
+	for _, r := range m.rows {
+		if r.Status == status {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 type mockCLI struct {
 	profileAdds   [][2]string // {profile, appID}
 	addErr        error
@@ -50,6 +60,7 @@ type mockCLI struct {
 	startUserCode string
 	startDevice   string
 	startErr      error
+	startCalls    int
 	completed     []string
 	completeErr   error
 	statusOpenID  string
@@ -62,12 +73,13 @@ type mockCLI struct {
 	authStatusCalls int
 }
 
-func (m *mockCLI) ProfileAdd(_ int64, profile, appID, appSecret string) error {
+func (m *mockCLI) ProfileAdd(_ context.Context, _ int64, profile, appID, appSecret string) error {
 	m.profileAdds = append(m.profileAdds, [2]string{profile, appID})
 	return m.addErr
 }
 
-func (m *mockCLI) LoginStart(_ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
+func (m *mockCLI) LoginStart(_ context.Context, _ int64, profile, domains string) (url, userCode, deviceCode string, err error) {
+	m.startCalls++
 	return m.startURL, m.startUserCode, m.startDevice, m.startErr
 }
 
@@ -76,7 +88,7 @@ func (m *mockCLI) LoginComplete(_ context.Context, _ int64, profile, deviceCode 
 	return m.completeErr
 }
 
-func (m *mockCLI) Status(_ int64, profile string) (openID, userName string, err error) {
+func (m *mockCLI) Status(_ context.Context, _ int64, profile string) (openID, userName string, err error) {
 	return m.statusOpenID, m.statusName, m.statusErr
 }
 
@@ -85,7 +97,7 @@ func (m *mockCLI) AuthStatus(_ context.Context, _ int64, _ string) (AuthStatusRe
 	return m.authStatusRes, m.authStatusErr
 }
 
-func (m *mockCLI) Logout(_ int64, profile string) error {
+func (m *mockCLI) Logout(_ context.Context, _ int64, profile string) error {
 	m.logouts = append(m.logouts, profile)
 	return nil
 }
@@ -257,7 +269,7 @@ type logoutErrCLI struct {
 	logoutErr bool
 }
 
-func (m *logoutErrCLI) Logout(_ int64, profile string) error {
+func (m *logoutErrCLI) Logout(_ context.Context, _ int64, profile string) error {
 	m.logouts = append(m.logouts, profile)
 	if m.logoutErr {
 		return errors.New("cli not found")

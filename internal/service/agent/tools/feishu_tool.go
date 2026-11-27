@@ -46,6 +46,21 @@ type ProfileResolver interface {
 	ProfileForUser(userID int64) (string, error)
 }
 
+// AuthPrompt 一次「确保已授权」的结果(工具层只看这三件事)。
+type AuthPrompt struct {
+	// Status: authorized(已可用) / pending(等浏览器确认) / none(从未配置)
+	Status    string
+	VerifyURL string
+	UserName  string
+}
+
+// AuthEnsurer 授权失效时自动发起/复用 device flow(v2.13)。
+// 工具撞墙不该只回一句"去 Web 设置"——那正是用户走不下去的地方。
+// nil 时退化为旧的纯文案引导。
+type AuthEnsurer interface {
+	EnsureAuthPrompt(ctx context.Context, userID int64, channel, target string) (AuthPrompt, error)
+}
+
 // FeishuCLIConfig CLI 桥接配置(零值字段取默认)。
 type FeishuCLIConfig struct {
 	BinPath     string          // lark-cli 可执行路径,默认 "lark-cli"(PATH 查找)
@@ -53,6 +68,7 @@ type FeishuCLIConfig struct {
 	OutputLimit int             // 输出截断上限(字节),默认 32KB
 	Resolver    ProfileResolver // 非 nil 时按 ctx 用户动态 --profile(19 号 M2)
 	Runner      Runner          // 非 nil 时走 27 号物化执行(HOME 物化+回写);nil = 直跑本地
+	AuthEnsurer AuthEnsurer     // 非 nil 时授权失效自动发起 device flow(v2.13)
 }
 
 // Runner 统一执行入口(27 号 larkhome.Executor 的同形窄面,避免跨包依赖)。
@@ -123,14 +139,65 @@ func CreateFeishuTool(cfg FeishuCLIConfig) toolcore.Tool {
 				if userID > 0 {
 					p, perr := cfg.Resolver.ProfileForUser(userID)
 					if perr != nil {
-						return "", fmt.Errorf("尚未完成飞书授权:请在 设置-飞书授权 中连接后重试(授权一次,后续自动使用你的身份)")
+						return "", feishuAuthError(ctx, cfg, userID)
 					}
 					profile = p
 				}
 			}
-			return runFeishuCLI(ctx, cfg, userID, cliArgs, feishuStdin(args), profile)
+			out, runErr := runFeishuCLI(ctx, cfg, userID, cliArgs, feishuStdin(args), profile)
+			// DB 说已授权、CLI 却说没 token(典型:refresh token 过期)——这正是
+			// 用户最需要引导的时刻,别把一个残缺的 JSON 错误丢给模型去猜。
+			if runErr != nil && isFeishuAuthFailure(runErr) {
+				return "", feishuAuthError(ctx, cfg, userID)
+			}
+			return out, runErr
 		},
 	}
+}
+
+// isFeishuAuthFailure 判断 CLI 是否在报"授权不可用"。
+//
+// 这不是关键词猜测:下面三个标记都来自 lark-cli 自己输出的结构化错误
+// (type/subtype 字段),是它对"没有可用 user token"的固定表述。
+func isFeishuAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"need_user_authorization",
+		`"token_missing"`,
+		`"type": "authentication"`,
+		"refresh_token expired",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// feishuAuthError 授权不可用时的统一出口:能自动发起就带上验证链接,
+// 发起不了才退回"去 Web 设置"的老文案。
+func feishuAuthError(ctx context.Context, cfg FeishuCLIConfig, userID int64) error {
+	if cfg.AuthEnsurer != nil && userID > 0 {
+		prompt, err := cfg.AuthEnsurer.EnsureAuthPrompt(ctx, userID,
+			toolcore.SourceFromContext(ctx), toolcore.NotifyTargetFromContext(ctx))
+		if err == nil {
+			switch prompt.Status {
+			case "pending":
+				if prompt.VerifyURL != "" {
+					return fmt.Errorf("飞书授权已失效，我已为你发起重新授权。请打开下面的链接完成确认：\n%s\n\n"+
+						"确认后我会自动完成授权。拿到链接后先别重试，等我说授权好了再操作", prompt.VerifyURL)
+				}
+			case "authorized":
+				return fmt.Errorf("飞书授权刚刚恢复，请重新执行一次刚才的操作")
+			case "none":
+				return fmt.Errorf("还没有配置过飞书应用，请先在 Web「设置 → 飞书授权」里填写 AppID 和 App Secret")
+			}
+		}
+	}
+	return fmt.Errorf("尚未完成飞书授权:请在 设置-飞书授权 中连接后重试(授权一次,后续自动使用你的身份)")
 }
 
 // parseFeishuArgs 提取 args 数组(LLM 传来的是 []interface{})。
