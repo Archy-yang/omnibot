@@ -143,3 +143,18 @@ func TestExecutor_ErrorTruncatesToTail(t *testing.T) {
 	assert.Contains(t, err.Error(), "FINAL_HINT", "尾部关键信息必须保留")
 	assert.Less(t, len(err.Error()), 2300, "总量要有上界")
 }
+
+// 上层 ctx 超时 → 必须返回超时错误(60s 是兜底上限,不是唯一上限)。
+func TestExecutor_CallerDeadlineBoundsRun(t *testing.T) {
+	mgr, _ := setupManager(t)
+	bin := filepath.Join(t.TempDir(), "slow-lark-cli")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nsleep 5\n"), 0o755))
+	exec := NewExecutor(mgr, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := exec.RunLarkCLI(ctx, 1, "", "docs")
+	assert.Less(t, time.Since(start), 3*time.Second, "应跟随上层 deadline 返回")
+	assert.Contains(t, err.Error(), "超时")
+}

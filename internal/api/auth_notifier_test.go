@@ -154,3 +154,22 @@ func TestAuthNotifier_EmptyTextIsNoop(t *testing.T) {
 	require.NoError(t, n.NotifyAuth(context.Background(), 7, "test_auth_empty", "ou_peer", ""))
 	assert.Empty(t, sent)
 }
+
+// 未注入 user_channels 仓储(装配缺失)→ 静默,不 panic。
+func TestAuthNotifier_NilListerIsSilent(t *testing.T) {
+	n := newChannelAuthNotifier(nil)
+	require.NoError(t, n.NotifyAuth(context.Background(), 7, "", "", "授权已恢复"))
+}
+
+// 记录的渠道未注册(旧数据/渠道下线)→ 回落到已绑定渠道,而不是丢消息。
+func TestAuthNotifier_UnknownRecordedChannelFallsBack(t *testing.T) {
+	var sent []sentMsg
+	registerFakeChannel(t, "test_auth_fallback", true, nil, &sent)
+	n := newChannelAuthNotifier(&fakeChannelLister{rows: []*userdomain.UserChannel{
+		boundTo(7, "test_auth_fallback", "u-fb"),
+	}})
+
+	require.NoError(t, n.NotifyAuth(context.Background(), 7, "gone_channel", "u-gone", "授权已恢复"))
+	require.Len(t, sent, 1)
+	assert.Equal(t, "u-fb", sent[0].target)
+}
